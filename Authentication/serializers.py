@@ -26,19 +26,22 @@ class RegisterSerializer(serializers.ModelSerializer):
         if Student.objects.filter(admission_number = data['admission_number']).exists():
             raise serializers.ValidationError({"admission_number": "Admission number already exists."})
         return data
-    
-    
-    
+
+
     def create(self, validated_data):
         validated_data.pop('confirm_password')
-        user = User.objects.create_user(
+        try:
+            user = User.objects.create_user(
             username = validated_data['username'],
             first_name = validated_data['first_name'],
             last_name = validated_data['last_name'],
             password = validated_data['password']
-        )
-
-        Student.objects.create(
+            )
+        except Exception as e:
+            raise serializers.ValidationError({"error": str(e)})
+        
+        try:
+            Student.objects.create(
             user = user,
             admission_number = validated_data['admission_number'],
             year_of_admission = validated_data['year_of_admission'],
@@ -46,6 +49,10 @@ class RegisterSerializer(serializers.ModelSerializer):
             course = validated_data['course'],
             institution = validated_data['institution'],
             phone_number = validated_data['phone_number']
-        )
+            )
+        except Exception as e:
+            user.delete()
+            raise serializers.ValidationError({"Error": "Student not created."})
 
         return user
+
