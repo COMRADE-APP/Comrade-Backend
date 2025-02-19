@@ -1,4 +1,5 @@
 from django.contrib.auth.models import User
+from django.contrib.auth import authenticate
 from rest_framework import serializers
 from .models import Student
 
@@ -56,3 +57,29 @@ class RegisterSerializer(serializers.ModelSerializer):
 
         return user
 
+class LoginSerializer(serializers.Serializer):
+    username_or_email = serializers.CharField()
+    password = serializers.CharField(write_only = True)
+
+    def validate(self, data):
+        username_or_email = data['username_or_email']
+        password = data['password']
+
+        # check if what was provided was username or password.
+        user = User.objects.filter(username=username_or_email).first()
+
+        # get username to the user if email is provide.
+        user = User.objects.filter(email = username_or_email).first()
+        
+        if user:
+            # email was provided. get username
+            username = user.username
+        else:
+            username = username_or_email 
+        
+        user = authenticate(username=username, password = password)
+
+        if not user:
+            raise serializers.ValidationError({"Error": "Invalid credentials."})
+
+        return{"username": user.username, "message": "Login successful."}
