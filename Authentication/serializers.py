@@ -1,5 +1,6 @@
 from django.contrib.auth.models import User
 from django.contrib.auth import authenticate
+import re
 from rest_framework import serializers
 from .models import Student
 
@@ -21,13 +22,29 @@ class RegisterSerializer(serializers.ModelSerializer):
         extra_kwargs = {'password': {'write_only': True}} # ensure the password is sent in request but won't be returned in api responses.
     
     def validate(self, data):
+        if Student.objects.filter(admission_number = data['admission_number']).exists():
+            raise serializers.ValidationError({"admission_number": "Admission number already exists."})
+        
+
+        # validate the password.
+        password = data['password']
+        if len(password) < 8:
+            raise serializers.ValidationError({"password": "Password too short. Use 8 characters or more."})
+        if (
+            not re.search(r'[A-Z]', password) or
+            not re.search(r'[a-z]', password) or
+            not re.search(r'[0-9]', password) or
+            not re.search(r'[!@#$%^&*(),.?":{}|<>]', password)
+        ):
+            raise serializers.ValidationError({
+                "password": "Password must contain at least one uppercase, lowercase, numeric, and special character."
+            })
+
         if data['password'] != data['confirm_password']:
             raise serializers.ValidationError({"confirm_password": "Passwords do not match"})
         
-        if Student.objects.filter(admission_number = data['admission_number']).exists():
-            raise serializers.ValidationError({"admission_number": "Admission number already exists."})
-        return data
 
+        return data
 
     def create(self, validated_data):
         validated_data.pop('confirm_password')
