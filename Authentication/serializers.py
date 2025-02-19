@@ -1,0 +1,51 @@
+from django.contrib.auth.models import User
+from rest_framework import serializers
+from .models import Student
+
+class RegisterSerializer(serializers.ModelSerializer):
+    first_name = serializers.CharField()
+    last_name = serializers.CharField()
+    confirm_password = serializers.CharField(write_only = True)
+    admission_number = serializers.CharField()
+    year_of_admission = serializers.CharField()
+    faculty  = serializers.CharField()
+    course = serializers.CharField()
+    institution = serializers.CharField()
+    phone_number = serializers.CharField()
+
+    class Meta:
+        model = User
+        fields = ['username', 'first_name', 'last_name', 'password', 'confirm_password', 'admission_number', 'year_of_admission', 'faculty', 'course','institution', 'phone_number']
+
+        extra_kwargs = {'password': {'write_only': True}} # ensure the password is sent in request but won't be returned in api responses.
+    
+    def validate(self, data):
+        if data['password'] != data['confirm_password']:
+            raise serializers.ValidationError({"confirm_password": "Passwords do not match"})
+        
+        if Student.objects.filter(admission_number = data['admission_number']).exists():
+            raise serializers.ValidationError({"admission_number": "Admission number already exists."})
+        return data
+    
+    
+    
+    def create(self, validated_data):
+        validated_data.pop('confirm_password')
+        user = User.objects.create_user(
+            username = validated_data['username'],
+            first_name = validated_data['first_name'],
+            last_name = validated_data['last_name'],
+            password = validated_data['password']
+        )
+
+        Student.objects.create(
+            user = user,
+            admission_number = validated_data['admission_number'],
+            year_of_admission = validated_data['year_of_admission'],
+            faculty = validated_data['faculty'],
+            course = validated_data['course'],
+            institution = validated_data['institution'],
+            phone_number = validated_data['phone_number']
+        )
+
+        return user
