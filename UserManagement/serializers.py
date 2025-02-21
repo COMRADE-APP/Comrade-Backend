@@ -8,8 +8,15 @@ class UserSerializer(serializers.ModelSerializer):
         fields = ['id', 'username', 'first_name', 'last_name', 'email']
 
 class StudentSerializer(serializers.ModelSerializer):
-    user = UserSerializer()
+    user = UserSerializer(read_only=True)
 
     class Meta: 
         model  = Student
-        fields = '__all__'
+        fields =  ['id', 'user', 'admission_number', 'year_of_admission', 'faculty', 'course', 'institution', 'phone_number']
+    
+    def update(self, instance, validated_data):
+       
+        for field, data_item in validated_data.items():
+           setattr(instance, field, data_item)
+        instance.save()
+        return instance
