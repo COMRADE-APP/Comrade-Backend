@@ -11,7 +11,7 @@ student_detail = StudentViewSet.as_view({"get": "retrieve", "put": "update","pos
 
 urlpatterns = [
     path('', user_list, name='user-list'),
-    path("<int:pk>", user_detail, name='user-detail'),
+    path("<int:pk>/", user_detail, name='user-detail'),
     path('students/', student_list, name='student-list'),
-    path('students/<int:pk>', student_detail, name='student_detail/'),
+    path('students/<int:pk>/', student_detail, name='student_detail'),
 ]
