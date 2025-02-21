@@ -17,7 +17,7 @@ class RegisterSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = User
-        fields = ['username', 'first_name', 'last_name', 'password', 'confirm_password', 'admission_number', 'year_of_admission', 'faculty', 'course','institution', 'phone_number']
+        fields = ['username', 'first_name', 'last_name', 'password', 'email','confirm_password', 'admission_number', 'year_of_admission', 'faculty', 'course','institution', 'phone_number']
 
         extra_kwargs = {'password': {'write_only': True}} # ensure the password is sent in request but won't be returned in api responses.
     
@@ -53,6 +53,7 @@ class RegisterSerializer(serializers.ModelSerializer):
             username = validated_data['username'],
             first_name = validated_data['first_name'],
             last_name = validated_data['last_name'],
+            email = validated_data['email'],
             password = validated_data['password']
             )
         except Exception as e:
