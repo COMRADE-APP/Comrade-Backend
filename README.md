@@ -2,7 +2,7 @@
 
 ## **Overview**
 
-This API handles **User Registration, Authentication (Login), and User & Student CRUD operations** in a Django REST Framework (DRF) application.
+This API handles **User Registration, Authentication (Login), Student CRUD operations, and Room Management** in a Django REST Framework (DRF) application.
 
 ---
 
@@ -57,7 +57,7 @@ This API handles **User Registration, Authentication (Login), and User & Student
 
 ```json
 {
-  "username": "johndoe", # You can add the email too.
+  "username": "johndoe", 
   "password": "StrongPass123!"
 }
 ```
@@ -67,11 +67,12 @@ This API handles **User Registration, Authentication (Login), and User & Student
 ```json
 {
   "message": "Login successful",
-  "username": "johndoe"
+  "token": "your-generated-token"
 }
 ```
 
-✅ **Users can log in using either ************************************************************************************************************************************************`username`************************************************************************************************************************************************ or ************************************************************************************************************************************************`email`************************************************************************************************************************************************.**
+✅ **Users can log in using either ****`username`**** or ****`email`****.**
+✅ **A token is generated and returned in the response.**
 
 ---
 
@@ -91,10 +92,7 @@ This API handles **User Registration, Authentication (Login), and User & Student
     "id": 1,
     "user": {  
         "id": 3,
-        "username": "johndoe",
-        "first_name": "John",
-        "last_name": "Doe",
-        "email": "johndoe@gmail.com"
+        "username": "johndoe"
     },
     "admission_number": "ADM001",
     "year_of_admission": 2023,
@@ -121,10 +119,7 @@ This API handles **User Registration, Authentication (Login), and User & Student
   "id": 1,
   "user": {  
         "id": 3,
-        "username": "johndoe",
-        "first_name": "John",
-        "last_name": "Doe",
-        "email": "johndoe@gmail.com"
+        "username": "johndoe"
     },
   "admission_number": "ADM001",
   "year_of_admission": 2023,
@@ -150,7 +145,7 @@ This API handles **User Registration, Authentication (Login), and User & Student
 - `institution`
 - `phone_number`
 
-✅ **Users can only update ************************************************************************************************************************************************`Student`************************************************************************************************************************************************ fields** (not `User` fields like `username`, `email`, etc.)
+✅ **Users can only update ****`Student`**** fields (not ****`User`**** fields like ****`username`****, ****`email`****, etc.)**
 
 ### **Request Body:**
 
@@ -193,95 +188,91 @@ This API handles **User Registration, Authentication (Login), and User & Student
 
 ---
 
-## **4️⃣ User CRUD Operations**
+## **4️⃣ Room Management**
 
-### **Get All Users**
+### **Create a Room**
 
-`GET /users/`
+`POST /rooms/`
+
+#### **Request Body:**
+
+```json
+{
+  "name": "Study Group",
+  "description": "A group for CS students.",
+  "institution": "XYZ University"
+}
+```
+
+#### **Response:**
+
+```json
+{
+  "id": 1,
+  "name": "Study Group",
+  "description": "A group for CS students.",
+  "institution": "XYZ University",
+  "created_by": "johndoe",
+  "created_on": "2025-02-22T08:58:30Z",
+  "invitation_code": "ABC123XYZ"
+}
+```
+
+---
+
+### **Get All Rooms**
+
+`GET /rooms/`
 
 #### **Response:**
 
 ```json
 [
-  {  
-      "id": 3,
-      "username": "johndoe",
-      "first_name": "John",
-      "last_name": "Doe",
-      "email": "johndoe@gmail.com"
-  },
+  {
+    "id": 1,
+    "name": "Study Group",
+    "description": "A group for CS students.",
+    "institution": "XYZ University",
+    "created_by": "johndoe",
+    "created_on": "2025-02-22T08:58:30Z",
+    "invitation_code": "ABC123XYZ"
+  }
 ]
-
 ```
 
 ---
 
-### **Get User by ID**
+### **Update a Room**
 
-`GET /users/{id}/`
-
-#### **Response:**
-
-```json
-{  
-    "id": 3,
-    "username": "johndoe",
-    "first_name": "John",
-    "last_name": "Doe",
-    "email": "johndoe@gmail.com"
-},
-```
-
----
-
-### **Update User Details**
-
-(`PUT or POST) /users/{id}/`
+`PUT /rooms/{id}/`
 
 #### **Allowed Updates:**
 
-- `first_name`
-- `last_name`
-- `email`
-- `username`
-
-
-
-### **Request Body:**
-
-```json
-{  
-    "id": 3,
-    "username": "johndoe",
-    "first_name": "John",
-    "last_name": "Doe",
-    "email": "johndoe@gmail.com"
-},
-```
+- `name`
+- `description`
+- `institution`
 
 #### **Response:**
 
 ```json
 {
-  "message": "User details updated successfully."
+  "message": "Room updated successfully."
 }
 ```
 
 ---
 
-### **Delete User**
+### **Delete a Room**
 
-`DELETE /users/{id}/`
+`DELETE /rooms/{id}/`
 
 #### **Response:**
 
 ```json
 {
-  "message": "User deleted successfully."
+  "message": "Room deleted successfully."
 }
 ```
-
-✅ **Deleting a user also deletes the associated student profile.**
 
 ---
 
@@ -291,18 +282,12 @@ This API handles **User Registration, Authentication (Login), and User & Student
 auth/register/  "register a user"
 auth/login/      "login a user"
 users/           "view the list of all users in the system."
-users/<int:pk>/  "CRUD for the user. POST and PUT perform UPDATE operations"
-users/students/  "view a list of all the students in the system."
+users/<int:pk>/  "CRUD for the user. POST and PUT perform UPDATE operation."
+users/students/  "view a list of all students in the system."
 users/students/<int:pk>/ "CRUD for the student. POST and PUT perform the same operation."
+rooms/           "view a list of all rooms and create new rooms."
+rooms/<int:pk>/  "CRUD for the room. PUT perform UPDATE operation."
 ```
-
----
-
-## **6️⃣ Security & Data Handling**
-
-✅ **Passwords are hashed using Django’s built-in hashing system.** ✅ Sensitive fields `password` are hidden from responses.
-
-✅ When updating a student’s details, the user cannot be updated.
 
 ---
 
@@ -310,12 +295,15 @@ users/students/<int:pk>/ "CRUD for the student. POST and PUT perform the same op
 
 ✔ **User registration with strong password validation**
 
-✔ **Login with username/email & password**
+✔ **Login with username/email & password (Token Authentication)**
 
-✔ **CRUD operations for users and students**
+✔ **CRUD operations for students**
+
+✔ **CRUD operations for rooms**
 
 ✔ **Restricted updates (Users cannot modify their own User model details)**
 
-
 ✔ **Secure password storage & API data handling**
+
+✔ **Added API's for Rooms mangegment(CRUD) operations.**
 
