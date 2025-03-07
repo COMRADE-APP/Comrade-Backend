@@ -10,6 +10,7 @@ class Room(models.Model):
     institution = models.CharField(max_length=255)
     created_by = models.ForeignKey(User, on_delete=models.CASCADE)
     created_on = models.DateTimeField(auto_now_add=True)
+    members = models.ManyToManyField(User, related_name='joined_rooms', blank=True) # user can join many rooms, a room can have many users.
 
     def save(self, *args, **kwargs):
         if not self.invitation_code:
