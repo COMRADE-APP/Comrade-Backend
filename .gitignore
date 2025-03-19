@@ -1,0 +1,44 @@
+# Virtual environment
+venv/
+env/
+*.env
+
+# Byte-compiled / Cache files
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Logs
+*.log
+logs/
+debug.log
+
+# Database files 
+*.sqlite3
+db.sqlite3
+db.sqlite3-journal
+
+# Media and static files
+media/
+
+
+# Ignore Django migrations cache (optional)
+**/migrations/__pycache__/
+
+
+
+# Environment and configuration files
+.env
+*.secret
+config.json
+
+# Ignore IDE/editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Ignore Docker files (if using Docker)
+*.pid
+*.sock
