@@ -41,6 +41,10 @@ INSTALLED_APPS = [
     'rest_framework',
     'UserManagement',
     'Rooms',
+    'Announcements',
+    'Events',
+    'Resources',
+    'Specialization',
 ]
 
 MIDDLEWARE = [

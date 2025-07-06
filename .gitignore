@@ -42,3 +42,6 @@ config.json
 # Ignore Docker files (if using Docker)
 *.pid
 *.sock
+
+# users reference
+*users

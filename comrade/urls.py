@@ -22,4 +22,6 @@ urlpatterns = [
     path('auth/', include('Authentication.urls')),
     path('users/', include('UserManagement.urls')),
     path('rooms/', include('Rooms.urls')),
+    # path('events/', include('Events.urls')),
+    path('resources/', include('Resources.urls')),
 ]
