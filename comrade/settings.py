@@ -45,6 +45,9 @@ INSTALLED_APPS = [
     'Events',
     'Resources',
     'Specialization',
+    'Organisation',
+    'Institution',
+    'Task',
 ]
 
 MIDDLEWARE = [

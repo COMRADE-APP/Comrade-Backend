@@ -7,7 +7,7 @@ from Organisation.models import Organisation, OrgBranch
 import datetime
 
 USER_TYPE = (
-    ('admin', 'Administrator (Comrade)')
+    ('admin', 'Administrator (Comrade)'),
     ('staff', 'Staff'),
     ('lecturer', 'Lecturer'),
     ('student', 'Student'),

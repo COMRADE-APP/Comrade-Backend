@@ -3,6 +3,7 @@ from datetime import datetime
 from Authentication.models import StudentAdmin
 from django.contrib.auth.models import User
 from Authentication.models import Student
+from Resources.models import VIS_TYPES
 # Create your models here.
 
 ANN_STATUS = (
@@ -10,6 +11,11 @@ ANN_STATUS = (
     ('scheduled', 'Scheduled'),
     ('sent', 'Sent'),
     ('not_sent', 'Not Sent')
+)
+VER_STATUS = (
+    ('pending', 'Pending'),
+    ('approved', 'Approved'),
+    ('rejected', 'Disqualified'),
 )
 
 class Text(models.Model):
@@ -34,6 +40,19 @@ class Announcements(models.Model):
     user = models.OneToOneField(StudentAdmin, on_delete=models.DO_NOTHING)
     heading = models.CharField(max_length=200, null=False)
     content = models.TextField(max_length=5000, null=False)
+    visibility = models.CharField(max_length=200, null=False, choices=VIS_TYPES, default='private')
     time_stamp = models.DateTimeField(default=datetime.now())
+    status = models.CharField(max_length=200, choices=ANN_STATUS, 
+    default='pending')
+
+class AnnouncementsRequest(models.Model):
+    user = models.OneToOneField(Student, on_delete=models.DO_NOTHING)
+    verified_by = models.OneToOneField(StudentAdmin, on_delete=models.DO_NOTHING)
+    verification_status = models.CharField(max_length=200, null=False, choices=VER_STATUS, default='pending')
+    heading = models.CharField(max_length=200, null=False)
+    content = models.TextField(max_length=5000, null=False)
+    visibility = models.CharField(max_length=200, null=False, choices=VIS_TYPES, default='private')
+    time_stamp = models.DateTimeField(default=datetime.now())
+    verification_time_stamp = models.DateTimeField(default=datetime.now())
     status = models.CharField(max_length=200, choices=ANN_STATUS, 
     default='pending')

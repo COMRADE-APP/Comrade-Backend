@@ -13,7 +13,12 @@ RESOURCE_TYPES = (
 VIS_TYPES = (
     ('public', 'Public'),
     ('private', 'Private'),
-    ('only_me', 'Only Me')
+    ('only_me', 'Only Me'),
+    ('course', 'Your Course or Class'),
+    ('faculty', 'Your Faculty or School'),
+    ('institutional', 'Your Institution'),
+    ('organisational', 'Your Organisation'),
+    ('group', 'Your Group or Section')
 )
 class Resource(models.Model):
     visibility = models.CharField(max_length=20, choices=VIS_TYPES, default='public')
