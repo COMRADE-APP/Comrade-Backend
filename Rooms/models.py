@@ -1,5 +1,5 @@
 from django.db import models
-from django.contrib.auth.models import User
+from Authentication.models import CustomUser
 import uuid
 
 # Create your models here.
@@ -8,9 +8,9 @@ class Room(models.Model):
     invitation_code = models.CharField(max_length=10, unique=True, editable=False)
     description = models.TextField(max_length=255, null=True)
     institution = models.CharField(max_length=255)
-    created_by = models.ForeignKey(User, on_delete=models.CASCADE)
+    created_by = models.ForeignKey(CustomUser, on_delete=models.CASCADE)
     created_on = models.DateTimeField(auto_now_add=True)
-    members = models.ManyToManyField(User, related_name='joined_rooms', blank=True) # user can join many rooms, a room can have many users.
+    members = models.ManyToManyField(CustomUser, related_name='joined_rooms', blank=True) # CustomUser can join many rooms, a room can have many CustomUsers
 
     def save(self, *args, **kwargs):
         if not self.invitation_code:

@@ -1,10 +1,9 @@
 from rest_framework import serializers
-from django.contrib.auth.models import User
-from Authentication.models import Student
+from Authentication.models import Student, CustomUser
 
 class UserSerializer(serializers.ModelSerializer):
     class Meta:
-        model = User
+        model = CustomUser
         fields = ['id', 'username', 'first_name', 'last_name', 'email']
 
 class StudentSerializer(serializers.ModelSerializer):

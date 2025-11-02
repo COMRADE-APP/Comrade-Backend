@@ -1,3 +1,25 @@
 from django.contrib import admin
-
+from .models import Institution, InstBranch, Faculty, VCOffice, InstDepartment, AdminDep, Programme, HR, Admissions, HealthServices, Security, StudentAffairs, SupportServices, Finance, Marketing, Legal, ICT, CareerOffice, Couselling, RegistrarOffice, Transport
 # Register your models here.
+
+admin.site.register(Institution)
+admin.site.register(InstBranch)
+admin.site.register(Faculty)
+admin.site.register(VCOffice)
+admin.site.register(InstDepartment)
+admin.site.register(AdminDep)
+admin.site.register(Programme)
+admin.site.register(HR)
+admin.site.register(Admissions)
+admin.site.register(HealthServices)
+admin.site.register(Security)
+admin.site.register(StudentAffairs)
+admin.site.register(SupportServices)
+admin.site.register(Finance)
+admin.site.register(Marketing)
+admin.site.register(Legal)
+admin.site.register(ICT)
+admin.site.register(CareerOffice)
+admin.site.register(Couselling)
+admin.site.register(RegistrarOffice)
+admin.site.register(Transport)

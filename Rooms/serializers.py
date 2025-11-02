@@ -1,10 +1,11 @@
 from rest_framework import serializers
 from .models import Room
-from django.contrib.auth.models import User
+from Authentication.models import CustomUser
+
 
 class RoomSerializer(serializers.ModelSerializer):
     created_by = serializers.ReadOnlyField(source='created_by.username')
-    members = serializers.SlugRelatedField(many=True, slug_field = 'username', queryset=User.objects.all(), required=False) # display the members in the room using username instead of the id.
+    members = serializers.SlugRelatedField(many=True, slug_field = 'username', queryset=CustomUser.objects.all(), required=False) # display the members in the room using username instead of the id.
 
     class Meta:
         model = Room

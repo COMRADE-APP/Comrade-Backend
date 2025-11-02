@@ -1,4 +1,4 @@
-from Announcements.models import Announcements, Text, Reply
+from Announcements.models import Announcements, Text, Reply, AnnouncementsRequest, Task
 from rest_framework import serializers
 
 
@@ -19,9 +19,19 @@ class ReplySerializer(serializers.ModelSerializer):
         model = Reply
         fields = '__all__'  
         read_only_fields = ['time_stamp', 'status'] 
-# class TaskSerializer(serializers.ModelSerializer):
-#     class Meta:
-#         model = Task
-#         fields = '__all__'  
-#         read_only_fields = ['time_stamp', 'status']
+class AnnouncementsRequestSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = AnnouncementsRequest
+        fields = '__all__'  
+        read_only_fields = ['time_stamp', 'status']
 
+class TaskSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Task
+        fields = '__all__'  
+        read_only_fields = ['time_stamp', 'status']
+    def validate(self, data):
+        
+
+        return data
+    
