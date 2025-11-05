@@ -2,7 +2,7 @@ from django.contrib.auth.models import User
 from django.contrib.auth import authenticate
 import re
 from rest_framework import serializers
-from .models import Student
+from Authentication.models import Student, CustomUser, Lecturer, OrgStaff, StudentAdmin, OrgAdmin, InstAdmin, InstStaff
 
 class RegisterSerializer(serializers.ModelSerializer):
     first_name = serializers.CharField()
@@ -101,3 +101,44 @@ class LoginSerializer(serializers.Serializer):
             raise serializers.ValidationError({"Error": "Invalid credentials."})
 
         return{"username": user.username, "message": "Login successful."}
+    
+# class StudentSerializer(serializers.ModelSerializer):
+#     class Meta:
+#         model = Student
+#         fields = '__all__'  
+#         read_only_fields = ['admission_number']
+class CustomUserSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = CustomUser
+        fields = '__all__'  
+        read_only_fields = ['email']
+class LecturerSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Lecturer
+        fields = '__all__'  
+        read_only_fields = ['user']
+class OrgStaffSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = OrgStaff
+        fields = '__all__'  
+        read_only_fields = ['user']
+class StudentAdminSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = StudentAdmin
+        fields = '__all__'  
+        read_only_fields = ['user']
+class OrgAdminSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = OrgAdmin
+        fields = '__all__'  
+        read_only_fields = ['user']
+class InstAdminSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = InstAdmin
+        fields = '__all__'  
+        read_only_fields = ['user']
+class InstStaffSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = InstStaff
+        fields = '__all__'  
+        read_only_fields = ['user']

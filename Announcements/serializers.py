@@ -1,4 +1,4 @@
-from Announcements.models import Announcements, Text, Reply, AnnouncementsRequest, Task
+from Announcements.models import Announcements, Text, Reply, AnnouncementsRequest, Task, Reposts, Choice, Pin, CompletedTask, FileResponse, Question, QuestionResponse, SubQuestion
 from rest_framework import serializers
 
 
@@ -30,8 +30,54 @@ class TaskSerializer(serializers.ModelSerializer):
         model = Task
         fields = '__all__'  
         read_only_fields = ['time_stamp', 'status']
-    def validate(self, data):
+    # def validate(self, data):
         
+    #     return data
 
-        return data
+class RepostsSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Reposts
+        fields = '__all__'  
+        read_only_fields = ['time_stamp', 'status']
+
+class ChoiceSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Choice
+        fields = '__all__'  
+        read_only_fields = ['time_stamp', 'status']
+
+class PinSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Pin
+        fields = '__all__'  
+        read_only_fields = ['time_stamp', 'status']
+
+class CompletedTaskSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = CompletedTask
+        fields = '__all__'  
+        read_only_fields = ['completed_on']
+
+class QuestionSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Question
+        fields = '__all__'  
+        read_only_fields = ['timestamp']
+
+class SubQuestionSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = SubQuestion
+        fields = '__all__'  
+        read_only_fields = ['timestamp']
     
+class QuestionResponseSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = QuestionResponse
+        fields = '__all__'  
+        read_only_fields = ['timestamp']
+
+class FileResponseSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = FileResponse
+        fields = '__all__'  
+        read_only_fields = ['timestamp']

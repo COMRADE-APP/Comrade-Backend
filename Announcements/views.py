@@ -1,7 +1,7 @@
 from django.shortcuts import render
 from rest_framework.viewsets import ModelViewSet
-from Announcements.models import Announcements, Text, Reply, AnnouncementsRequest, Task
-from Announcements.serializers import AnnouncementsSerializer, TextSerializer, ReplySerializer, AnnouncementsRequestSerializer
+from Announcements.models import Announcements, Text, Reply, AnnouncementsRequest, Task, Reposts, Choice, Pin, CompletedTask, FileResponse, Question, QuestionResponse, SubQuestion
+from Announcements.serializers import AnnouncementsSerializer, TextSerializer, ReplySerializer, AnnouncementsRequestSerializer, ChoiceSerializer, RepostsSerializer, PinSerializer, TaskSerializer, CompletedTaskSerializer, FileResponseSerializer, QuestionSerializer, QuestionResponseSerializer, SubQuestionSerializer
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework import status
@@ -158,8 +158,8 @@ class AnnouncementsViewSet(ModelViewSet):
                             ann.save()
                         except _Announcements.DoesNotExist:
                             pass
-                        break
-                    time.sleep(1)
+                    break
+                time.sleep(1)
             except Exception:
                 # fail silently for background checker
                 return
@@ -293,7 +293,7 @@ class AnnouncementsViewSet(ModelViewSet):
                         except Announcements.DoesNotExist:
                             # nothing to do if announcement was removed
                             pass
-                        break
+                    break
                 time.sleep(60)
             except Exception:
                 return
@@ -304,9 +304,107 @@ class AnnouncementsViewSet(ModelViewSet):
 
         return Response({'message': f'Announcement will be sent as SMS in {notice_minutes} minute(s).'}, status=status.HTTP_200_OK)
 
+    # @action(detail=False, methods=['post', 'get'])
+    # def repost_announcement(self, request):
+    #     repost_serializer = RepostsSerializer(data=request.data)
+        
+    #     if repost_serializer.is_valid():
+    #         repost_serializer.save()
+    #         return Response({'message': 'Announcement reposted successfully✅'}, status=status.HTTP_201_CREATED)
+    #     else:
+    #         return Response({'error': repost_serializer.error_messages}, status=status.HTTP_403_FORBIDDEN)
+        
         
 
+
+class TaskViewSet(ModelViewSet):
+    queryset = Task.objects.all()
+    serializer_class = TaskSerializer
+    filterset_fields = ['user', 'status', 'time_stamp']
+    search_fields = ['content']
+    ordering_fields = ['time_stamp', 'status']  
+
+    @action(methods=['post', 'get'], detail=False)
+    def expiry_sensor(self, request):
+        task_serializer = TaskSerializer(data=request.data)
+
+        if not task_serializer.is_valid():
+            return Response({'error': task_serializer.error_messages}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
         
+        expiry_date = task_serializer.validated_data['due_date']
+        task_id = task_serializer.validated_data['id']
+
+        if not expiry_date:
+            return Response({'error': 'The due date of the Task was not indicated'}, status=status.HTTP_404_NOT_FOUND)
+        
+        def _schedule_checker(task_id, target_time):
+            try:
+                while True:
+                    now = _datetime.now()
+                    if now >= target_time:
+                        try:
+                            task = Task.objects.get(pk=task_id)
+                            task.state = 'expired'
+                            task.time_stamp = now
+                            task.status = 'sent'
+                            task.save()
+                        except Task.DoesNotExist:
+                            pass
+                    break
+                time.sleep(1)
+            except Exception:
+                # fail silently for background checker
+                return
+
+        checker_thread = threading.Thread(target=_schedule_checker, args=(task_id, expiry_date), daemon=True)
+        checker_thread.start()
+
+        return Response({'message': 'The task deadline has been reached'}, status=status.HTTP_202_ACCEPTED)
+    
+
+class QuestionViewSet(ModelViewSet):
+    queryset = Question.objects.all()
+    serializer_class = QuestionSerializer
+    filterset_fields = ['user', 'status', 'time_stamp']
+    search_fields = ['description']
+    ordering_fields = ['time_stamp', 'status']
+
+class ChoiceViewSet(ModelViewSet):
+    queryset = Choice.objects.all()
+    serializer_class = ChoiceSerializer
+    filterset_fields = ['user', 'status', 'time_stamp']
+    search_fields = ['content']
+    ordering_fields = ['time_stamp', 'status']
+
+class FileResponseViewSet(ModelViewSet):
+    queryset = FileResponse.objects.all()
+    serializer_class = FileResponseSerializer
+    filterset_fields = ['user', 'status', 'time_stamp']
+    search_fields = ['task']
+    ordering_fields = ['time_stamp', 'status']
+
+class CompletedTaskViewSet(ModelViewSet):
+    queryset = CompletedTask.objects.all()
+    serializer_class = CompletedTaskSerializer
+    filterset_fields = ['user', 'status', 'time_stamp']
+    search_fields = ['task']
+    ordering_fields = ['time_stamp', 'status']
+
+class QuestionResponseViewSet(ModelViewSet):
+    queryset = QuestionResponse.objects.all()
+    serializer_class = QuestionResponseSerializer
+    filterset_fields = ['user', 'status', 'time_stamp']
+    search_fields = ['description']
+    ordering_fields = ['time_stamp', 'status']
+
+class SubQuestionViewSet(ModelViewSet):
+    queryset = SubQuestion.objects.all()
+    serializer_class = SubQuestionSerializer
+    filterset_fields = ['user', 'status', 'time_stamp']
+    search_fields = ['description']
+    ordering_fields = ['time_stamp', 'status']
+
+"""Task methods are next"""
 
 # TODO: create (CRUD)announcements
 # Convert text to announcement or reply as well ✅ 
@@ -348,3 +446,18 @@ class ReplyViewSet(ModelViewSet):
     filterset_fields = ['user', 'status', 'time_stamp', 'reference_text']
     search_fields = ['content']
     ordering_fields = ['time_stamp', 'status']
+
+class RepostsViewSet(ModelViewSet):
+    queryset = Reposts.objects.all()
+    serializer_class = RepostsSerializer
+    filterset_fields = ['user', 'status', 'time_stamp', 'caption']
+    search_fields = ['caption']
+    ordering_fields = ['time_stamp', 'status']
+
+class PinViewSet(ModelViewSet):
+    queryset = Pin.objects.all()
+    serializer_class = PinSerializer
+    filterset_fields = ['user', 'status', 'time_stamp']
+    search_fields = ['task']
+    ordering_fields = ['time_stamp', 'status']
+
