@@ -1,6 +1,6 @@
 from django.db import models
 from rest_framework.exceptions import ValidationError
-from Rooms.models import Room
+from Rooms.models import Room, DefaultRoom
 
 
 # Resource types

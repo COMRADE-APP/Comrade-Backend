@@ -21,7 +21,7 @@ class Organisation(models.Model):
     org_type = models.CharField(max_length=200, choices=ORG_TYPES, default='business')
     is_learning_inst = models.BooleanField(default=False)
     industry = models.CharField(max_length=5000)
-    created_at = models.DateTimeField(auto_now=True)
+    created_on = models.DateTimeField(auto_now=True)
 
 class OrgBranch(models.Model):
     organisation = models.OneToOneField(Organisation, on_delete=models.DO_NOTHING)
@@ -34,7 +34,7 @@ class OrgBranch(models.Model):
     postal_code = models.CharField(max_length=200)
     town = models.CharField(max_length=100)
     city = models.CharField(max_length=500)
-    created_at = models.DateTimeField(auto_now=True)
+    created_on = models.DateTimeField(auto_now=True)
 
 
 # Organization
@@ -51,33 +51,66 @@ class Division(models.Model):
     org_branch = models.OneToOneField(OrgBranch, on_delete=models.DO_NOTHING, null=True)
     name = models.CharField(max_length=500)
     div_code = models.CharField(max_length=200, unique=True, primary_key=True)
+    created_on = models.DateTimeField(auto_now=True)
     
 class Department(models.Model):
     division = models.OneToOneField(Division, on_delete=models.DO_NOTHING, null=True)
     name = models.CharField(max_length=500)
     dep_code = models.CharField(max_length=200, unique=True, primary_key=True)
+    created_on = models.DateTimeField(auto_now=True)
 
 class Section(models.Model):
     department = models.OneToOneField(Department, on_delete=models.DO_NOTHING, null=True)
     name = models.CharField(max_length=500)
     section_code = models.CharField(max_length=200, unique=True, primary_key=True)
+    created_on = models.DateTimeField(auto_now=True)
+
+class Unit(models.Model):
+    department = models.OneToOneField(Department, on_delete=models.DO_NOTHING, null=True)
+    name = models.CharField(max_length=500)
+    unit_code = models.CharField(max_length=200, unique=True, primary_key=True)
+    created_on = models.DateTimeField(auto_now=True)
 
 class Team(models.Model):
     section = models.OneToOneField(Section, on_delete=models.DO_NOTHING, null=True)
     name = models.CharField(max_length=500)
     team_code = models.CharField(max_length=200, unique=True, primary_key=True)
+    created_on = models.DateTimeField(auto_now=True)
 
 class Committee(models.Model):
     organistaion = models.OneToOneField(Organisation, on_delete=models.DO_NOTHING, null=True)
     name = models.CharField(max_length=500)
     committee_code = models.CharField(max_length=200, unique=True, primary_key=True)
+    created_on = models.DateTimeField(auto_now=True)
+
+class Board(models.Model):
+    organistaion = models.OneToOneField(Organisation, on_delete=models.DO_NOTHING, null=True)
+    name = models.CharField(max_length=500)
+    board_code = models.CharField(max_length=200, unique=True, primary_key=True)
+    created_on = models.DateTimeField(auto_now=True)
 
 class Project(models.Model):
     organistaion = models.OneToOneField(Organisation, on_delete=models.DO_NOTHING, null=True)
     name = models.CharField(max_length=500)
     project_code = models.CharField(max_length=200, unique=True, primary_key=True)
+    created_on = models.DateTimeField(auto_now=True)
 
-class Center(models.Model):
+class Program(models.Model):
     organistaion = models.OneToOneField(Organisation, on_delete=models.DO_NOTHING, null=True)
     name = models.CharField(max_length=500)
-    committee_code = models.CharField(max_length=200, unique=True, primary_key=True)
+    program_code = models.CharField(max_length=200, unique=True, primary_key=True)
+    created_on = models.DateTimeField(auto_now=True)
+
+class Centre(models.Model):
+    organistaion = models.OneToOneField(Organisation, on_delete=models.DO_NOTHING, null=True)
+    name = models.CharField(max_length=500)
+    centre_code = models.CharField(max_length=200, unique=True, primary_key=True)
+    created_on = models.DateTimeField(auto_now=True)
+
+class Institute(models.Model):
+    organistaion = models.OneToOneField(Organisation, on_delete=models.DO_NOTHING, null=True)
+    name = models.CharField(max_length=500)
+    institute_code = models.CharField(max_length=200, unique=True, primary_key=True)
+    created_on = models.DateTimeField(auto_now=True)
+
+

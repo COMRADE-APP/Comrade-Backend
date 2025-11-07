@@ -158,7 +158,7 @@ class CareerOffice(models.Model):
     description = models.TextField(max_length=5000)
     created_at = models.DateTimeField(auto_now=True)
 
-class Couselling(models.Model):
+class Counselling(models.Model):
     stud_affairs = models.OneToOneField(StudentAffairs, on_delete=models.DO_NOTHING)
     counselling_code = models.CharField(max_length=500, unique=True, primary_key=True)
     name = models.CharField(max_length=500)
@@ -188,6 +188,27 @@ class Security(models.Model):
 class Transport(models.Model):
     stud_affairs = models.OneToOneField(SupportServices, on_delete=models.DO_NOTHING)
     transport_code = models.CharField(max_length=500, unique=True, primary_key=True)
+    name = models.CharField(max_length=500)
+    description = models.TextField(max_length=5000)
+    created_at = models.DateTimeField(auto_now=True)
+
+class Library(models.Model):
+    stud_affairs = models.OneToOneField(SupportServices, on_delete=models.DO_NOTHING)
+    library_code = models.CharField(max_length=500, unique=True, primary_key=True)
+    name = models.CharField(max_length=500)
+    description = models.TextField(max_length=5000)
+    created_at = models.DateTimeField(auto_now=True)
+
+class Cafeteria(models.Model):
+    stud_affairs = models.OneToOneField(SupportServices, on_delete=models.DO_NOTHING)
+    cafeteria_code = models.CharField(max_length=500, unique=True, primary_key=True)
+    name = models.CharField(max_length=500)
+    description = models.TextField(max_length=5000)
+    created_at = models.DateTimeField(auto_now=True)
+
+class Hostel(models.Model):
+    stud_affairs = models.OneToOneField(SupportServices, on_delete=models.DO_NOTHING)
+    hostel_code = models.CharField(max_length=500, unique=True, primary_key=True)
     name = models.CharField(max_length=500)
     description = models.TextField(max_length=5000)
     created_at = models.DateTimeField(auto_now=True)
