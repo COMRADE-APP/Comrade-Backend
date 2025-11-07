@@ -45,3 +45,6 @@ config.json
 
 # users reference
 *users
+
+# Ignore complementary files
+TODO

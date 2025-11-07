@@ -8,6 +8,7 @@ USER_TYPE = (
     ('staff', 'Staff'),
     ('lecturer', 'Lecturer'),
     ('student', 'Student'),
+    ('moderator', 'Moderator'),
     ('student_admin', 'Student Admin'),
     ('institutional_admin', 'Institutional Admin'),
     ('institutional_staff', 'Institutional Staff'),
@@ -48,6 +49,16 @@ class CustomUser(AbstractUser):
     last_name = models.CharField(max_length=200)
     user_type = models.CharField(max_length=200, choices=USER_TYPE, default='student')
     email = models.EmailField(unique=True)
+    is_student_admin = models.BooleanField(default=False)
+    is_inst_admin = models.BooleanField(default=False)
+    is_inst_staff = models.BooleanField(default=False)
+    is_org_admin = models.BooleanField(default=False)
+    is_org_staff = models.BooleanField(default=False)
+    is_admin = models.BooleanField(default=False)
+    is_lecturer = models.BooleanField(default=False)
+    is_student = models.BooleanField(default=True)
+    is_moderator = models.BooleanField(default=False)
+    is_staff = models.BooleanField(default=False)
 
     
     USERNAME_FIELD = 'email'
@@ -70,14 +81,40 @@ class Student(models.Model):
 
     def __str__(self):
         return f"{self.user.first_name} {self.user.last_name}"
+    
+    def save(self, *args, **kwargs):
+        self.user.is_student = True
+        self.user.save()
+        super().save(*args, **kwargs)
 
 
 class StudentAdmin(models.Model):
     user = models.OneToOneField(Student, on_delete=models.DO_NOTHING)
 
+    def save(self, *args, **kwargs):
+        self.user.user.is_student_admin = True
+        self.user.user.save()
+        super().save(*args, **kwargs)
+
 
 class Lecturer(models.Model):   # FIXED
     user = models.OneToOneField(CustomUser, on_delete=models.CASCADE)
+    lecturer_id = models.CharField(max_length=200, unique=True, primary_key=True, default='LCT' )
+    faculty = models.CharField(max_length=200, default='General')
+    department = models.CharField(max_length=200, default='General')
+    institution = models.OneToOneField(Institution, on_delete=models.DO_NOTHING, null=True)
+    phone_number = models.CharField(max_length=15, null=True)
+    created_at = models.DateTimeField(auto_now=True)
+
+    def save(self, *args, **kwargs):
+        self.user.is_lecturer = True
+        self.user.save()
+        super().save(*args, **kwargs)
+
+    def __str__(self):
+        return f"{self.user.first_name} {self.user.last_name}"
+    
+
 
 
 class OrgStaff(models.Model):
@@ -123,13 +160,31 @@ class OrgStaff(models.Model):
     interests = models.CharField(max_length=5000)
     created_at = models.DateTimeField(auto_now=True)
 
+    def save(self, *args, **kwargs):
+        self.user.is_org_staff = True
+        self.user.save()
+        super().save(*args, **kwargs)
+
+    def __str__(self):
+        return f"{self.user.first_name} {self.user.last_name}"
+    
+
+
 
 class OrgAdmin(models.Model):
     user = models.OneToOneField(OrgStaff, on_delete=models.DO_NOTHING)
 
+    def save(self, *args, **kwargs):
+        self.user.user.is_org_admin = True
+        self.user.user.save()
+        super().save(*args, **kwargs)
+
+    def __str__(self):
+        return f"{self.user.user.first_name} {self.user.user.last_name}"
+
 
 class InstStaff(models.Model):
-    user = models.OneToOneField(StudentAdmin, on_delete=models.DO_NOTHING)
+    user = models.OneToOneField(CustomUser, on_delete=models.DO_NOTHING)
     institution = models.OneToOneField(Institution, on_delete=models.DO_NOTHING)
     inst_branch = models.OneToOneField(InstBranch, on_delete=models.DO_NOTHING)
     staff_id = models.CharField(max_length=200, unique=True, primary_key=True)
@@ -143,11 +198,26 @@ class InstStaff(models.Model):
     interests = models.CharField(max_length=5000)
     created_at = models.DateTimeField(auto_now=True)
 
+    def save(self, *args, **kwargs):
+        self.user.user.is_inst_staff = True
+        self.user.user.save()
+        super().save(*args, **kwargs)
+
     def __str__(self):
         return f"{self.user.user.first_name} {self.user.user.last_name}"
 
-    def __str__(self):
-        return f"{self.user.first_name} {self.user.last_name}"
+    
 
 class InstAdmin(models.Model):
     user = models.OneToOneField(InstStaff, on_delete=models.DO_NOTHING)
+
+    def save(self, *args, **kwargs):
+        self.user.user.is_inst_admin = True
+        self.user.user.save()
+        super().save(*args, **kwargs)
+
+    def __str__(self):
+        return f"{self.user.user.first_name} {self.user.user.last_name}"
+    
+
+
