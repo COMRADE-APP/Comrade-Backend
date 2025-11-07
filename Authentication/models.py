@@ -84,6 +84,7 @@ class Student(models.Model):
     
     def save(self, *args, **kwargs):
         self.user.is_student = True
+        self.user.user_type = 'student'
         self.user.save()
         super().save(*args, **kwargs)
 
@@ -93,6 +94,7 @@ class StudentAdmin(models.Model):
 
     def save(self, *args, **kwargs):
         self.user.user.is_student_admin = True
+        self.user.user.user_type = 'student_admin'
         self.user.user.save()
         super().save(*args, **kwargs)
 
@@ -108,6 +110,7 @@ class Lecturer(models.Model):   # FIXED
 
     def save(self, *args, **kwargs):
         self.user.is_lecturer = True
+        self.user.user_type = 'lecturer'
         self.user.save()
         super().save(*args, **kwargs)
 
@@ -162,6 +165,7 @@ class OrgStaff(models.Model):
 
     def save(self, *args, **kwargs):
         self.user.is_org_staff = True
+        self.user.user_type = 'organisational_staff'
         self.user.save()
         super().save(*args, **kwargs)
 
@@ -176,6 +180,7 @@ class OrgAdmin(models.Model):
 
     def save(self, *args, **kwargs):
         self.user.user.is_org_admin = True
+        self.user.user.user_type = 'organisational_admin'
         self.user.user.save()
         super().save(*args, **kwargs)
 
@@ -200,6 +205,7 @@ class InstStaff(models.Model):
 
     def save(self, *args, **kwargs):
         self.user.user.is_inst_staff = True
+        self.user.user.user_type = 'institutional_staff'
         self.user.user.save()
         super().save(*args, **kwargs)
 
@@ -213,6 +219,7 @@ class InstAdmin(models.Model):
 
     def save(self, *args, **kwargs):
         self.user.user.is_inst_admin = True
+        self.user.user.user_type = 'institutional_admin'
         self.user.user.save()
         super().save(*args, **kwargs)
 
