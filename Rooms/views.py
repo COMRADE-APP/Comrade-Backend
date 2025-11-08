@@ -10,6 +10,8 @@ from Rooms.serializers import RoomSerializer, DefaultRoomSerializer
 from Announcements.models import AnnouncementsRequest, Announcements, Task, Text, CompletedTask, Pin, Reposts, Reply, QuestionResponse, Question, SubQuestion, Choice, FileResponse
 from Organisation.models import Organisation, OrgBranch, Division, Department, Section, Team, Project, Centre, Committee, Board, Unit, Institute, Program
 from Institution.models import Institution, InstBranch, VCOffice, Faculty, InstDepartment, AdminDep, Library, Hostel, Cafeteria, Programme, HR, Admissions, HealthServices, Security, StudentAffairs, SupportServices, Finance, Marketing, Legal, ICT, CareerOffice, Counselling, RegistrarOffice, Transport
+from Rooms.permissions import IsModerator
+
 
 
 class RoomListCreateView(generics.ListCreateAPIView):
@@ -131,21 +133,50 @@ class RoomViewSet(ModelViewSet):
         announcements_count = Announcements.objects.filter(room=room).count()
         return Response({"announcements_count": announcements_count}, status=status.HTTP_200_OK)
     
-    @action(detail=True, methods=['get', 'post'])
+    @action(detail=True, methods=['get', 'post', 'delete', 'put', 'patch'])
     def resources(self, request, pk=None):
         room = self.get_object()
         if request.method == 'GET':
             resources = FileResponse.objects.filter(room=room)
             serializer = FileResponseSerializer(resources, many=True)
             return Response(serializer.data, status=status.HTTP_200_OK)
-        elif request.method == 'POST' and request.user.is_student_admin or request.user.is_inst_admin or request.user.is_org_admin or request.user.is_admin:
-            serializer = FileResponseSerializer(data=request.data)
-            if serializer.is_valid():
-                serializer.save(room=room, uploaded_by=request.user)
-                return Response(serializer.data, status=status.HTTP_201_CREATED)
-            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        
+        # Check if user has permission to upload/edit/delete resources
+        permissions = IsModerator()
+        if permissions.has_permission(request, self):
+        # elif request.user.is_student_admin or request.user.is_inst_admin or request.user.is_org_admin or request.user.is_admin or request.user.is_moderator:
+            if request.method == 'POST':
+                serializer = FileResponseSerializer(data=request.data)
+                if serializer.is_valid():
+                    serializer.save(room=room, uploaded_by=request.user)
+                    return Response(serializer.data, status=status.HTTP_201_CREATED)
+                return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+            
+            elif request.method in ['PUT', 'PATCH']:
+                resource_id = request.data.get('id')
+                resource = get_object_or_404(FileResponse, id=resource_id, room=room)
+                serializer = FileResponseSerializer(resource, data=request.data, partial=(request.method == 'PATCH'))
+                if serializer.is_valid():
+                    serializer.save()
+                    return Response(serializer.data, status=status.HTTP_200_OK)
+                return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+            
+            elif request.method == 'DELETE':
+                resource_id = request.data.get('id')
+                resource = get_object_or_404(FileResponse, id=resource_id, room=room)
+                resource.delete()
+                return Response({"message": "Resource deleted successfully."}, status=status.HTTP_200_OK)
+        # Deny if user lacks permission
         else:
-            return Response({"message": "You do not have permission to upload resources."}, status=status.HTTP_403_FORBIDDEN)
+            return Response({"message": "You do not have permission to upload or edit resources to this room."}, status=status.HTTP_403_FORBIDDEN)
+        
+    @action(detail=True, methods=['get'])
+    def resources_count(self, request, pk=None):
+        room = self.get_object()
+        resources_count = FileResponse.objects.filter(room=room).count()
+        return Response({"resources_count": resources_count}, status=status.HTTP_200_OK)
+    
+        
 
 class DefaultRoomViewSet(ModelViewSet):
     queryset = DefaultRoom.objects.all()

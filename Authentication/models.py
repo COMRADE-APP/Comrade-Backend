@@ -226,5 +226,15 @@ class InstAdmin(models.Model):
     def __str__(self):
         return f"{self.user.user.first_name} {self.user.user.last_name}"
     
+class Moderator(models.Model):
+    user = models.OneToOneField(CustomUser, on_delete=models.CASCADE)
 
+    def save(self, *args, **kwargs):
+        self.user.is_moderator = True
+        self.user.user_type = 'moderator'
+        self.user.save()
+        super().save(*args, **kwargs)
+
+    def __str__(self):
+        return f"{self.user.first_name} {self.user.last_name}"
 

@@ -38,3 +38,7 @@ class IsRoomMemberOrReadOnly(IsAuthenticatedOrReadOnly):
 class IsAdmin(IsAuthenticated):
     def has_permission(self, request, view):
         return bool(request.user and request.user.is_authenticated and request.user.is_admin)
+    
+class IsModerator(BasePermission):
+    def has_permission(self, request, view):
+        return bool(request.user and request.user.is_authenticated and request.user.is_moderator or request.user.is_admin or request.user.is_inst_admin or request.user.is_org_admin or request.user.is_student_admin)
