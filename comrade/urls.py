@@ -16,6 +16,7 @@ Including another URLconf
 """
 from django.contrib import admin
 from django.urls import path, include
+import rest_framework
 
 urlpatterns = [
     path('admin/', admin.site.urls),
@@ -24,4 +25,5 @@ urlpatterns = [
     path('rooms/', include('Rooms.urls')),
     path('announcements/', include('Announcements.urls')),
     path('resources/', include('Resources.urls')),
+    path('api/', include('rest_framework.urls'))
 ]
