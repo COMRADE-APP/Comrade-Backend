@@ -1,6 +1,7 @@
 from django.db import models
 from rest_framework.exceptions import ValidationError
 from Rooms.models import Room, DefaultRoom
+from Authentication.models import CustomUser as Cus
 
 
 # Resource types
@@ -46,7 +47,8 @@ class Resource(models.Model):
         return self.title
     
 class ResourceVisibility(models.Model):
-    resource = models.OneToOneField(Resource, on_delete=models.CASCADE)
-    room = models.OneToOneField(Room, on_delete=models.CASCADE)
+    resource = models.OneToOneField(Resource, on_delete=models.DO_NOTHING)
+    rooms = models.ManyToManyField(Room, blank=True)
+    default_rooms = models.ManyToManyField(DefaultRoom, blank=True)
     created_at = models.DateTimeField(auto_now=True)
-    # created_by = models.OneToOneField(User, on_delete=models.DO_NOTHING, null=False)
+    created_by = models.OneToOneField(Cus, on_delete=models.DO_NOTHING, null=True)

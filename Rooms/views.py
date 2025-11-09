@@ -5,6 +5,8 @@ from django.shortcuts import get_object_or_404
 from rest_framework import status
 from rest_framework.decorators import action
 from rest_framework.response import Response
+from Resources.models import Resource, ResourceVisibility
+from Resources.serializers import ResourceSerializer, ResourceVisibilitySerializer
 from Rooms.models import Room, DefaultRoom
 from Rooms.serializers import RoomSerializer, DefaultRoomSerializer
 from Announcements.models import AnnouncementsRequest, Announcements, Task, Text, CompletedTask, Pin, Reposts, Reply, QuestionResponse, Question, SubQuestion, Choice, FileResponse
@@ -175,6 +177,22 @@ class RoomViewSet(ModelViewSet):
         room = self.get_object()
         resources_count = FileResponse.objects.filter(room=room).count()
         return Response({"resources_count": resources_count}, status=status.HTTP_200_OK)
+    
+    @action(detail=True, methods=['get', 'post'])
+    def change_resource_visibility(self, request, pk=None):
+        room = self.get_object()
+        if request.method == 'GET':
+            visibilities = ResourceVisibility.objects.filter(room=room)
+            serializer = ResourceVisibilitySerializer(visibilities, many=True)
+            return Response(serializer.data, status=status.HTTP_200_OK)
+        elif request.method == 'POST' and request.user.is_student_admin or request.user.is_inst_admin or request.user.is_org_admin or request.user.is_admin:
+            serializer = ResourceVisibilitySerializer(data=request.data)
+            if serializer.is_valid():
+                serializer.save(room=room, created_by=request.user)
+                return Response(serializer.data, status=status.HTTP_201_CREATED)
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        else:
+            return Response({"message": "You do not have permission to change resource visibility."}, status=status.HTTP_403_FORBIDDEN)
     
         
 
