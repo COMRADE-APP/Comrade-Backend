@@ -1,9 +1,8 @@
 from django.db import models
 from datetime import datetime
-from Authentication.models import StudentAdmin
+from Authentication.models import CustomUser
 # from django.contrib.auth.models import User
 from Authentication.models import Student
-from Resources.models import VIS_TYPES
 
 # Create your models here.
 
@@ -33,11 +32,22 @@ TASK_STATE = (
     ('unavailable', 'Unavalible')
 )
 
+VIS_TYPES = (
+    ('public', 'Public'),
+    ('private', 'Private'),
+    ('only_me', 'Only Me'),
+    ('course', 'Your Course or Class'),
+    ('faculty', 'Your Faculty or School'),
+    ('institutional', 'Your Institution'),
+    ('organisational', 'Your Organisation'),
+    ('group', 'Your Group or Section')
+)
+
 
 # Creator's Side of the platform
 """Admins and Moderator's models implemetations inside and outside rooms"""
 class Announcements(models.Model):
-    user = models.OneToOneField(StudentAdmin, on_delete=models.DO_NOTHING)
+    user = models.OneToOneField(CustomUser, on_delete=models.DO_NOTHING)
     heading = models.CharField(max_length=200, null=False)
     content = models.TextField(max_length=5000, null=False)
     visibility = models.CharField(max_length=200, null=False, choices=VIS_TYPES, default='private')
@@ -52,7 +62,7 @@ class Announcements(models.Model):
 
 class AnnouncementsRequest(models.Model):
     user = models.OneToOneField(Student, on_delete=models.DO_NOTHING)
-    verified_by = models.OneToOneField(StudentAdmin, on_delete=models.DO_NOTHING)
+    verified_by = models.OneToOneField(CustomUser, on_delete=models.DO_NOTHING)
     verification_status = models.CharField(max_length=200, null=False, choices=VER_STATUS, default='pending')
     heading = models.CharField(max_length=200, null=False)
     content = models.TextField(max_length=5000, null=False)
@@ -63,7 +73,7 @@ class AnnouncementsRequest(models.Model):
     time_stamp = models.DateTimeField(default=datetime.now())
 
 class Task(models.Model):
-    user = models.OneToOneField(StudentAdmin, on_delete=models.DO_NOTHING)
+    user = models.OneToOneField(CustomUser, on_delete=models.DO_NOTHING)
     heading = models.CharField(max_length=200, null=False)
     description = models.TextField(max_length=5000, null=False)
     visibility = models.CharField(max_length=200, null=False, choices=VIS_TYPES, default='private')
@@ -127,7 +137,7 @@ class FileResponse(models.Model):
 
 """Student's models implemetations"""
 class Text(models.Model):
-    user = models.OneToOneField(Student, on_delete=models.DO_NOTHING)
+    user = models.OneToOneField(CustomUser, on_delete=models.DO_NOTHING)
     content = models.CharField(max_length=5000, null=False)
     status = models.CharField(max_length=200, choices=ANN_STATUS, 
     default='pending')
@@ -143,7 +153,7 @@ class Reply(models.Model):
     time_stamp = models.DateTimeField(default=datetime.now())
 
 class Reposts(models.Model):
-    user = models.OneToOneField(Student, on_delete=models.DO_NOTHING)
+    user = models.OneToOneField(CustomUser, on_delete=models.DO_NOTHING)
     announcement = models.OneToOneField(Announcements, blank=True, on_delete=models.DO_NOTHING, null=True)
     task = models.OneToOneField(Task, blank=True, on_delete=models.DO_NOTHING, null=True)
     caption = models.TextField(default='', max_length=5000)
@@ -154,7 +164,7 @@ class Reposts(models.Model):
     default='pending')
 
 class Pin(models.Model):
-    user = models.OneToOneField(Student, on_delete=models.DO_NOTHING)
+    user = models.OneToOneField(CustomUser, on_delete=models.DO_NOTHING)
     announcement = models.OneToOneField(Announcements, blank=True, on_delete=models.DO_NOTHING)
     task = models.OneToOneField(Task, blank=True, on_delete=models.DO_NOTHING)
     repost = models.OneToOneField(Reposts, blank=True, on_delete=models.DO_NOTHING)
@@ -163,13 +173,13 @@ class Pin(models.Model):
     default='pending')
 
 class CompletedTask(models.Model):
-    user = models.OneToOneField(Student, on_delete=models.DO_NOTHING)
+    user = models.OneToOneField(CustomUser, on_delete=models.DO_NOTHING)
     task = models.OneToOneField(Task, on_delete=models.DO_NOTHING)
     is_completed = models.BooleanField(default=False)
     completed_on = models.DateTimeField(default=datetime.now())
 
 class QuestionResponse(models.Model):
-    user = models.OneToOneField(Student, on_delete=models.DO_NOTHING)
+    user = models.OneToOneField(CustomUser, on_delete=models.DO_NOTHING)
     task = models.OneToOneField(Task, on_delete=models.DO_NOTHING)
     question = models.OneToOneField(Question, on_delete=models.DO_NOTHING)
     sub_question = models.OneToOneField(SubQuestion, on_delete=models.DO_NOTHING, null=True, blank=True)
@@ -177,6 +187,13 @@ class QuestionResponse(models.Model):
     answer_choice = models.OneToOneField(Choice, on_delete=models.DO_NOTHING)
     answer_file = models.FileField(upload_to='task_answers/')
     score = models.FloatField(default=0.0)
+    time_stamp = models.DateTimeField(default=datetime.now())
+
+class TaskResponse(models.Model):
+    user = models.OneToOneField(CustomUser, on_delete=models.DO_NOTHING)
+    task = models.OneToOneField(Task, on_delete=models.DO_NOTHING)
+    question_responses = models.ManyToManyField(QuestionResponse, blank=True)
+    total_score = models.FloatField(default=0.0)
     time_stamp = models.DateTimeField(default=datetime.now())
 
 # Remember: Task files saving should be in terms of folders (Weekly, monthly or yearly, daily, or roomwise)

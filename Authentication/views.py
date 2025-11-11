@@ -5,6 +5,7 @@ from rest_framework.permissions import AllowAny, IsAuthenticated, IsAdminUser, I
 from rest_framework.viewsets import ModelViewSet
 from Authentication.serializers import RegisterSerializer, LoginSerializer, CustomUserSerializer, LecturerSerializer, OrgStaffSerializer, StudentAdminSerializer, OrgAdminSerializer, InstAdminSerializer, InstStaffSerializer
 from Authentication.models import Student, CustomUser, Lecturer, OrgStaff, StudentAdmin, OrgAdmin, InstAdmin, InstStaff
+from rest_framework.decorators import action
 
 class RegisterView(APIView):
     def post(self, request):
@@ -41,6 +42,7 @@ class StudentAdminViewSet(ModelViewSet):
     queryset = StudentAdmin.objects.all()
     serializer_class = StudentAdminSerializer
     permission_classes = [IsAuthenticated]
+
 class OrgAdminViewSet(ModelViewSet):
     queryset = OrgAdmin.objects.all()
     serializer_class = OrgAdminSerializer

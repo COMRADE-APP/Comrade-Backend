@@ -1,4 +1,4 @@
-from Announcements.models import Announcements, Text, Reply, AnnouncementsRequest, Task, Reposts, Choice, Pin, CompletedTask, FileResponse, Question, QuestionResponse, SubQuestion
+from Announcements.models import Announcements, Text, Reply, AnnouncementsRequest, Task, Reposts, Choice, Pin, CompletedTask, FileResponse, Question, QuestionResponse, SubQuestion, TaskResponse
 from rest_framework import serializers
 
 
@@ -79,5 +79,11 @@ class QuestionResponseSerializer(serializers.ModelSerializer):
 class FileResponseSerializer(serializers.ModelSerializer):
     class Meta:
         model = FileResponse
+        fields = '__all__'  
+        read_only_fields = ['timestamp']
+
+class TaskResponseSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = TaskResponse
         fields = '__all__'  
         read_only_fields = ['timestamp']

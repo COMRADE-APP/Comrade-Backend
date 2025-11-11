@@ -102,11 +102,11 @@ class LoginSerializer(serializers.Serializer):
 
         return{"username": user.username, "message": "Login successful."}
     
-# class StudentSerializer(serializers.ModelSerializer):
-#     class Meta:
-#         model = Student
-#         fields = '__all__'  
-#         read_only_fields = ['admission_number']
+class StudentSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Student
+        fields = '__all__'  
+        read_only_fields = ['admission_number']
 class CustomUserSerializer(serializers.ModelSerializer):
     class Meta:
         model = CustomUser

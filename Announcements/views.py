@@ -1,7 +1,7 @@
 from django.shortcuts import render
 from rest_framework.viewsets import ModelViewSet
-from Announcements.models import Announcements, Text, Reply, AnnouncementsRequest, Task, Reposts, Choice, Pin, CompletedTask, FileResponse, Question, QuestionResponse, SubQuestion
-from Announcements.serializers import AnnouncementsSerializer, TextSerializer, ReplySerializer, AnnouncementsRequestSerializer, ChoiceSerializer, RepostsSerializer, PinSerializer, TaskSerializer, CompletedTaskSerializer, FileResponseSerializer, QuestionSerializer, QuestionResponseSerializer, SubQuestionSerializer
+from Announcements.models import Announcements, Text, Reply, AnnouncementsRequest, Task, Reposts, Choice, Pin, CompletedTask, FileResponse, Question, QuestionResponse, SubQuestion, TaskResponse
+from Announcements.serializers import AnnouncementsSerializer, TextSerializer, ReplySerializer, AnnouncementsRequestSerializer, ChoiceSerializer, RepostsSerializer, PinSerializer, TaskSerializer, CompletedTaskSerializer, FileResponseSerializer, QuestionSerializer, QuestionResponseSerializer, SubQuestionSerializer, TaskResponseSerializer
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework import status
@@ -461,3 +461,9 @@ class PinViewSet(ModelViewSet):
     search_fields = ['task']
     ordering_fields = ['time_stamp', 'status']
 
+class TaskResponseViewSet(ModelViewSet):
+    queryset = TaskResponse.objects.all()
+    serializer_class = TaskResponseSerializer
+    filterset_fields = ['user', 'time_stamp']
+    search_fields = ['task']
+    ordering_fields = ['time_stamp']
