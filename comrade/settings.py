@@ -41,6 +41,13 @@ INSTALLED_APPS = [
     'rest_framework',
     'UserManagement',
     'Rooms',
+    'Announcements',
+    'Events',
+    'Resources',
+    'Specialization',
+    'Organisation',
+    'Institution',
+    'Task',
 ]
 
 MIDDLEWARE = [
@@ -115,6 +122,9 @@ USE_I18N = True
 
 USE_TZ = True
 
+
+# Authentication settings
+AUTH_USER_MODEL = 'Authentication.CustomUser'
 
 # Static files (CSS, JavaScript, Images)
 # https://docs.djangoproject.com/en/5.1/howto/static-files/
