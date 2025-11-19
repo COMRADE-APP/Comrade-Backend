@@ -2,7 +2,7 @@ from django.contrib.auth.models import User
 from django.contrib.auth import authenticate
 import re
 from rest_framework import serializers
-from Authentication.models import Student, CustomUser, Lecturer, OrgStaff, StudentAdmin, OrgAdmin, InstAdmin, InstStaff
+from Authentication.models import Student, CustomUser, Lecturer, OrgStaff, StudentAdmin, OrgAdmin, InstAdmin, InstStaff, Profile
 
 class RegisterSerializer(serializers.ModelSerializer):
     first_name = serializers.CharField()
@@ -140,5 +140,11 @@ class InstAdminSerializer(serializers.ModelSerializer):
 class InstStaffSerializer(serializers.ModelSerializer):
     class Meta:
         model = InstStaff
+        fields = '__all__'  
+        read_only_fields = ['user']
+
+class ProfileSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Profile
         fields = '__all__'  
         read_only_fields = ['user']

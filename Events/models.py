@@ -11,7 +11,12 @@ EVENT_STATE = (
     ('cancelled', 'Cancelled'),
     ('postponed', 'Postponed'),
     ('deleted', 'Deleted'),
-    ('draft', 'Draft')
+    ('draft', 'Draft'),
+    ('archived', 'Archived'),
+    ('upcoming', 'Upcoming'),
+    ('scheduled', 'Scheduled'),
+    ('completed', 'Completed'),
+    ('ongoing', 'Ongoing'),
 )
 
 ATTENDEE_STATUS = (
@@ -50,6 +55,20 @@ APPROVAL_PERM = (
     ('transferred', 'Transferred'),
 )
 
+ATTEND_STATE = (
+    ('interested', 'Interested'),
+    ('bookmarked', 'Bookmarked'),
+    ('attending', 'Attending'),
+    ('at_the_event', 'Currently at the Event'),
+    ('attended', 'Attended'),
+    ('missed', 'Missed'),
+    ('cancelled', 'Cancelled on Attending'),
+    ('blocked', 'Blocked'),
+    ('disliked', 'Disliked'),
+    ('report', 'Report'),
+    ('neutral', 'Neutral')
+)
+
 
 class Event(models.Model):
     name = models.CharField(max_length=200)
@@ -60,8 +79,10 @@ class Event(models.Model):
     end_time = models.TimeField()
     booking_deadline = models.DateTimeField(default=datetime.now())
     date = models.DateTimeField(default=datetime.now())
+    deadline_reached = models.BooleanField(default=False)
     location = models.CharField(max_length=300)
     status = models.CharField(max_length=200, choices=EVENT_STATE, default='active')
+    scheduled_time = models.DateTimeField(default=datetime.now())
     time_stamp = models.DateTimeField(auto_now_add=True)
     created_by = models.ForeignKey(CustomUser, null=False, on_delete=models.DO_NOTHING)
 
@@ -81,12 +102,36 @@ class EventRegistration(models.Model):
 class EventFeedback(models.Model):
     event = models.ForeignKey(Event, on_delete=models.DO_NOTHING)
     user = models.ForeignKey(CustomUser, null=False, on_delete=models.DO_NOTHING)
-    feedback = models.TextField(max_length=2000)
-    rating = models.IntegerField()
+    feedback = models.TextField(max_length=2000, default='')
+    rating = models.IntegerField(default=0)
+    like = models.BooleanField(default=False)
+    attendendance_status = models.CharField(max_length=200, choices=ATTEND_STATE, default='neutral')
     submitted_on = models.DateTimeField(auto_now_add=True)
 
     def __str__(self):
         return f"{self.user} - {self.event.name} - {self.rating}"
+    
+class EventInvitation(models.Model):
+    event = models.ForeignKey(Event, on_delete=models.DO_NOTHING)
+    invited_user = models.ForeignKey(CustomUser, null=False, on_delete=models.DO_NOTHING, related_name='invited_user')
+    invited_by = models.ForeignKey(CustomUser, null=False, on_delete=models.DO_NOTHING, related_name='inviter_user')
+    invitation_message = models.TextField(max_length=1000)
+    sent_on = models.DateTimeField(auto_now_add=True)
+    response_status = models.CharField(max_length=200, choices=APPROVAL_PERM, default='pending')
+
+    def __str__(self):
+        return f"Invitation to {self.invited_user} for {self.event.name}"
+    
+class EventReport(models.Model):
+    event = models.ForeignKey(Event, on_delete=models.DO_NOTHING)
+    report_title = models.CharField(max_length=200)
+    report_content = models.TextField(max_length=5000)
+    generated_on = models.DateTimeField(auto_now_add=True)
+    generated_by = models.ForeignKey(CustomUser, null=False, on_delete=models.DO_NOTHING)
+
+    def __str__(self):
+        return f"{self.report_title} - {self.event.name}"
+    
     
 class EventSponsor(models.Model):
     event = models.ForeignKey(Event, on_delete=models.DO_NOTHING)

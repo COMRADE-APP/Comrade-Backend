@@ -1,5 +1,5 @@
 from django.contrib import admin
-from .models import Student, CustomUser, Lecturer, OrgStaff, StudentAdmin, OrgAdmin, InstAdmin, InstStaff
+from .models import Student, CustomUser, Lecturer, OrgStaff, StudentAdmin, OrgAdmin, InstAdmin, InstStaff, Profile
 
 @admin.register(Student)
 class StudentAdmin(admin.ModelAdmin):
@@ -13,3 +13,4 @@ admin.register(StudentAdmin)
 admin.register(OrgAdmin)
 admin.register(InstAdmin)
 admin.register(InstStaff)
+admin.register(Profile)

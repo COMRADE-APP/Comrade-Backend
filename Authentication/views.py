@@ -3,8 +3,9 @@ from rest_framework.views import APIView
 from rest_framework import status
 from rest_framework.permissions import AllowAny, IsAuthenticated, IsAdminUser, IsAuthenticatedOrReadOnly
 from rest_framework.viewsets import ModelViewSet
-from Authentication.serializers import RegisterSerializer, LoginSerializer, CustomUserSerializer, LecturerSerializer, OrgStaffSerializer, StudentAdminSerializer, OrgAdminSerializer, InstAdminSerializer, InstStaffSerializer
-from Authentication.models import Student, CustomUser, Lecturer, OrgStaff, StudentAdmin, OrgAdmin, InstAdmin, InstStaff
+from Authentication.serializers import RegisterSerializer, LoginSerializer, CustomUserSerializer, LecturerSerializer, OrgStaffSerializer, StudentAdminSerializer, OrgAdminSerializer, InstAdminSerializer, InstStaffSerializer, ProfileSerializer
+from django.contrib.auth import authenticate
+from Authentication.models import Student, CustomUser, Lecturer, OrgStaff, StudentAdmin, OrgAdmin, InstAdmin, InstStaff, Profile
 from rest_framework.decorators import action
 
 class RegisterView(APIView):
@@ -54,4 +55,8 @@ class InstAdminViewSet(ModelViewSet):
 class InstStaffViewSet(ModelViewSet):
     queryset = InstStaff.objects.all()
     serializer_class = InstStaffSerializer
+    permission_classes = [IsAuthenticated]
+class ProfileViewSet(ModelViewSet):
+    queryset = Profile.objects.all()
+    serializer_class = ProfileSerializer
     permission_classes = [IsAuthenticated]

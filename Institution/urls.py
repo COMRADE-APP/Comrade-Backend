@@ -31,7 +31,7 @@ router.register(r'hostel', HostelViewSet, basename='hostel')
 router.register(r'cafeteria', CafeteriaViewSet, basename='cafeteria')
 
 
-url_patterns = [
+urlpatterns = [
 
 ]
-url_patterns += router.urls
+urlpatterns += router.urls

@@ -7,15 +7,18 @@ from rest_framework.decorators import action
 from rest_framework.response import Response
 from Resources.models import Resource, ResourceVisibility
 from Resources.serializers import ResourceSerializer, ResourceVisibilitySerializer
-from Rooms.models import Room, DefaultRoom
-from Rooms.serializers import RoomSerializer, DefaultRoomSerializer
-from Announcements.models import AnnouncementsRequest, Announcements, Task, Text, CompletedTask, Pin, Reposts, Reply, QuestionResponse, Question, SubQuestion, Choice, FileResponse, TaskResponse
+from Rooms.models import Room, DefaultRoom, DirectMessage, DirectMessageRoom, ForwadingLog
+from Rooms.serializers import RoomSerializer, DefaultRoomSerializer, DirectMessageSerializer, DirectMessageRoomSerializer, ForwadingLogSerializer
+from Announcements.models import AnnouncementsRequest, Announcements, Task, Text, CompletedTask, Pin, Reposts, Reply, QuestionResponse, Question, SubQuestion, Choice, FileResponse, TaskResponse, Reaction, Comment
+from Announcements.serializers import AnnouncementsRequestSerializer, AnnouncementsSerializer, TaskSerializer, TextSerializer, CompletedTaskSerializer, PinSerializer, RepostsSerializer, ReplySerializer, QuestionResponseSerializer, QuestionSerializer, SubQuestionSerializer, ChoiceSerializer, FileResponseSerializer, TaskResponseSerializer, ReactionSerializer, CommentSerializer
 from Organisation.models import Organisation, OrgBranch, Division, Department, Section, Team, Project, Centre, Committee, Board, Unit, Institute, Program
 from Institution.models import Institution, InstBranch, VCOffice, Faculty, InstDepartment, AdminDep, Library, Hostel, Cafeteria, Programme, HR, Admissions, HealthServices, Security, StudentAffairs, SupportServices, Finance, Marketing, Legal, ICT, CareerOffice, Counselling, RegistrarOffice, Transport
-from Rooms.permissions import IsModerator
-from Announcements.serializers import AnnouncementsSerializer, TaskSerializer, FileResponseSerializer, TextSerializer, CompletedTaskSerializer, PinSerializer, RepostsSerializer, ReplySerializer, QuestionResponseSerializer, QuestionSerializer, SubQuestionSerializer, ChoiceSerializer, TaskResponseSerializer
+from Rooms.permissions import IsModerator, IsAdmin
 from Authentication.models import CustomUser as User, Student, StudentAdmin, Lecturer, InstAdmin, InstStaff, OrgAdmin, OrgStaff
 from Authentication.serializers import CustomUserSerializer, StudentSerializer, StudentAdminSerializer, LecturerSerializer, InstAdminSerializer, InstStaffSerializer, OrgAdminSerializer, OrgStaffSerializer
+from Events.serializers import EventSerializer
+from Events.models import Event
+from rest_framework.permissions import IsAuthenticated
 
 
 
@@ -56,7 +59,7 @@ class JoinRoomView(APIView):
     
 class RoomViewSet(ModelViewSet):
     queryset = Room.objects.all()
-    permission_classes = [permissions.IsAuthenticated]
+    # permission_classes = [permissions.IsAuthenticated]
     serializer_class = RoomSerializer
 
     @action(detail=True, methods=['post'])
@@ -101,30 +104,156 @@ class RoomViewSet(ModelViewSet):
             announcements = Announcements.objects.filter(room=room)
             serializer = AnnouncementsSerializer(announcements, many=True)
             return Response(serializer.data, status=status.HTTP_200_OK)
-        elif request.method == 'POST' and request.user.is_student_admin or request.user.is_inst_admin or request.user.is_org_admin or request.user.is_admin:
-            serializer = AnnouncementsSerializer(data=request.data)
-            if serializer.is_valid():
-                serializer.save(room=room, created_by=request.user)
-                return Response(serializer.data, status=status.HTTP_201_CREATED)
-            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        # Allow create/update/delete for moderators/admins
+        permission = IsModerator()
+        if permission.has_permission(self, request):
+            if request.method == 'POST':
+                serializer = AnnouncementsSerializer(data=request.data)
+                if serializer.is_valid():
+                    serializer.save(room=room, created_by=request.user)
+                    return Response(serializer.data, status=status.HTTP_201_CREATED)
+                return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+            elif request.method in ['PUT', 'PATCH']:
+                announcement_id = request.data.get('id')
+                if not announcement_id:
+                    return Response({"message": "Announcement id is required for update."}, status=status.HTTP_400_BAD_REQUEST)
+                announcement = get_object_or_404(Announcements, id=announcement_id, room=room)
+                serializer = AnnouncementsSerializer(announcement, data=request.data, partial=(request.method == 'PATCH'))
+                if serializer.is_valid():
+                    serializer.save()
+                    return Response(serializer.data, status=status.HTTP_200_OK)
+                return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+            elif request.method == 'DELETE':
+                announcement_id = request.data.get('id')
+                if not announcement_id:
+                    return Response({"message": "Announcement id is required for deletion."}, status=status.HTTP_400_BAD_REQUEST)
+                announcement = get_object_or_404(Announcements, id=announcement_id, room=room)
+                announcement.delete()
+                return Response({"message": "Announcement deleted successfully."}, status=status.HTTP_200_OK)
         else:
-            return Response({"message": "You do not have permission to create announcements."}, status=status.HTTP_403_FORBIDDEN)
+            return Response({"message": "You do not have permission to create or modify announcements."}, status=status.HTTP_403_FORBIDDEN)
         
-    @action(detail=True, methods=['get', 'post'])
+    @action(detail=True, methods=['get', 'post', 'put', 'patch', 'delete'])
     def tasks(self, request, pk=None):
         room = self.get_object()
         if request.method == 'GET':
             tasks = Task.objects.filter(room=room)
             serializer = TaskSerializer(tasks, many=True)
             return Response(serializer.data, status=status.HTTP_200_OK)
-        elif request.method == 'POST' and request.user.is_student_admin or request.user.is_inst_admin or request.user.is_org_admin or request.user.is_admin:
-            serializer = TaskSerializer(data=request.data)
-            if serializer.is_valid():
-                serializer.save(room=room, created_by=request.user)
-                return Response(serializer.data, status=status.HTTP_201_CREATED)
-            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        
+        permission = IsModerator()
+        if permission.has_permission(self, request):
+            if request.method == 'POST':
+                serializer = TaskSerializer(data=request.data)
+                if serializer.is_valid():
+                    serializer.save(room=room, created_by=request.user)
+                    return Response(serializer.data, status=status.HTTP_201_CREATED)
+                return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+            elif request.method in ['PUT', 'PATCH']:
+                task_id = request.data.get('id')
+                task = get_object_or_404(Task, id=task_id, room=room)
+                serializer = TaskSerializer(task, data=request.data, partial=(request.method == 'PATCH'))
+                if serializer.is_valid():
+                    serializer.save()
+                    return Response(serializer.data, status=status.HTTP_200_OK)
+                return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+            elif request.method == 'DELETE':
+                task_id = request.data.get('id')
+                task = get_object_or_404(Task, id=task_id, room=room)
+                # Delete related questions, subquestions, and file responses
+                Question.objects.filter(task=task).delete()
+                SubQuestion.objects.filter(question__task=task).delete()
+                FileResponse.objects.filter(task=task).delete()
+                task.delete()
+                return Response({"message": "Task and related content deleted successfully."}, status=status.HTTP_200_OK)
         else:
             return Response({"message": "You do not have permission to create tasks."}, status=status.HTTP_403_FORBIDDEN)
+
+
+    # @action(detail=False, methods=['post', 'get', 'put', 'patch', 'delete'])
+    # def room_events(self, request):
+    #     room_id = request.query_params.get('room_id')
+    #     if not room_id:
+    #         return Response({"message": "room_id is required"}, status=status.HTTP_400_BAD_REQUEST)
+        
+    #     room = get_object_or_404(Room, id=room_id)
+        
+    #     if request.method == 'GET':
+    #         events = room.events
+            
+    #         # Filter by event type
+    #         event_status = request.query_params.get('status')
+    #         if event_status:
+    #             events = events.filter(status=event_status)
+            
+    #         # Filter by created_by
+    #         created_by = request.query_params.get('created_by')
+    #         if created_by:
+    #             events = events.filter(created_by__username=created_by)
+            
+    #         # Filter by date range
+    #         start_date = request.query_params.get('start_date')
+    #         end_date = request.query_params.get('end_date')
+    #         if start_date and end_date:
+    #             events = events.filter(created_at__range=[start_date, end_date])
+            
+    #         serializer = EventSerializer(events, many=True)
+    #         return Response(serializer.data, status=status.HTTP_200_OK)
+        
+    #     permission = IsModerator()
+    #     if permission.has_permission(self, request):
+    #         if request.method == 'POST':
+    #             serializer = EventSerializer(data=request.data)
+    #             if serializer.is_valid():
+    #                 serializer.save(room=room, created_by=request.user)
+    #                 return Response(serializer.data, status=status.HTTP_201_CREATED)
+    #             return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+            
+    #         elif request.method in ['PUT', 'PATCH']:
+    #             event_id = request.data.get('id')
+    #             event = Event.objects.get(id=event_id)
+    #             serializer = EventSerializer(event, data=request.data, partial=(request.method == 'PATCH'))
+    #             if serializer.is_valid():
+    #                 serializer.save()
+    #                 return Response(serializer.data, status=status.HTTP_200_OK)
+    #             return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+            
+    #         elif request.method == 'DELETE':
+    #             event_id = request.data.get('id')
+    #             event = Event.objects.get(id=event_id)
+    #             room.events.remove(event)
+    #             return Response({"message": "Event deleted successfully."}, status=status.HTTP_200_OK)
+        
+    #     return Response({"message": "You do not have permission to manage room events."}, status=status.HTTP_403_FORBIDDEN)
+    @action(detail=True, methods=['get'])
+    def events(self, request, pk=None):
+        room = self.get_object()
+        events = room.events.all()
+        # Apply filters...
+        serializer = EventSerializer(events, many=True)
+        return Response(serializer.data)
+
+    @action(detail=True, methods=['post'], permission_classes=[IsModerator])
+    def add_event(self, request, pk=None):
+        room = self.get_object()
+        serializer = EventSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        serializer.save(room=room, created_by=request.user)
+        return Response(serializer.data, status=status.HTTP_201_CREATED)
+
+    @action(detail=True, methods=['patch', 'put'], permission_classes=[IsModerator])
+    def update_event(self, request, pk=None):
+        event = get_object_or_404(Event, pk=request.data.get('id'))
+        serializer = EventSerializer(event, data=request.data, partial=(request.method == 'PATCH'))
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+        return Response(serializer.data)
+
+    @action(detail=True, methods=['delete'], permission_classes=[IsModerator])
+    def delete_event(self, request, pk=None):
+        event = get_object_or_404(Event, pk=request.data.get('id'))
+        event.delete()
+        return Response({"message": "Event deleted successfully."})
     
     @action(detail=True, methods=['get'])
     def tasks_count(self, request, pk=None):
@@ -211,7 +340,7 @@ class RoomViewSet(ModelViewSet):
                 return Response(serializer.data, status=status.HTTP_201_CREATED)
             return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
-    @action(detail=True, methods=['get', 'post'])
+    @action(detail=True, methods=['post'])
     def make_moderator(self, request, pk=None):
         room = self.get_object()
         if request.method == 'POST' and request.user.is_student_admin or request.user.is_inst_admin or request.user.is_org_admin or request.user.is_admin:
@@ -222,7 +351,7 @@ class RoomViewSet(ModelViewSet):
         else:
             return Response({"message": "You do not have permission to make moderators."}, status=status.HTTP_403_FORBIDDEN)
     
-    @action(detail=True, methods=['get', 'post'])
+    @action(detail=True, methods=['post'])
     def remove_moderator(self, request, pk=None):
         room = self.get_object()
         if request.method == 'POST' and request.user.is_student_admin or request.user.is_inst_admin or request.user.is_org_admin or request.user.is_admin:
@@ -302,7 +431,7 @@ class RoomViewSet(ModelViewSet):
 
 class DefaultRoomViewSet(ModelViewSet):
     queryset = DefaultRoom.objects.all()
-    permission_classes = [permissions.IsAuthenticated]
+    # permission_classes = [permissions.IsAuthenticated]
     serializer_class = DefaultRoomSerializer
 
     @action(detail=True, methods=['get', 'post'])
@@ -315,3 +444,21 @@ class DefaultRoomViewSet(ModelViewSet):
             return Response({"message": "Default room has been converted to a room."}, status=status.HTTP_200_OK)
         else:
             return Response({"message": "You do not have permission to convert this default room to a room."}, status=status.HTTP_403_FORBIDDEN)
+        
+
+class DirectMessageViewSet(ModelViewSet):
+    queryset = DirectMessage.objects.all()
+    serializer_class = DirectMessageSerializer
+    # permission_classes = [IsAuthenticated]
+
+class DirectMessageRoomViewSet(ModelViewSet):
+    queryset = DirectMessageRoom.objects.all()
+    serializer_class = DirectMessageRoomSerializer
+    # permission_classes = [IsAuthenticated]
+
+class ForwadingLogViewSet(ModelViewSet):
+    queryset = ForwadingLog.objects.all()
+    serializer_class = ForwadingLogSerializer
+    # permission_classes = [IsAdmin]
+
+    

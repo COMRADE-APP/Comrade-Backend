@@ -16,8 +16,8 @@ router.register(r'unit', UnitViewSet, basename='unit')
 router.register(r'institute', InstituteViewSet, basename='institute')
 router.register(r'program', ProgramViewSet, basename='program')
 
-url_patterns = [
+urlpatterns = [
 
 ]
 
-url_patterns += router.urls
+urlpatterns += router.urls

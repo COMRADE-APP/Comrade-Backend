@@ -237,4 +237,21 @@ class Moderator(models.Model):
 
     def __str__(self):
         return f"{self.user.first_name} {self.user.last_name}"
+    
+class Profile(models.Model):
+    user = models.OneToOneField(CustomUser, on_delete=models.CASCADE)
+    bio = models.TextField(max_length=2000, blank=True)
+    profile_picture = models.ImageField(upload_to='profile_pictures/', blank=True, null=True)
+    cover_photo = models.ImageField(upload_to='cover_photos/', blank=True, null=True)
+    location = models.CharField(max_length=300, blank=True)
+    birth_date = models.DateField(null=True, blank=True)
+    blocked_users = models.ManyToManyField(CustomUser, related_name='blocked_by', blank=True)
+    blocked_organizations = models.ManyToManyField(Organisation, related_name='orgs_blocked_by', blank=True)
+    blocked_institutions = models.ManyToManyField(Institution, related_name='insts_blocked_by', blank=True)
+    blocked_events = models.ManyToManyField('Events.Event', related_name='events_blocked_by', blank=True)
+    blocked_rooms = models.ManyToManyField('Rooms.Room', related_name='rooms_blocked_by', blank=True)
+    
+
+    def __str__(self):
+        return f"{self.user.first_name} {self.user.last_name} Profile"
 

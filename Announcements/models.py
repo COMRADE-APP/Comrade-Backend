@@ -3,6 +3,7 @@ from datetime import datetime
 from Authentication.models import CustomUser
 # from django.contrib.auth.models import User
 from Authentication.models import Student
+from Events.models import Event
 
 # Create your models here.
 
@@ -42,6 +43,7 @@ VIS_TYPES = (
     ('organisational', 'Your Organisation'),
     ('group', 'Your Group or Section')
 )
+
 
 
 # Creator's Side of the platform
@@ -86,6 +88,7 @@ class Task(models.Model):
 class Question(models.Model):
     task = models.OneToOneField(Task, on_delete=models.DO_NOTHING)
     heading = models.CharField(max_length=200, null=False)
+    position = models.IntegerField(default=1)
     description = models.TextField(max_length=5000, null=False)
     question_type = models.CharField(max_length=200, null=False, choices=TASK_TYPE, default='text')
     has_subquestion = models.BooleanField(default=False)
@@ -94,12 +97,14 @@ class Question(models.Model):
 class SubQuestion(models.Model):
     question = models.OneToOneField(Question, on_delete=models.DO_NOTHING)
     heading = models.CharField(max_length=200, null=False)
+    position = models.IntegerField(default=1)
     description = models.TextField(max_length=5000, null=False)
     question_type = models.CharField(max_length=200, null=False, choices=TASK_TYPE, default='text')
     time_stamp = models.DateTimeField(default=datetime.now())
 
 class Choice(models.Model):
     question = models.OneToOneField(Question, on_delete=models.DO_NOTHING, null=True)
+    sub_question = models.OneToOneField(SubQuestion, on_delete=models.DO_NOTHING, null=True, blank=True)
     content = models.CharField(max_length=5000, null=False)
     is_correct = models.BooleanField(default=False)
     selected = models.BooleanField(default=False)
@@ -107,6 +112,8 @@ class Choice(models.Model):
 
 class FileResponse(models.Model):
     question = models.OneToOneField(Question, on_delete=models.DO_NOTHING)
+    sub_question = models.OneToOneField(SubQuestion, on_delete=models.DO_NOTHING, null=True, blank=True)
+    position = models.IntegerField(default=1)
     description = models.TextField(max_length=5000, null=True, blank=True)
     content = models.FileField(upload_to='task_files/')
     time_stamp = models.DateTimeField(default=datetime.now())
@@ -165,9 +172,10 @@ class Reposts(models.Model):
 
 class Pin(models.Model):
     user = models.OneToOneField(CustomUser, on_delete=models.DO_NOTHING)
-    announcement = models.OneToOneField(Announcements, blank=True, on_delete=models.DO_NOTHING)
-    task = models.OneToOneField(Task, blank=True, on_delete=models.DO_NOTHING)
-    repost = models.OneToOneField(Reposts, blank=True, on_delete=models.DO_NOTHING)
+    announcements = models.ManyToManyField(Announcements, related_name='pinned_announcements', blank=True)
+    tasks = models.ManyToManyField(Task, related_name='pinned_tasks', blank=True)
+    events = models.ManyToManyField(Event, related_name='pinned_events', blank=True)
+    reposts = models.ManyToManyField(Reposts, related_name='pinned_reposts', blank=True)
     time_stamp = models.DateTimeField(default=datetime.now())
     status = models.CharField(max_length=200, choices=ANN_STATUS, 
     default='pending')
@@ -198,3 +206,20 @@ class TaskResponse(models.Model):
 
 # Remember: Task files saving should be in terms of folders (Weekly, monthly or yearly, daily, or roomwise)
 # FileResponse, CompletedTask, Question, QuestionResponse
+class Reaction(models.Model):
+    user = models.OneToOneField(CustomUser, on_delete=models.DO_NOTHING)
+    announcement = models.OneToOneField(Announcements, blank=True, on_delete=models.DO_NOTHING, null=True)
+    task = models.OneToOneField(Task, blank=True, on_delete=models.DO_NOTHING, null=True)
+    text = models.OneToOneField(Text, blank=True, on_delete=models.DO_NOTHING, null=True)
+    dm = models.OneToOneField('Rooms.DirectMessage', blank=True, on_delete=models.DO_NOTHING, null=True)
+    reaction_type = models.CharField(max_length=100, null=False)
+    time_stamp = models.DateTimeField(default=datetime.now())
+
+class Comment(models.Model):
+    user = models.OneToOneField(CustomUser, on_delete=models.DO_NOTHING)
+    announcement = models.OneToOneField(Announcements, blank=True, on_delete=models.DO_NOTHING, null=True)
+    task = models.OneToOneField(Task, blank=True, on_delete=models.DO_NOTHING, null=True)
+    text = models.OneToOneField(Text, blank=True, on_delete=models.DO_NOTHING, null=True)
+    dm = models.OneToOneField('Rooms.DirectMessage', blank=True, on_delete=models.DO_NOTHING, null=True)
+    content = models.TextField(max_length=5000, null=False)
+    time_stamp = models.DateTimeField(default=datetime.now())
