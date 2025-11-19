@@ -10,6 +10,4 @@ router.register(r'resource', ResourceViewSet, basename='resource')
 
 urlpatterns = [
     path('', include(router.urls)),
-    # path('/api', include(rest_framework.urls)),
-    # path('/api-auth', include(rest_framework.urls))
 ]
