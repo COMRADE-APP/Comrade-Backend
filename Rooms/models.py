@@ -4,6 +4,7 @@ from Announcements.models import Task, Announcements, Reply, AnnouncementsReques
 from Events.models import Event
 from datetime import datetime
 import uuid
+# from Resources.models import Resource
 
 # Create your models here.
 class Room(models.Model):
@@ -12,8 +13,8 @@ class Room(models.Model):
     invitation_code = models.CharField(max_length=10, unique=True, editable=False)
     description = models.TextField(max_length=255, null=True)
     institution = models.CharField(max_length=255)
-    created_by = models.ForeignKey(CustomUser, on_delete=models.CASCADE)
-    created_on = models.DateTimeField(auto_now_add=True)
+    created_by = models.ForeignKey(CustomUser, on_delete=models.CASCADE, null=True)
+    created_on = models.DateTimeField(default=datetime.now())
     admins = models.ManyToManyField(CustomUser, related_name='admin_rooms', blank=True) # CustomUser can admin many rooms, a room can have many admins 
     members = models.ManyToManyField(CustomUser, related_name='joined_rooms', blank=True) # CustomUser can join many rooms, a room can have many CustomUsers
     text = models.ManyToManyField(Text, related_name='room_texts', blank=True)
@@ -27,7 +28,7 @@ class Room(models.Model):
     announcements_requests = models.ManyToManyField(AnnouncementsRequest, related_name='room_announcements_requests', blank=True)
     completed_tasks = models.ManyToManyField(CompletedTask, related_name='room_completed_tasks', blank=True)
     task_responses = models.ManyToManyField(TaskResponse, related_name='room_task_responses', blank=True)
-    
+    resources = models.ManyToManyField('Resources.Resource', related_name='room_resources', blank=True)
 
 
     def save(self, *args, **kwargs):
@@ -46,8 +47,8 @@ class DefaultRoom(models.Model):
     room_code = models.CharField(max_length=200, unique=True, default=uuid.uuid4().hex[:10].upper(), editable=False)
     description = models.TextField(max_length=255, null=True)
     institution = models.CharField(max_length=255)
-    created_by = models.ForeignKey(CustomUser, on_delete=models.CASCADE)
-    created_on = models.DateTimeField(auto_now_add=True)
+    created_by = models.ForeignKey(CustomUser, on_delete=models.CASCADE, null=True)
+    created_on = models.DateTimeField(default=datetime.now())
     rooms = models.ManyToManyField(Room, related_name='default_sub_rooms', blank=True) # A DefaultRoom can have many Rooms, a Room can belong to many DefaultRooms
     members = models.ManyToManyField(CustomUser, related_name='joined_default_rooms', blank=True) # CustomUser can join many rooms, a room can have many CustomUsers
     invitation_code = models.CharField(max_length=10, unique=True, editable=False)
@@ -63,6 +64,7 @@ class DefaultRoom(models.Model):
     announcements_requests = models.ManyToManyField(AnnouncementsRequest, related_name='default_room_announcements_requests', blank=True)
     completed_tasks = models.ManyToManyField(CompletedTask, related_name='default_room_completed_tasks', blank=True)
     task_responses = models.ManyToManyField(TaskResponse, related_name='default_room_task_responses', blank=True)
+    resources = models.ManyToManyField('Resources.Resource', related_name='default_room_resources', blank=True)
     
     def generate_invitation_code(self):
         return uuid.uuid4().hex[:10].upper()
@@ -79,7 +81,7 @@ class DefaultRoom(models.Model):
     
 class DirectMessageRoom(models.Model):
     participants = models.ManyToManyField(CustomUser, related_name='dm_rooms')
-    created_on = models.DateTimeField(auto_now_add=True)
+    created_on = models.DateTimeField(default=datetime.now())
     texts = models.ManyToManyField(Text, related_name='dm_room_texts', blank=True)
     announcements = models.ManyToManyField(Announcements, related_name='dm_room_announcements', blank=True)
     tasks = models.ManyToManyField(Task, related_name='dm_room_tasks', blank=True)
@@ -93,6 +95,7 @@ class DirectMessageRoom(models.Model):
     task_responses = models.ManyToManyField(TaskResponse, related_name='dm_room_task_responses', blank=True)
     forwarded_messages = models.ManyToManyField('DirectMessage', related_name='forwarded_in_dm_rooms', blank=True)
     links = models.ManyToManyField('DirectMessage', related_name='linked_in_dm_rooms', blank=True)
+    resources = models.ManyToManyField('Resources.Resource', related_name='dm_room_resources', blank=True)
 
     def __str__(self):
         participant_usernames = ', '.join([user.username for user in self.participants.all()])

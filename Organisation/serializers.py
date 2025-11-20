@@ -1,4 +1,4 @@
-from Organisation.models import Organisation, OrgBranch, Division, Department, Section, Team, Project, Centre, Committee, Board, Unit, Institute, Program
+from Organisation.models import Organisation, OrgBranch, Division, Department, Section, Team, Project, Centre, Committee, Board, Unit, Institute, Program, OtherOrgUnit
 from rest_framework.serializers import ModelSerializer
 
 
@@ -77,6 +77,12 @@ class CentreSerializer(ModelSerializer):
 class ProjectSerializer(ModelSerializer):
     class Meta:
         model = Project
+        fields = '__all__'
+        read_only_fields = ['created_on']
+
+class OtherOrgUnitSerializer(ModelSerializer):
+    class Meta:
+        model = OtherOrgUnit
         fields = '__all__'
         read_only_fields = ['created_on']
 

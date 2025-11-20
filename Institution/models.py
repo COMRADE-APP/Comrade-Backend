@@ -1,5 +1,6 @@
 from django.db import models
 from Organisation.models import ORG_TYPES
+import uuid
 
 # Create your models here.
 class Institution(models.Model):
@@ -218,4 +219,12 @@ class HealthServices(models.Model):
     health_services_code = models.CharField(max_length=500, unique=True, primary_key=True)
     name = models.CharField(max_length=500)
     description = models.TextField(max_length=5000)
+    created_at = models.DateTimeField(auto_now=True)
+
+class OtherInstitutionUnit(models.Model):
+    institution = models.OneToOneField(Institution, on_delete=models.DO_NOTHING)
+    inst_branch = models.OneToOneField(InstBranch, on_delete=models.DO_NOTHING, null=True)
+    parent_units = models.ManyToManyField('self', blank=True)
+    name = models.CharField(max_length=500)
+    unit_code = models.CharField(max_length=200, unique=True, primary_key=True)
     created_at = models.DateTimeField(auto_now=True)

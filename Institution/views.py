@@ -1,6 +1,6 @@
 from django.shortcuts import render
-from Institution.models import Institution, InstBranch, Faculty, VCOffice, InstDepartment, AdminDep, Programme, HR, Admissions, HealthServices, Security, StudentAffairs, SupportServices, Finance, Marketing, Legal, ICT, CareerOffice, Counselling, RegistrarOffice, Transport, Library, Hostel, Cafeteria
-from Institution.serializers import InstitutionSerializer, InstBranchSerializer, FacultySerializer, VCOfficeSerializer, InstDepartmentSerializer, AdminDepSerializer, ProgrammeSerializer, HRSerializer, AdmissionsSerializer, HealthServicesSerializer, SecuritySerializer, StudentAffairsSerializer, SupportServicesSerializer, FinanceSerializer, MarketingSerializer, LegalSerializer, ICTSerializer, CareerOfficeSerializer, CounsellingSerializer, RegistrarOfficeSerializer, TransportSerializer, LibrarySerializer, HostelSerializer, CafeteriaSerializer
+from Institution.models import Institution, InstBranch, Faculty, VCOffice, InstDepartment, AdminDep, Programme, HR, Admissions, HealthServices, Security, StudentAffairs, SupportServices, Finance, Marketing, Legal, ICT, CareerOffice, Counselling, RegistrarOffice, Transport, Library, Hostel, Cafeteria, OtherInstitutionUnit
+from Institution.serializers import InstitutionSerializer, InstBranchSerializer, FacultySerializer, VCOfficeSerializer, InstDepartmentSerializer, AdminDepSerializer, ProgrammeSerializer, HRSerializer, AdmissionsSerializer, HealthServicesSerializer, SecuritySerializer, StudentAffairsSerializer, SupportServicesSerializer, FinanceSerializer, MarketingSerializer, LegalSerializer, ICTSerializer, CareerOfficeSerializer, CounsellingSerializer, RegistrarOfficeSerializer, TransportSerializer, LibrarySerializer, HostelSerializer, CafeteriaSerializer, OtherInstitutionUnitSerializer
 from rest_framework.viewsets import ModelViewSet
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticatedOrReadOnly
@@ -126,3 +126,8 @@ class CafeteriaViewSet(ModelViewSet):
     queryset = Cafeteria.objects.all()
     permission_classes = [IsAuthenticatedOrReadOnly]
     serializer_class = CafeteriaSerializer
+
+class OtherInstitutionUnitViewSet(ModelViewSet):
+    queryset = OtherInstitutionUnit.objects.all()
+    permission_classes = [IsAuthenticatedOrReadOnly]
+    serializer_class = OtherInstitutionUnitSerializer

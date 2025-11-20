@@ -227,6 +227,14 @@ class EventViewSet(ModelViewSet):
         link = request.data.get('link')
         # Implement sharing logic here (e.g., generate shareable link, integrate with social media APIs)
         # shareable_link = f"http://example.com/events/{event.id}/"
+        sharing_option = request.data.get('sharing_option')
+
+        if sharing_option == 'copied':
+            pass  # Logic for copied link
+        elif sharing_option == 'social_media':
+            pass  # Logic for sharing on social media
+
+
         return Response({'status': f'Event shared on {platform}', 'link': link}, status=status.HTTP_200_OK)
     
     @action(detail=True, methods=['post'], permission_classes=[IsAuthenticated])

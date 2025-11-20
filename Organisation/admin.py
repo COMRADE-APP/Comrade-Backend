@@ -1,5 +1,5 @@
 from django.contrib import admin
-from Organisation.models import Organisation, OrgBranch, Division, Department, Section, Team, Project, Centre, Committee, Board, Unit, Institute, Program
+from Organisation.models import Organisation, OrgBranch, Division, Department, Section, Team, Project, Centre, Committee, Board, Unit, Institute, Program, OtherOrgUnit
 
 # Register your models here.
 admin.site.register(Organisation)
@@ -15,4 +15,5 @@ admin.site.register(Board)
 admin.site.register(Unit)
 admin.site.register(Institute)
 admin.site.register(Program)
+admin.site.register(OtherOrgUnit)
 

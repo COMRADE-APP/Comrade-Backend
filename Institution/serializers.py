@@ -1,4 +1,4 @@
-from Institution.models import Institution, InstBranch, Faculty, VCOffice, InstDepartment, AdminDep, Programme, HR, Admissions, HealthServices, Security, StudentAffairs, SupportServices, Finance, Marketing, Legal, ICT, CareerOffice, Counselling, RegistrarOffice, Transport, Library, Hostel, Cafeteria
+from Institution.models import Institution, InstBranch, Faculty, VCOffice, InstDepartment, AdminDep, Programme, HR, Admissions, HealthServices, Security, StudentAffairs, SupportServices, Finance, Marketing, Legal, ICT, CareerOffice, Counselling, RegistrarOffice, Transport, Library, Hostel, Cafeteria,   OtherInstitutionUnit
 from rest_framework.serializers import ModelSerializer
 
 class InstitutionSerializer(ModelSerializer):
@@ -145,5 +145,10 @@ class CafeteriaSerializer(ModelSerializer):
         fields = '__all__'
         read_only_fields = ['created_at']
 
+class OtherInstitutionUnitSerializer(ModelSerializer):
+    class Meta:
+        model = OtherInstitutionUnit
+        fields = '__all__'
+        read_only_fields = ['created_at']
         
 

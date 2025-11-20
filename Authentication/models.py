@@ -2,6 +2,9 @@ from django.db import models
 from django.contrib.auth.models import AbstractUser, BaseUserManager
 from Institution.models import Institution, InstBranch
 from Organisation.models import Organisation, OrgBranch
+from django.contrib.auth.models import BaseUserManager
+from datetime import datetime
+
 
 USER_TYPE = (
     ('admin', 'Administrator (Comrade)'),
@@ -14,9 +17,10 @@ USER_TYPE = (
     ('institutional_staff', 'Institutional Staff'),
     ('organisational_admin', 'Organisational Admin'),
     ('organisational_staff', 'Organisational Staff'),
+    ('author', 'Author'),
+    ('editor', 'Editor'),
 )
 
-from django.contrib.auth.models import BaseUserManager
 
 class CustomUserManager(BaseUserManager):
     def create_user(self, email, password=None, **extra_fields):
@@ -225,18 +229,7 @@ class InstAdmin(models.Model):
 
     def __str__(self):
         return f"{self.user.user.first_name} {self.user.user.last_name}"
-    
-class Moderator(models.Model):
-    user = models.OneToOneField(CustomUser, on_delete=models.CASCADE)
 
-    def save(self, *args, **kwargs):
-        self.user.is_moderator = True
-        self.user.user_type = 'moderator'
-        self.user.save()
-        super().save(*args, **kwargs)
-
-    def __str__(self):
-        return f"{self.user.first_name} {self.user.last_name}"
     
 class Profile(models.Model):
     user = models.OneToOneField(CustomUser, on_delete=models.CASCADE)
@@ -250,8 +243,49 @@ class Profile(models.Model):
     blocked_institutions = models.ManyToManyField(Institution, related_name='insts_blocked_by', blank=True)
     blocked_events = models.ManyToManyField('Events.Event', related_name='events_blocked_by', blank=True)
     blocked_rooms = models.ManyToManyField('Rooms.Room', related_name='rooms_blocked_by', blank=True)
-    
+
 
     def __str__(self):
         return f"{self.user.first_name} {self.user.last_name} Profile"
+    
+class Author(models.Model):
+    user = models.OneToOneField(Profile, on_delete=models.DO_NOTHING)
+    verified = models.BooleanField(default=False)
+    created_on = models.DateTimeField(default=datetime.now())
 
+    def save(self, *args, **kwargs):
+        self.user.is_moderator = True
+        self.user.user_type = 'author'
+        self.user.save()
+        super().save(*args, **kwargs)
+
+    def __str__(self):
+        return f"{self.user.first_name} {self.user.last_name}"
+
+class Editor(models.Model):
+    user = models.OneToOneField(Profile, on_delete=models.DO_NOTHING)
+    verified = models.BooleanField(default=False)
+    created_on = models.DateTimeField(default=datetime.now())
+
+    def save(self, *args, **kwargs):
+        self.user.is_moderator = True
+        self.user.user_type = 'editor'
+        self.user.save()
+        super().save(*args, **kwargs)
+
+    def __str__(self):
+        return f"{self.user.first_name} {self.user.last_name}"
+
+class Moderator(models.Model):
+    user = models.OneToOneField(Profile, on_delete=models.CASCADE)
+    verified = models.BooleanField(default=False)
+    created_on = models.DateTimeField(default=datetime.now())
+
+    def save(self, *args, **kwargs):
+        self.user.is_moderator = True
+        self.user.user_type = 'moderator'
+        self.user.save()
+        super().save(*args, **kwargs)
+
+    def __str__(self):
+        return f"{self.user.first_name} {self.user.last_name}"

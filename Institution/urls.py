@@ -1,5 +1,5 @@
 from rest_framework.routers import DefaultRouter
-from Institution.views import InstitutionViewSet, InstBranchViewSet, FacultyViewSet, VCOfficeViewSet, InstDepartmentViewSet, AdminDepViewSet, ProgrammeViewSet, HRViewSet, AdmissionsViewSet, HealthServicesViewSet, SecurityViewSet, StudentAffairsViewSet, SupportServicesViewSet, FinanceViewSet, MarketingViewSet, LegalViewSet, ICTViewSet, CareerOfficeViewSet, CounsellingViewSet, RegistrarOfficeViewSet, TransportViewSet, LibraryViewSet, HostelViewSet, CafeteriaViewSet
+from Institution.views import InstitutionViewSet, InstBranchViewSet, FacultyViewSet, VCOfficeViewSet, InstDepartmentViewSet, AdminDepViewSet, ProgrammeViewSet, HRViewSet, AdmissionsViewSet, HealthServicesViewSet, SecurityViewSet, StudentAffairsViewSet, SupportServicesViewSet, FinanceViewSet, MarketingViewSet, LegalViewSet, ICTViewSet, CareerOfficeViewSet, CounsellingViewSet, RegistrarOfficeViewSet, TransportViewSet, LibraryViewSet, HostelViewSet, CafeteriaViewSet, OtherInstitutionUnitViewSet
 
 
 router = DefaultRouter()
@@ -29,6 +29,7 @@ router.register(r'transport', TransportViewSet, basename='transport')
 router.register(r'library', LibraryViewSet, basename='library')
 router.register(r'hostel', HostelViewSet, basename='hostel')
 router.register(r'cafeteria', CafeteriaViewSet, basename='cafeteria')
+router.register(r'other_institution_unit', OtherInstitutionUnitViewSet, basename='other_institution_unit')
 
 
 urlpatterns = [
