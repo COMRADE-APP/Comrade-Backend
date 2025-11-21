@@ -108,4 +108,18 @@ class SpecializationRoom(models.Model):
         return f"Room {self.room.name} for Specialization {self.specialization.name}"
     
 
-class CompletedStacks(models.Model):
+class CompletedStack(models.Model):
+    stack = models.ForeignKey(Stack, on_delete=models.CASCADE, related_name='completed_stack')
+    completed_on = models.DateTimeField(auto_now_add=True)
+    completed_by = models.ForeignKey(Profile, on_delete=models.CASCADE)
+
+    def __str__(self):
+        return f"Completed Stack {self.stack.name} by {self.completed_by}"
+    
+class CompletedSpecialization(models.Model):
+    specialization = models.ForeignKey(Specialization, on_delete=models.CASCADE, related_name='completed_specialization')
+    completed_on = models.DateTimeField(auto_now_add=True)
+    completed_by = models.ForeignKey(Profile, on_delete=models.CASCADE)
+
+    def __str__(self):
+        return f"Completed Stack {self.specialization.name} by {self.completed_by}"

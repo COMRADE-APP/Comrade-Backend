@@ -26,5 +26,6 @@ urlpatterns = [
     path('announcements/', include('Announcements.urls')),
     path('resources/', include('Resources.urls')),
     path('events/', include('Events.urls')),
+    path('specialization/', include('Specialization.urls')),
     path('api/', include(rest_framework.urls))
 ]
