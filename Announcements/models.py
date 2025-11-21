@@ -53,13 +53,13 @@ class Announcements(models.Model):
     heading = models.CharField(max_length=200, null=False)
     content = models.TextField(max_length=5000, null=False)
     visibility = models.CharField(max_length=200, null=False, choices=VIS_TYPES, default='private')
-    schedule_time = models.DateTimeField(default=datetime.now())
+    schedule_time = models.DateTimeField(default=datetime.now)
     expiry_time = models.DateTimeField(default=datetime(year=9999, month=12, day=31))
     send_status = models.CharField(max_length=200, choices=ANN_STATUS, 
     default='pending')
     read_status = models.BooleanField(default=False)
     read_time = models.DateTimeField(null=True, blank=True)
-    time_stamp = models.DateTimeField(default=datetime.now())
+    time_stamp = models.DateTimeField(default=datetime.now)
 
 
 class AnnouncementsRequest(models.Model):
@@ -69,10 +69,10 @@ class AnnouncementsRequest(models.Model):
     heading = models.CharField(max_length=200, null=False)
     content = models.TextField(max_length=5000, null=False)
     visibility = models.CharField(max_length=200, null=False, choices=VIS_TYPES, default='private')
-    verification_time_stamp = models.DateTimeField(default=datetime.now())
+    verification_time_stamp = models.DateTimeField(default=datetime.now)
     status = models.CharField(max_length=200, choices=ANN_STATUS, 
     default='pending')
-    time_stamp = models.DateTimeField(default=datetime.now())
+    time_stamp = models.DateTimeField(default=datetime.now)
 
 class Task(models.Model):
     user = models.OneToOneField(CustomUser, on_delete=models.DO_NOTHING)
@@ -82,8 +82,8 @@ class Task(models.Model):
     status = models.CharField(max_length=200, choices=ANN_STATUS, 
     default='pending')
     state = models.CharField(max_length=200, choices=TASK_STATE, default='active')
-    due_date = models.DateTimeField(default=datetime.now())
-    time_stamp = models.DateTimeField(default=datetime.now())
+    due_date = models.DateTimeField(default=datetime.now)
+    time_stamp = models.DateTimeField(default=datetime.now)
 
 class Question(models.Model):
     task = models.OneToOneField(Task, on_delete=models.DO_NOTHING)
@@ -92,7 +92,7 @@ class Question(models.Model):
     description = models.TextField(max_length=5000, null=False)
     question_type = models.CharField(max_length=200, null=False, choices=TASK_TYPE, default='text')
     has_subquestion = models.BooleanField(default=False)
-    time_stamp = models.DateTimeField(default=datetime.now())
+    time_stamp = models.DateTimeField(default=datetime.now)
 
 class SubQuestion(models.Model):
     question = models.OneToOneField(Question, on_delete=models.DO_NOTHING)
@@ -100,7 +100,7 @@ class SubQuestion(models.Model):
     position = models.IntegerField(default=1)
     description = models.TextField(max_length=5000, null=False)
     question_type = models.CharField(max_length=200, null=False, choices=TASK_TYPE, default='text')
-    time_stamp = models.DateTimeField(default=datetime.now())
+    time_stamp = models.DateTimeField(default=datetime.now)
 
 class Choice(models.Model):
     question = models.OneToOneField(Question, on_delete=models.DO_NOTHING, null=True)
@@ -108,7 +108,7 @@ class Choice(models.Model):
     content = models.CharField(max_length=5000, null=False)
     is_correct = models.BooleanField(default=False)
     selected = models.BooleanField(default=False)
-    time_stamp = models.DateTimeField(default=datetime.now())
+    time_stamp = models.DateTimeField(default=datetime.now)
 
 class FileResponse(models.Model):
     question = models.OneToOneField(Question, on_delete=models.DO_NOTHING)
@@ -116,14 +116,14 @@ class FileResponse(models.Model):
     position = models.IntegerField(default=1)
     description = models.TextField(max_length=5000, null=True, blank=True)
     content = models.FileField(upload_to='task_files/')
-    time_stamp = models.DateTimeField(default=datetime.now())
+    time_stamp = models.DateTimeField(default=datetime.now)
 
 
 
 # class SubTask(models.Model):
 #     user = models.OneToOneField(Task, on_delete=models.DO_NOTHING)
 #     description = models.TextField(max_length=5000, null=False)
-#     time_stamp = models.DateTimeField(default=datetime.now())
+#     time_stamp = models.DateTimeField(default=datetime.now)
 #     task_type = models.CharField(max_length=200, null=False, choices=TASK_TYPE, default='text')
 #     task_text = models.ManyToManyField(Choice, blank=True)
 #     task_file = models.ManyToManyField(FileResponse, blank=True)
@@ -148,7 +148,7 @@ class Text(models.Model):
     content = models.CharField(max_length=5000, null=False)
     status = models.CharField(max_length=200, choices=ANN_STATUS, 
     default='pending')
-    time_stamp = models.DateTimeField(default=datetime.now())
+    time_stamp = models.DateTimeField(default=datetime.now)
     # source = models.OneToOneField(User, on_delete=models.DO_NOTHING)
 
 class Reply(models.Model):
@@ -157,16 +157,17 @@ class Reply(models.Model):
     content = models.CharField(max_length=5000, null=False)
     status = models.CharField(max_length=200, choices=ANN_STATUS, 
     default='pending')
-    time_stamp = models.DateTimeField(default=datetime.now())
+    time_stamp = models.DateTimeField(default=datetime.now)
 
 class Reposts(models.Model):
     user = models.OneToOneField(CustomUser, on_delete=models.DO_NOTHING)
     announcement = models.OneToOneField(Announcements, blank=True, on_delete=models.DO_NOTHING, null=True)
     task = models.OneToOneField(Task, blank=True, on_delete=models.DO_NOTHING, null=True)
+    event = models.OneToOneField(Event, blank=True, on_delete=models.DO_NOTHING, null=True)
     caption = models.TextField(default='', max_length=5000)
     image = models.FileField(upload_to='reposts/images', null=True, blank=True)
     video = models.FileField(upload_to='reposts/videos', null=True, blank=True)
-    time_stamp = models.DateTimeField(default=datetime.now())
+    time_stamp = models.DateTimeField(default=datetime.now)
     status = models.CharField(max_length=200, choices=ANN_STATUS, 
     default='pending')
 
@@ -176,7 +177,7 @@ class Pin(models.Model):
     tasks = models.ManyToManyField(Task, related_name='pinned_tasks', blank=True)
     events = models.ManyToManyField(Event, related_name='pinned_events', blank=True)
     reposts = models.ManyToManyField(Reposts, related_name='pinned_reposts', blank=True)
-    time_stamp = models.DateTimeField(default=datetime.now())
+    time_stamp = models.DateTimeField(default=datetime.now)
     status = models.CharField(max_length=200, choices=ANN_STATUS, 
     default='pending')
 
@@ -184,7 +185,7 @@ class CompletedTask(models.Model):
     user = models.OneToOneField(CustomUser, on_delete=models.DO_NOTHING)
     task = models.OneToOneField(Task, on_delete=models.DO_NOTHING)
     is_completed = models.BooleanField(default=False)
-    completed_on = models.DateTimeField(default=datetime.now())
+    completed_on = models.DateTimeField(default=datetime.now)
 
 class QuestionResponse(models.Model):
     user = models.OneToOneField(CustomUser, on_delete=models.DO_NOTHING)
@@ -195,14 +196,14 @@ class QuestionResponse(models.Model):
     answer_choice = models.OneToOneField(Choice, on_delete=models.DO_NOTHING)
     answer_file = models.FileField(upload_to='task_answers/')
     score = models.FloatField(default=0.0)
-    time_stamp = models.DateTimeField(default=datetime.now())
+    time_stamp = models.DateTimeField(default=datetime.now)
 
 class TaskResponse(models.Model):
     user = models.OneToOneField(CustomUser, on_delete=models.DO_NOTHING)
     task = models.OneToOneField(Task, on_delete=models.DO_NOTHING)
     question_responses = models.ManyToManyField(QuestionResponse, blank=True)
     total_score = models.FloatField(default=0.0)
-    time_stamp = models.DateTimeField(default=datetime.now())
+    time_stamp = models.DateTimeField(default=datetime.now)
 
 # Remember: Task files saving should be in terms of folders (Weekly, monthly or yearly, daily, or roomwise)
 # FileResponse, CompletedTask, Question, QuestionResponse
@@ -213,7 +214,7 @@ class Reaction(models.Model):
     text = models.OneToOneField(Text, blank=True, on_delete=models.DO_NOTHING, null=True)
     dm = models.OneToOneField('Rooms.DirectMessage', blank=True, on_delete=models.DO_NOTHING, null=True)
     reaction_type = models.CharField(max_length=100, null=False)
-    time_stamp = models.DateTimeField(default=datetime.now())
+    time_stamp = models.DateTimeField(default=datetime.now)
 
 class Comment(models.Model):
     user = models.OneToOneField(CustomUser, on_delete=models.DO_NOTHING)
@@ -222,4 +223,4 @@ class Comment(models.Model):
     text = models.OneToOneField(Text, blank=True, on_delete=models.DO_NOTHING, null=True)
     dm = models.OneToOneField('Rooms.DirectMessage', blank=True, on_delete=models.DO_NOTHING, null=True)
     content = models.TextField(max_length=5000, null=False)
-    time_stamp = models.DateTimeField(default=datetime.now())
+    time_stamp = models.DateTimeField(default=datetime.now)

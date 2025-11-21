@@ -19,6 +19,8 @@ from threading import Thread
 from django.utils import timezone
 import time
 from Authentication.models import Profile
+from Rooms.models import Room, DefaultRoom, DirectMessage
+from urllib.parse import quote
 # Create your views here.
 
 
@@ -230,9 +232,42 @@ class EventViewSet(ModelViewSet):
         sharing_option = request.data.get('sharing_option')
 
         if sharing_option == 'copied':
-            pass  # Logic for copied link
+            # Return the link for client-side clipboard copying
+            return Response({
+            'action': 'copy',
+            'link': link or f'http://example.com/events/{event.id}/',
+            'message': 'Link copied to clipboard'
+            }, status=status.HTTP_200_OK)
+
         elif sharing_option == 'social_media':
-            pass  # Logic for sharing on social media
+            text = request.data.get('text', '')
+            encoded_url = quote(link or f'http://example.com/events/{event.id}/', safe='')
+            encoded_text = quote(text, safe='')
+
+            # Social media share URLs
+            share_urls = {
+            'whatsapp': f'https://wa.me/?text={encoded_text}%20{encoded_url}' if text else f'https://wa.me/?text={encoded_url}',
+            'x': f'https://x.com/intent/tweet?text={encoded_text}%20{encoded_url}' if text else f'https://x.com/intent/tweet?text={encoded_url}',
+            'facebook': f'https://www.facebook.com/sharer/sharer.php?u={encoded_url}',
+            'tiktok': f'https://www.tiktok.com/share?url={encoded_url}',
+            'instagram': f'https://www.instagram.com/?url={encoded_url}',
+            'signal': f'https://signal.me/#p?text={encoded_text}%20{encoded_url}' if text else f'https://signal.me/#p?text={encoded_url}',
+            }
+
+            platform_key = (platform or '').lower()
+            share_url = share_urls.get(platform_key)
+
+            if share_url:
+                return Response({
+                    'action': 'redirect',
+                    'platform': platform_key,
+                    'share_url': share_url
+                }, status=status.HTTP_200_OK)
+
+            return Response({
+            'error': 'Unsupported social platform',
+            'supported_platforms': list(share_urls.keys())
+            }, status=status.HTTP_400_BAD_REQUEST)
 
 
         return Response({'status': f'Event shared on {platform}', 'link': link}, status=status.HTTP_200_OK)

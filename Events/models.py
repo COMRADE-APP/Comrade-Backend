@@ -1,7 +1,7 @@
 from django.db import models
 from Authentication.models import Student, StudentAdmin, OrgAdmin, OrgStaff, InstAdmin, InstStaff, Lecturer, CustomUser
 from Organisation.models import Organisation, OrgBranch
-from datetime import datetime
+from datetime import datetime, timezone
 
 # Create your models here.
 EVENT_STATE = (
@@ -77,12 +77,12 @@ class Event(models.Model):
     duration = models.DurationField()
     start_time = models.TimeField()
     end_time = models.TimeField()
-    booking_deadline = models.DateTimeField(default=datetime.now())
-    date = models.DateTimeField(default=datetime.now())
+    booking_deadline = models.DateTimeField(default=datetime.now)
+    date = models.DateTimeField(default=datetime.now)
     deadline_reached = models.BooleanField(default=False)
     location = models.CharField(max_length=300)
     status = models.CharField(max_length=200, choices=EVENT_STATE, default='active')
-    scheduled_time = models.DateTimeField(default=datetime.now())
+    scheduled_time = models.DateTimeField(default=datetime.now)
     time_stamp = models.DateTimeField(auto_now_add=True)
     created_by = models.ForeignKey(CustomUser, null=False, on_delete=models.DO_NOTHING)
 

@@ -1,7 +1,7 @@
 from django.shortcuts import render
 from rest_framework.viewsets import ModelViewSet
-from Announcements.models import Announcements, Text, Reply, AnnouncementsRequest, Task, Reposts, Choice, Pin, CompletedTask, FileResponse, Question, QuestionResponse, SubQuestion, TaskResponse
-from Announcements.serializers import AnnouncementsSerializer, TextSerializer, ReplySerializer, AnnouncementsRequestSerializer, ChoiceSerializer, RepostsSerializer, PinSerializer, TaskSerializer, CompletedTaskSerializer, FileResponseSerializer, QuestionSerializer, QuestionResponseSerializer, SubQuestionSerializer, TaskResponseSerializer
+from Announcements.models import Announcements, Text, Reply, AnnouncementsRequest, Task, Reposts, Choice, Pin, CompletedTask, FileResponse, Question, QuestionResponse, SubQuestion, TaskResponse, Comment, Reaction
+from Announcements.serializers import AnnouncementsSerializer, TextSerializer, ReplySerializer, AnnouncementsRequestSerializer, ChoiceSerializer, RepostsSerializer, PinSerializer, TaskSerializer, CompletedTaskSerializer, FileResponseSerializer, QuestionSerializer, QuestionResponseSerializer, SubQuestionSerializer, TaskResponseSerializer, CommentSerializer, ReactionSerializer
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework import status
@@ -466,4 +466,18 @@ class TaskResponseViewSet(ModelViewSet):
     serializer_class = TaskResponseSerializer
     filterset_fields = ['user', 'time_stamp']
     search_fields = ['task']
+    ordering_fields = ['time_stamp']
+
+class CommentViewSet(ModelViewSet):
+    queryset = Comment.objects.all()
+    serializer_class = CommentSerializer
+    filterset_fields = ['user', 'time_stamp']
+    search_fields = ['text']
+    ordering_fields = ['time_stamp']
+
+class ReactionViewSet(ModelViewSet):
+    queryset = Reaction.objects.all()
+    serializer_class = ReactionSerializer
+    filterset_fields = ['user', 'time_stamp']
+    search_fields = ['text']
     ordering_fields = ['time_stamp']

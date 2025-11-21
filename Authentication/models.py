@@ -110,7 +110,7 @@ class Lecturer(models.Model):   # FIXED
     department = models.CharField(max_length=200, default='General')
     institution = models.OneToOneField(Institution, on_delete=models.DO_NOTHING, null=True)
     phone_number = models.CharField(max_length=15, null=True)
-    created_at = models.DateTimeField(auto_now=True)
+    created_at = models.DateTimeField(auto_now_add=True)
 
     def save(self, *args, **kwargs):
         self.user.is_lecturer = True
@@ -145,7 +145,7 @@ class OrgStaff(models.Model):
         OrgBranch, related_name="previous_branch_staff"
     )
 
-    dob = models.DateField(auto_now=False)
+    dob = models.DateField(auto_now_add=True)
     nationality = models.CharField(max_length=300)
     country_of_residence = models.CharField(max_length=300)
 
@@ -165,7 +165,7 @@ class OrgStaff(models.Model):
     )
 
     interests = models.CharField(max_length=5000)
-    created_at = models.DateTimeField(auto_now=True)
+    created_at = models.DateTimeField(auto_now_add=True)
 
     def save(self, *args, **kwargs):
         self.user.is_org_staff = True
@@ -203,9 +203,9 @@ class InstStaff(models.Model):
         Institution, related_name="previous_inst_admins")
     previous_inst_branch = models.ManyToManyField(
         InstBranch, related_name="previous_inst_branch_admins")
-    dob = models.DateField(auto_now=False)
+    dob = models.DateField(auto_now_add=True)
     interests = models.CharField(max_length=5000)
-    created_at = models.DateTimeField(auto_now=True)
+    created_at = models.DateTimeField(auto_now_add=True)
 
     def save(self, *args, **kwargs):
         self.user.user.is_inst_staff = True
@@ -251,7 +251,7 @@ class Profile(models.Model):
 class Author(models.Model):
     user = models.OneToOneField(Profile, on_delete=models.DO_NOTHING)
     verified = models.BooleanField(default=False)
-    created_on = models.DateTimeField(default=datetime.now())
+    created_on = models.DateTimeField(default=datetime.now)
 
     def save(self, *args, **kwargs):
         self.user.is_moderator = True
@@ -265,7 +265,7 @@ class Author(models.Model):
 class Editor(models.Model):
     user = models.OneToOneField(Profile, on_delete=models.DO_NOTHING)
     verified = models.BooleanField(default=False)
-    created_on = models.DateTimeField(default=datetime.now())
+    created_on = models.DateTimeField(default=datetime.now)
 
     def save(self, *args, **kwargs):
         self.user.is_moderator = True
@@ -279,7 +279,7 @@ class Editor(models.Model):
 class Moderator(models.Model):
     user = models.OneToOneField(Profile, on_delete=models.CASCADE)
     verified = models.BooleanField(default=False)
-    created_on = models.DateTimeField(default=datetime.now())
+    created_on = models.DateTimeField(default=datetime.now)
 
     def save(self, *args, **kwargs):
         self.user.is_moderator = True
