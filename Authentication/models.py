@@ -49,9 +49,10 @@ class CustomUserManager(BaseUserManager):
 class CustomUser(AbstractUser):
     username = None
     first_name = models.CharField(max_length=200)
-    middle_name = models.CharField(max_length=200, null=True, default='N/A')
+    other_names = models.CharField(max_length=200, null=True, default='N/A')
     last_name = models.CharField(max_length=200)
     user_type = models.CharField(max_length=200, choices=USER_TYPE, default='student')
+    phone_number = models.CharField(max_length=15, default='0123456789')
     email = models.EmailField(unique=True)
     is_student_admin = models.BooleanField(default=False)
     is_inst_admin = models.BooleanField(default=False)
@@ -63,6 +64,8 @@ class CustomUser(AbstractUser):
     is_student = models.BooleanField(default=True)
     is_moderator = models.BooleanField(default=False)
     is_staff = models.BooleanField(default=False)
+    is_author = models.BooleanField(default=False)
+    is_editor = models.BooleanField(default=False)
 
     
     USERNAME_FIELD = 'email'
@@ -74,17 +77,17 @@ class CustomUser(AbstractUser):
 class Student(models.Model):
     user = models.OneToOneField(CustomUser, on_delete=models.CASCADE)
     admission_number = models.CharField(max_length=100, unique=True, primary_key=True)
-    year_of_admission = models.IntegerField(default=1)
+    year_of_admission = models.IntegerField(default=2000)
     year_of_study = models.IntegerField(default=1)
     current_semester = models.IntegerField(default=1)
-    faculty = models.CharField(max_length=200)
-    course = models.CharField(max_length=200)
-    institution = models.CharField(max_length=200)
-    phone_number = models.CharField(max_length=15)
-    password = models.CharField(max_length=200)
+    institution = models.CharField(max_length=2000)
+    faculty = models.CharField(max_length=2000)
+    course = models.CharField(max_length=2000)
+    expecte_year_of_graduation = models.IntegerField(default=2000)
+    created_on = models.DateField(default=datetime.now)
 
     def __str__(self):
-        return f"{self.user.first_name} {self.user.last_name}"
+        return f"{self.admission_number}---{self.user.first_name} {self.user.last_name}"
     
     def save(self, *args, **kwargs):
         self.user.is_student = True
@@ -94,12 +97,14 @@ class Student(models.Model):
 
 
 class StudentAdmin(models.Model):
-    user = models.OneToOneField(Student, on_delete=models.DO_NOTHING)
+    student = models.OneToOneField(Student, on_delete=models.CASCADE)
+    created_on = models.DateTimeField(default=datetime.now)
+    created_by = models.ForeignKey(CustomUser, on_delete=models.SET_NULL, null=True, blank=True)
 
     def save(self, *args, **kwargs):
-        self.user.user.is_student_admin = True
-        self.user.user.user_type = 'student_admin'
-        self.user.user.save()
+        self.student.user.is_student_admin = True
+        self.student.user.user_type = 'student_admin'
+        self.student.user.save()
         super().save(*args, **kwargs)
 
 
@@ -108,9 +113,8 @@ class Lecturer(models.Model):   # FIXED
     lecturer_id = models.CharField(max_length=200, unique=True, primary_key=True, default='LCT' )
     faculty = models.CharField(max_length=200, default='General')
     department = models.CharField(max_length=200, default='General')
-    institution = models.OneToOneField(Institution, on_delete=models.DO_NOTHING, null=True)
-    phone_number = models.CharField(max_length=15, null=True)
-    created_at = models.DateTimeField(auto_now_add=True)
+    institution = models.ForeignKey(Institution, on_delete=models.CASCADE, null=True)
+    created_at = models.DateTimeField(default=datetime.now)
 
     def save(self, *args, **kwargs):
         self.user.is_lecturer = True
@@ -130,12 +134,12 @@ class OrgStaff(models.Model):
     staff_role = models.CharField(max_length=500)
     description = models.TextField(max_length=5000)
 
-    current_organisation = models.OneToOneField(
-        Organisation, on_delete=models.DO_NOTHING, null=True,
+    current_organisation = models.ForeignKey(
+        Organisation, on_delete=models.CASCADE, null=True,
         related_name="current_staff"
     )
-    current_org_branch = models.OneToOneField(
-        OrgBranch, on_delete=models.DO_NOTHING, null=True,
+    current_org_branch = models.ForeignKey(
+        OrgBranch, on_delete=models.CASCADE, null=True,
         related_name="current_branch_staff"
     )
     previous_organisations = models.ManyToManyField(
@@ -145,16 +149,16 @@ class OrgStaff(models.Model):
         OrgBranch, related_name="previous_branch_staff"
     )
 
-    dob = models.DateField(auto_now_add=True)
+    dob = models.DateField(default=datetime.now)
     nationality = models.CharField(max_length=300)
     country_of_residence = models.CharField(max_length=300)
 
-    current_institution = models.OneToOneField(
-        Institution, on_delete=models.DO_NOTHING, null=True,
+    current_institution = models.ForeignKey(
+        Institution, on_delete=models.CASCADE, null=True,
         related_name="current_inst_staff"
     )
-    current_inst_branch = models.OneToOneField(
-        InstBranch, on_delete=models.DO_NOTHING, null=True,
+    current_inst_branch = models.ForeignKey(
+        InstBranch, on_delete=models.CASCADE, null=True,
         related_name="current_inst_branch_staff"
     )
     previous_institutions = models.ManyToManyField(
@@ -165,7 +169,7 @@ class OrgStaff(models.Model):
     )
 
     interests = models.CharField(max_length=5000)
-    created_at = models.DateTimeField(auto_now_add=True)
+    created_at = models.DateTimeField(default=datetime.now)
 
     def save(self, *args, **kwargs):
         self.user.is_org_staff = True
@@ -180,22 +184,24 @@ class OrgStaff(models.Model):
 
 
 class OrgAdmin(models.Model):
-    user = models.OneToOneField(OrgStaff, on_delete=models.DO_NOTHING)
+    staff = models.OneToOneField(OrgStaff, on_delete=models.CASCADE)
+    created_on = models.DateTimeField(default=datetime.now)
+    created_by = models.ForeignKey(CustomUser, on_delete=models.SET_NULL, null=True, blank=True)
 
     def save(self, *args, **kwargs):
-        self.user.user.is_org_admin = True
-        self.user.user.user_type = 'organisational_admin'
-        self.user.user.save()
+        self.staff.user.is_org_admin = True
+        self.staff.user.user_type = 'organisational_admin'
+        self.staff.user.save()
         super().save(*args, **kwargs)
 
     def __str__(self):
-        return f"{self.user.user.first_name} {self.user.user.last_name}"
+        return f"{self.staff.user.first_name} {self.staff.user.last_name}"
 
 
 class InstStaff(models.Model):
-    user = models.OneToOneField(CustomUser, on_delete=models.DO_NOTHING)
-    institution = models.OneToOneField(Institution, on_delete=models.DO_NOTHING)
-    inst_branch = models.OneToOneField(InstBranch, on_delete=models.DO_NOTHING)
+    user = models.OneToOneField(CustomUser, on_delete=models.CASCADE)
+    institution = models.ForeignKey(Institution, on_delete=models.CASCADE)
+    inst_branch = models.ForeignKey(InstBranch, on_delete=models.CASCADE)
     staff_id = models.CharField(max_length=200, unique=True, primary_key=True)
     staff_role = models.CharField(max_length=500)
     description = models.TextField(max_length=5000)
@@ -203,32 +209,34 @@ class InstStaff(models.Model):
         Institution, related_name="previous_inst_admins")
     previous_inst_branch = models.ManyToManyField(
         InstBranch, related_name="previous_inst_branch_admins")
-    dob = models.DateField(auto_now_add=True)
+    dob = models.DateField(default=datetime.now)
     interests = models.CharField(max_length=5000)
-    created_at = models.DateTimeField(auto_now_add=True)
+    created_at = models.DateTimeField(default=datetime.now)
 
     def save(self, *args, **kwargs):
-        self.user.user.is_inst_staff = True
-        self.user.user.user_type = 'institutional_staff'
-        self.user.user.save()
+        self.user.is_inst_staff = True
+        self.user.user_type = 'institutional_staff'
+        self.user.save()
         super().save(*args, **kwargs)
 
     def __str__(self):
-        return f"{self.user.user.first_name} {self.user.user.last_name}"
+        return f"{self.user.first_name} {self.user.last_name}"
 
     
 
 class InstAdmin(models.Model):
-    user = models.OneToOneField(InstStaff, on_delete=models.DO_NOTHING)
+    staff = models.OneToOneField(InstStaff, on_delete=models.CASCADE)
+    created_on = models.DateTimeField(default=datetime.now)
+    created_by = models.ForeignKey(CustomUser, on_delete=models.SET_NULL, null=True, blank=True)
 
     def save(self, *args, **kwargs):
-        self.user.user.is_inst_admin = True
-        self.user.user.user_type = 'institutional_admin'
-        self.user.user.save()
+        self.staff.user.is_inst_admin = True
+        self.staff.user.user_type = 'institutional_admin'
+        self.staff.user.save()
         super().save(*args, **kwargs)
 
     def __str__(self):
-        return f"{self.user.user.first_name} {self.user.user.last_name}"
+        return f"{self.staff.user.first_name} {self.staff.user.last_name}"
 
     
 class Profile(models.Model):
@@ -249,12 +257,12 @@ class Profile(models.Model):
         return f"{self.user.first_name} {self.user.last_name} Profile"
     
 class Author(models.Model):
-    user = models.OneToOneField(Profile, on_delete=models.DO_NOTHING)
+    user = models.OneToOneField(CustomUser, on_delete=models.CASCADE)
     verified = models.BooleanField(default=False)
     created_on = models.DateTimeField(default=datetime.now)
 
     def save(self, *args, **kwargs):
-        self.user.is_moderator = True
+        self.user.is_author = True
         self.user.user_type = 'author'
         self.user.save()
         super().save(*args, **kwargs)
@@ -263,12 +271,12 @@ class Author(models.Model):
         return f"{self.user.first_name} {self.user.last_name}"
 
 class Editor(models.Model):
-    user = models.OneToOneField(Profile, on_delete=models.DO_NOTHING)
+    user = models.OneToOneField(CustomUser, on_delete=models.CASCADE)
     verified = models.BooleanField(default=False)
     created_on = models.DateTimeField(default=datetime.now)
 
     def save(self, *args, **kwargs):
-        self.user.is_moderator = True
+        self.user.is_editor = True
         self.user.user_type = 'editor'
         self.user.save()
         super().save(*args, **kwargs)
@@ -277,7 +285,7 @@ class Editor(models.Model):
         return f"{self.user.first_name} {self.user.last_name}"
 
 class Moderator(models.Model):
-    user = models.OneToOneField(Profile, on_delete=models.CASCADE)
+    user = models.OneToOneField(CustomUser, on_delete=models.CASCADE)
     verified = models.BooleanField(default=False)
     created_on = models.DateTimeField(default=datetime.now)
 
@@ -289,3 +297,28 @@ class Moderator(models.Model):
 
     def __str__(self):
         return f"{self.user.first_name} {self.user.last_name}"
+    
+class ComradeAdmin(models.Model):
+    """
+    Platform super-admin with full access. Linking to CustomUser and
+    ensuring relevant flags (is_admin/is_staff/is_superuser) are set on save.
+    """
+    user = models.OneToOneField(CustomUser, on_delete=models.CASCADE)
+    created_on = models.DateTimeField(default=datetime.now)
+    created_by = models.ForeignKey(
+        CustomUser, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='created_comrade_admins'
+    )
+
+    def save(self, *args, **kwargs):
+        # Ensure this user has full admin privileges across the platform
+        self.user.is_admin = True
+        self.user.is_staff = True
+        self.user.is_superuser = True
+        self.user.is_active = True
+        self.user.user_type = 'admin'
+        self.user.save()
+        super().save(*args, **kwargs)
+
+    def __str__(self):
+        return f"{self.user.first_name} {self.user.last_name} (ComradeAdmin)"

@@ -1,150 +1,167 @@
-from django.contrib.auth.models import User
 from django.contrib.auth import authenticate
 import re
 from rest_framework import serializers
-from Authentication.models import Student, CustomUser, Lecturer, OrgStaff, StudentAdmin, OrgAdmin, InstAdmin, InstStaff, Profile
+from Authentication.models import (
+    Student, CustomUser, Lecturer, OrgStaff, StudentAdmin, 
+    OrgAdmin, InstAdmin, InstStaff, Profile, Author, Editor, 
+    Moderator, ComradeAdmin
+)
 
-class RegisterSerializer(serializers.ModelSerializer):
-    first_name = serializers.CharField()
-    last_name = serializers.CharField()
-    confirm_password = serializers.CharField(write_only = True)
-    admission_number = serializers.CharField()
-    year_of_admission = serializers.CharField()
-    faculty  = serializers.CharField()
-    course = serializers.CharField()
-    institution = serializers.CharField()
-    phone_number = serializers.CharField()
+
+class BaseUserSerializer(serializers.ModelSerializer):
+    confirm_password = serializers.CharField(write_only=True)
 
     class Meta:
-        model = User
-        fields = ['username', 'first_name', 'last_name', 'password', 'email','confirm_password', 'admission_number', 'year_of_admission', 'faculty', 'course','institution', 'phone_number']
-
-        extra_kwargs = {'password': {'write_only': True}} # ensure the password is sent in request but won't be returned in api responses.
+        model = CustomUser
+        fields = ['first_name', 'last_name', 'other_names', 'email', 'password', 'confirm_password', 'phone_number', 'user_type']
     
     def validate(self, data):
-        if Student.objects.filter(admission_number = data['admission_number']).exists():
-            raise serializers.ValidationError({"admission_number": "Admission number already exists."})
-        
-
-        # validate the password.
         password = data['password']
         if len(password) < 8:
             raise serializers.ValidationError({"password": "Password too short. Use 8 characters or more."})
-        if (
-            not re.search(r'[A-Z]', password) or
-            not re.search(r'[a-z]', password) or
-            not re.search(r'[0-9]', password) or
-            not re.search(r'[!@#$%^&*(),.?":{}|<>]', password)
-        ):
-            raise serializers.ValidationError({
-                "password": "Password must contain at least one uppercase, lowercase, numeric, and special character."
-            })
-
+        if (not re.search(r'[A-Z]', password) or not re.search(r'[a-z]', password) or 
+            not re.search(r'[0-9]', password) or not re.search(r'[!@#$%^&*(),.?":{}|<>]', password)):
+            raise serializers.ValidationError({"password": "Password must contain at least one uppercase, lowercase, numeric, and special character."})
+        if not data.get('confirm_password'):
+            raise serializers.ValidationError({'confirm_password': 'The password should be confirmed'})
         if data['password'] != data['confirm_password']:
             raise serializers.ValidationError({"confirm_password": "Passwords do not match"})
         
-
+        if len(data['phone_number']) < 10:
+            raise serializers.ValidationError({'phone_number': 'Phone number must be at least 10 digits.'})
+        
         return data
 
     def create(self, validated_data):
-        validated_data.pop('confirm_password')
-        try:
-            user = User.objects.create_user(
-            username = validated_data['username'],
-            first_name = validated_data['first_name'],
-            last_name = validated_data['last_name'],
-            email = validated_data['email'],
-            password = validated_data['password']
-            )
-        except Exception as e:
-            raise serializers.ValidationError({"error": str(e)})
-        
-        try:
-            Student.objects.create(
-            user = user,
-            admission_number = validated_data['admission_number'],
-            year_of_admission = validated_data['year_of_admission'],
-            faculty = validated_data['faculty'],
-            course = validated_data['course'],
-            institution = validated_data['institution'],
-            phone_number = validated_data['phone_number']
-            )
-        except Exception as e:
-            user.delete()
-            raise serializers.ValidationError({"Error": "Student not created."})
-
+        validated_data.pop('confirm_password', None)
+        password = validated_data.pop('password', None)
+        # Use the model manager so any custom create_user logic runs
+        if password is not None:
+            user = CustomUser.objects.create_user(password=password, is_active=False, **validated_data)
+        else:
+            user = CustomUser.objects.create_user(is_active=False, **validated_data)
         return user
+    
+
+
+class CustomUserSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = CustomUser
+        fields = ['id', 'email', 'first_name', 'last_name', 'other_names', 'phone_number', 'user_type', 'is_active']
+        read_only_fields = ['id', 'is_active'] 
+
 
 class LoginSerializer(serializers.Serializer):
     username_or_email = serializers.CharField()
-    password = serializers.CharField(write_only = True)
+    password = serializers.CharField(write_only=True)
 
     def validate(self, data):
         username_or_email = data['username_or_email']
         password = data['password']
 
-        # check if what was provided was username or password.
-        user = User.objects.filter(username=username_or_email).first()
-
-        # get username to the user if email is provide.
-        user = User.objects.filter(email = username_or_email).first()
+        user = CustomUser.objects.filter(email=username_or_email).first()
         
-        if user:
-            # email was provided. get username
-            username = user.username
-        else:
-            username = username_or_email 
-        
-        user = authenticate(username=username, password = password)
-
         if not user:
-            raise serializers.ValidationError({"Error": "Invalid credentials."})
+            raise serializers.ValidationError({"error": "User not found."})
+        
+        authenticated = authenticate(username=user.email, password=password)
 
-        return{"username": user.username, "message": "Login successful."}
-    
+        if not authenticated:
+            raise serializers.ValidationError({"error": "Invalid credentials."})
+
+        self.user = authenticated
+        return {
+            'user_id': authenticated.id,
+            'email': authenticated.email,
+        }
+
+
 class StudentSerializer(serializers.ModelSerializer):
     class Meta:
         model = Student
-        fields = '__all__'  
-        read_only_fields = ['admission_number']
-class CustomUserSerializer(serializers.ModelSerializer):
-    class Meta:
-        model = CustomUser
-        fields = '__all__'  
-        read_only_fields = ['email']
+        fields = '__all__'
+        read_only_fields = ['user'] 
+
+    def validate(self, data):
+        # FIX: return data, not a dict
+        if data.get('expecte_year_of_graduation') and data.get('year_of_admission'):
+            if data['expecte_year_of_graduation'] < data['year_of_admission']:
+                raise serializers.ValidationError({'expecte_year_of_graduation': 'Expected graduation year cannot be less than admission year'})
+        return data
+
+
 class LecturerSerializer(serializers.ModelSerializer):
     class Meta:
         model = Lecturer
-        fields = '__all__'  
-        read_only_fields = ['user']
+        fields = '__all__'
+        read_only_fields = ['user'] 
+
+
 class OrgStaffSerializer(serializers.ModelSerializer):
     class Meta:
         model = OrgStaff
-        fields = '__all__'  
-        read_only_fields = ['user']
+        fields = '__all__'
+        read_only_fields = ['user'] 
+
+
 class StudentAdminSerializer(serializers.ModelSerializer):
     class Meta:
         model = StudentAdmin
-        fields = '__all__'  
-        read_only_fields = ['user']
+        fields = '__all__'
+        read_only_fields = ['student']  # FIX: StudentAdmin links to Student, not user
+
+
 class OrgAdminSerializer(serializers.ModelSerializer):
     class Meta:
         model = OrgAdmin
-        fields = '__all__'  
-        read_only_fields = ['user']
+        fields = '__all__'
+        read_only_fields = ['staff']  # FIX: OrgAdmin links to OrgStaff, not user
+
+
 class InstAdminSerializer(serializers.ModelSerializer):
     class Meta:
         model = InstAdmin
-        fields = '__all__'  
-        read_only_fields = ['user']
+        fields = '__all__'
+        read_only_fields = ['staff']  # FIX: InstAdmin links to InstStaff, not user
+
+
 class InstStaffSerializer(serializers.ModelSerializer):
     class Meta:
         model = InstStaff
-        fields = '__all__'  
-        read_only_fields = ['user']
+        fields = '__all__'
+        read_only_fields = ['user'] 
+
 
 class ProfileSerializer(serializers.ModelSerializer):
     class Meta:
         model = Profile
-        fields = '__all__'  
+        fields = '__all__'
+        read_only_fields = ['user'] 
+
+
+class AuthorSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Author
+        fields = '__all__'
+        read_only_fields = ['user']
+
+
+class EditorSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Editor
+        fields = '__all__'
+        read_only_fields = ['user']
+
+
+class ModeratorSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Moderator
+        fields = '__all__'
+        read_only_fields = ['user']
+
+
+class ComradeAdminSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = ComradeAdmin
+        fields = '__all__'
         read_only_fields = ['user']

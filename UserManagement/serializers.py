@@ -2,16 +2,17 @@ from rest_framework import serializers
 from Authentication.models import Student, CustomUser
 
 class UserSerializer(serializers.ModelSerializer):
+    confirm_password = serializers.CharField(write_only=True)
     class Meta:
         model = CustomUser
-        fields = ['id', 'username', 'first_name', 'last_name', 'email']
+        fields = ['first_name', 'last_name', 'email', 'user_type', 'other_names', 'password', 'confirm_password',]
 
 class StudentSerializer(serializers.ModelSerializer):
-    user = UserSerializer(read_only=True)
+    # user = UserSerializer()
 
     class Meta: 
         model  = Student
-        fields =  ['id', 'user', 'admission_number', 'year_of_admission', 'faculty', 'course', 'institution', 'phone_number']
+        fields =  ['user', 'admission_number', 'year_of_admission', 'faculty', 'course', 'institution', 'phone_number']
     
     def update(self, instance, validated_data):
        

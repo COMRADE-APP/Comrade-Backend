@@ -14,6 +14,13 @@ from django.shortcuts import get_object_or_404
 from Institution.models import Institution, InstBranch, Faculty, VCOffice, InstDepartment, AdminDep, Programme as InstProg, HR, Admissions, HealthServices, Security, StudentAffairs, SupportServices, Finance, Marketing, Legal, ICT, CareerOffice, Counselling, RegistrarOffice, Transport, Library, Hostel, Cafeteria, OtherInstitutionUnit
 from Organisation.models import Organisation, OrgBranch, Division, Department, Section, Team, Project, Centre, Committee, Board, Unit, Institute, Program, OtherOrgUnit
 from Authentication.models import Profile
+import os
+from django.http import FileResponse
+from Resources.renderers import PDFRenderer
+from django.shortcuts import get_object_or_404
+import os
+import base64
+import mimetypes
 
 VISIBILITY_MAP = {
     "organisations": (Organisation, "organisations"),
@@ -69,6 +76,42 @@ class ResourceViewSet(ModelViewSet):
     queryset = Resource.objects.all()
     serializer_class = ResourceSerializer
     permission_classes = [IsAuthenticatedOrReadOnly]
+    renderer_classes = [PDFRenderer]
+
+    @action(detail=True, methods=['get'])
+    def view_resource(self, request, pk=None):
+        resource = self.get_object()
+        resource = get_object_or_404(Resource, id=resource.id)
+
+        if not resource:
+            return Response({'error': 'No object was parsed to the backend'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+        file_path = resource.res_file
+        print(file_path.path)
+        print(file_path) # or use storage.open for remote storage
+        if not os.path.exists(str(file_path.path)):
+            raise Response({'error': 'The file does not exist'}, status=status.HTTP_404_NOT_FOUND)
+
+        try:
+            with open(file_path.path, 'rb') as f:
+                file_bytes = f.read()
+        except Exception as e:
+            return Response({'error': f'Failed to read file: {str(e)}'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+        filename = os.path.basename(file_path.path)
+        content_type, _ = mimetypes.guess_type(file_path.path)
+        if not content_type:
+            content_type = 'application/octet-stream'
+
+        content_base64 = base64.b64encode(file_bytes).decode('utf-8')
+        file_info = {
+            'filename': filename,
+            'content_type': content_type,
+            'size': len(file_bytes),
+            'content_base64': content_base64,
+        }
+
+        return Response(file_info, status=status.HTTP_200_OK)
 
 class ResourceVisibilityViewSet(ModelViewSet):
     queryset = ResourceVisibility.objects.all()
