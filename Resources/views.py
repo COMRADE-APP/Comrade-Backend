@@ -21,6 +21,11 @@ from django.shortcuts import get_object_or_404
 import os
 import base64
 import mimetypes
+from datetime import datetime
+import threading
+import time
+import copy
+
 
 VISIBILITY_MAP = {
     "organisations": (Organisation, "organisations"),
@@ -75,10 +80,10 @@ VISIBILITY_MAP = {
 class ResourceViewSet(ModelViewSet):
     queryset = Resource.objects.all()
     serializer_class = ResourceSerializer
-    permission_classes = [IsAuthenticatedOrReadOnly]
-    renderer_classes = [PDFRenderer]
+    # permission_classes = [IsAuthenticatedOrReadOnly]
+    # renderer_classes = [PDFRenderer]
 
-    @action(detail=True, methods=['get'])
+    @action(detail=True, methods=['get'], renderer_classes=[PDFRenderer])
     def view_resource(self, request, pk=None):
         resource = self.get_object()
         resource = get_object_or_404(Resource, id=resource.id)
@@ -130,7 +135,7 @@ class ResourceVisibilityViewSet(ModelViewSet):
         resource = get_object_or_404(Resource, id=resource_id)
 
         visibility = ResourceVisibility.objects.create(resource=resource)
-        previous_visibility = None  # No previous visibility for creation
+        old_visibility = None  # No previous visibility for creation
         changed_by = request.user
 
         for group_name, ids in visibility_groups.items():
@@ -153,11 +158,12 @@ class ResourceVisibilityViewSet(ModelViewSet):
             # Add to the many-to-many field
             getattr(visibility, field_name).add(*objects)
 
-        new_visibility = visibility.save()
+        visibility.save()
+        new_visibility = copy.copy(visibility)
         try:
             VisibilityLog.objects.create(
                 resource=resource,
-                previous_visibility=previous_visibility,
+                old_visibility=old_visibility,
                 new_visibility=new_visibility,
                 changed_by=changed_by
             )
@@ -172,7 +178,7 @@ class ResourceVisibilityViewSet(ModelViewSet):
 
     #
     @action(detail=True, methods=['patch', 'put'])
-    def remove_visibility(self, request):
+    def remove_visibility(self, request, pk=None):
         visibility_id = request.data.get("visibility_id")
         visibility_groups = request.data.get("visibility", {})
 
@@ -183,7 +189,7 @@ class ResourceVisibilityViewSet(ModelViewSet):
         if not visibility:
             return Response({"error": "ResourceVisibility not found."}, status=404)
 
-        old_visibility = visibility
+        old_visibility = copy.copy(visibility)
 
         for group_name, ids in visibility_groups.items():
 
@@ -205,14 +211,15 @@ class ResourceVisibilityViewSet(ModelViewSet):
             # Remove from the many-to-many field
             getattr(visibility, field_name).remove(*objects)
 
-        new_visibility = visibility.save()
+        visibility.save()
+        new_visibility = copy.copy(visibility)
         changed_by = request.user
 
         try:
             if old_visibility != new_visibility:
                 VisibilityLog.objects.create(
                     resource=visibility.resource,
-                    previous_visibility=old_visibility,
+                    old_visibility=old_visibility,
                     new_visibility=new_visibility,
                     changed_by=changed_by
                 )
@@ -227,7 +234,7 @@ class ResourceVisibilityViewSet(ModelViewSet):
 
     
     @action(detail=True, methods=['patch', 'put'])
-    def add_visibility(self, request):
+    def add_visibility(self, request, pk=None):
         visibility_id = request.data.get("visibility_id")
         visibility_groups = request.data.get("visibility", {})
 
@@ -253,7 +260,7 @@ class ResourceVisibilityViewSet(ModelViewSet):
                     "error": f"Some IDs in {group_name} do not exist."
                 }, status=status.HTTP_400_BAD_REQUEST)
 
-            # Remove from the many-to-many field
+            # Add to the many-to-many field
             getattr(visibility, field_name).add(*objects)
 
         visibility.save()
@@ -264,24 +271,25 @@ class ResourceVisibilityViewSet(ModelViewSet):
         }, status=status.HTTP_200_OK)
     
     # Make a resource public
-    @action(detail=True, methods=['post'])
-    def make_public(self, request):
+    @action(detail=True, methods=['post', 'put', 'patch'])
+    def make_public(self, request, pk=None):
         visibility_id = request.data.get("visibility_id")
         if not visibility_id:
             return Response({"error": "visibility_id is required."}, status=status.HTTP_400_BAD_REQUEST)
         
         visibility = get_object_or_404(ResourceVisibility, id=visibility_id)
-        previous_visibility = visibility
+        old_visibility = visibility
         created_by = request.user
         
         visibility.resource.visibility = 'public'
         visibility.resource.save()
-        new_visibility = visibility.save()
+        visibility.save()
+        new_visibility = copy.copy(visibility)
 
         try:
             VisibilityLog.objects.create(
                 resource=visibility.resource,
-                previous_visibility=previous_visibility,
+                old_visibility=old_visibility,
                 new_visibility=new_visibility,
                 changed_by=created_by
             )
@@ -293,6 +301,164 @@ class ResourceVisibilityViewSet(ModelViewSet):
                 "error": f"Failed to log making resource public: {str(e)}"
             }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
         
+    @action(detail=False, methods=['post', 'put', 'patch'])
+    def set_duration_availability(self, request):
+        visibility_id = request.data.get("visibility_id")
+        visibility_groups = request.data.get("visibility", {})
+        expiry_time = request.data.get('expiry_time')
+        
+
+        if not visibility_id:
+            return Response({"error": "visibility_id is required."}, status=status.HTTP_400_BAD_REQUEST)
+
+        visibility = get_object_or_404(ResourceVisibility, id=visibility_id)
+        old_visibility = copy.copy(visibility)
+        created_by = request.user
+
+
+        for group_name, ids in visibility_groups.items():
+
+            if group_name not in VISIBILITY_MAP:
+                return Response({
+                    "error": f"Invalid visibility type: {group_name}"
+                }, status=status.HTTP_400_BAD_REQUEST)
+
+            model, field_name = VISIBILITY_MAP[group_name]
+
+            # Fetch all objects matching the IDs
+            objects = model.objects.filter(id__in=ids)
+
+            if objects.count() != len(ids):
+                return Response({
+                    "error": f"Some IDs in {group_name} do not exist."
+                }, status=status.HTTP_400_BAD_REQUEST)
+
+            # Add to the many-to-many field
+            getattr(visibility, field_name).add(*objects)
+
+        visibility.save()
+        new_visibility = copy.copy(visibility)
+
+        VisibilityLog.objects.create(
+                resource=visibility.resource,
+                old_visibility=old_visibility,
+                new_visibility=new_visibility,
+                changed_by=created_by
+            )
+
+        # check if expiry time is reached
+        def _expiry_checker(visibility_id, target_time):
+            try:
+                while True:
+                    now = datetime.now()
+                    if now >= target_time:
+                        try:
+                            visibility = ResourceVisibility.objects.get(pk=visibility_id)
+                            # remove the visibility
+                            getattr(visibility, field_name).remove(*objects)
+                            VisibilityLog.objects.create(
+                                resource=visibility.resource,
+                                old_visibility=new_visibility,
+                                new_visibility=old_visibility,
+                                changed_by=created_by
+                            )
+                            visibility.save()
+                        except ResourceVisibility.DoesNotExist:
+                            pass
+                    break
+                time.sleep(1)
+            except Exception:
+                # fail silently for background checker
+                return
+
+        checker_thread = threading.Thread(target=_expiry_checker, args=(visibility_id, expiry_time), daemon=True)
+        checker_thread.start()
+
+        return Response({
+            "message": "Visibility items added successfully.",
+            "added": visibility_groups
+        }, status=status.HTTP_200_OK)
+    
+    @action(detail=False, methods=['post', 'put', 'patch'])
+    def schedule_visibility(self, request):
+        visibility_id = request.data.get("visibility_id")
+        visibility_groups = request.data.get("visibility", {})
+        expiry_time = request.data.get('expiry_time')
+        resource_id = request.data.get('resource_id')
+        
+
+        if not expiry_time:
+            return Response({"error": "Expiry time is required."}, status=status.HTTP_400_BAD_REQUEST)
+        
+        if not resource_id:
+            return Response({"error": "Resource is required."}, status=status.HTTP_400_BAD_REQUEST)
+        
+        if not visibility_id and resource_id:
+            resource = get_object_or_404(Resource, id=resource_id)
+
+            visibility = ResourceVisibility.objects.create(resource=resource, expiry_time=expiry_time)
+        else:
+            visibility = get_object_or_404(ResourceVisibility, id=visibility_id)
+
+        old_visibility = copy.copy(visibility)
+        created_by = request.user
+
+
+        # check if expiry time is reached
+        def _schedule_checker(visibility_id, target_time):
+            try:
+                while True:
+                    now = datetime.now()
+                    if now >= target_time:
+                        try:
+                             for group_name, ids in visibility_groups.items():
+
+                                if group_name not in VISIBILITY_MAP:
+                                    return Response({
+                                        "error": f"Invalid visibility type: {group_name}"
+                                    }, status=status.HTTP_400_BAD_REQUEST)
+
+                                model, field_name = VISIBILITY_MAP[group_name]
+
+                                # Fetch all objects matching the IDs
+                                objects = model.objects.filter(id__in=ids)
+
+                                if objects.count() != len(ids):
+                                    return Response({
+                                        "error": f"Some IDs in {group_name} do not exist."
+                                    }, status=status.HTTP_400_BAD_REQUEST)
+
+                                # Add to the many-to-many field
+                                getattr(visibility, field_name).add(*objects)
+
+                                visibility.save()
+                                new_visibility = copy.copy(visibility)
+
+                                VisibilityLog.objects.create(
+                                        resource=visibility.resource,
+                                        old_visibility=old_visibility,
+                                        new_visibility=new_visibility,
+                                        changed_by=created_by
+                                    )
+                                visibility.save()
+                        except ResourceVisibility.DoesNotExist:
+                            pass
+                    break
+                time.sleep(1)
+            except Exception:
+                # fail silently for background checker
+                return
+
+        checker_thread = threading.Thread(target=_schedule_checker, args=(visibility_id, expiry_time), daemon=True)
+        checker_thread.start()
+
+        return Response({
+            "message": "Visibility items added successfully.",
+            "added": visibility_groups
+        }, status=status.HTTP_200_OK)
+        
+    
+
 
     
 class VisibilityLogViewSet(ModelViewSet):

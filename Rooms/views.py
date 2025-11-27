@@ -19,6 +19,7 @@ from Authentication.serializers import CustomUserSerializer, StudentSerializer, 
 from Events.serializers import EventSerializer
 from Events.models import Event
 from rest_framework.permissions import IsAuthenticated
+from Resources.views import VISIBILITY_MAP
 
 
 
@@ -429,6 +430,58 @@ class DefaultRoomViewSet(ModelViewSet):
             return Response({"message": "Default room has been converted to a room."}, status=status.HTTP_200_OK)
         else:
             return Response({"message": "You do not have permission to convert this default room to a room."}, status=status.HTTP_403_FORBIDDEN)
+        
+    @action(detail=True, methods=['post'])
+    def create_default_room_automatocally(self, request):
+        inst_or_org_name = request.data.get('inst_or_org_name')
+        unique_code = request.data.get('unique_code')
+        reference_type = request.data.get('reference_type')
+
+        if not (inst_or_org_name and reference_type and unique_code):
+            return Response({'error': 'Could not fetch the institution/organisation name, reference code or type.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        
+        try:
+            room = DefaultRoom.objects.create(name=f'{inst_or_org_name} Room (Default)', inst_or_org_name=inst_or_org_name, created_by=request.user, reference_object_code=unique_code)
+
+            data = {
+                'room_id': room.id,
+                'room_name': room.name,
+                'ins_or_org_name': room.inst_or_org_name,
+                'room_code': room.room_code,
+                'reference_code': unique_code,
+                'message': f'Default room for {inst_or_org_name} has been created successfully',
+            }
+            return Response(data, status=status.HTTP_201_CREATED)
+        except Exception as e:
+            return Response({'error': f'The following error occured:\n{e}'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        
+    @action(detail=True, methods=['post', 'put', 'patch'])
+    def add_members_automatically(self, request):
+        member = request.user
+        unique_code = request.data.get('unique_code')
+        reference_type = request.data.get('reference_type')
+
+        if not (reference_type and unique_code):
+            return Response({'error': 'Could not fetch the institution/organisation name, reference code or type.'}, status=status.HTTP_400_BAD_REQUEST)
+        
+        try:
+            room = get_object_or_404(DefaultRoom, reference_object_code=unique_code)
+            room.members.add(member)
+            room.save()
+
+            data = {
+                'room_id': room.id,
+                'room_name': room.name,
+                'ins_or_org_name': room.inst_or_org_name,
+                'message': f'Member {member.first_name} has been added to their respective default room successfully.',
+            }
+            return Response(data, status=status.HTTP_201_CREATED)
+        except Exception as e:
+            return Response({'error': f'The following error occured:\n{e}'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+
         
 
 class DirectMessageViewSet(ModelViewSet):

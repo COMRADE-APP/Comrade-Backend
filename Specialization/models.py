@@ -1,13 +1,23 @@
 from django.db import models
 from Rooms.models import Room, DefaultRoom
 from Resources.models import Resource, Links
-from Announcements.models import Announcements, Task
-from Authentication.models import Profile
+from Announcements.models import Task, Announcements, Reply, AnnouncementsRequest, Reposts, Text, Pin, FileResponse, CompletedTask, TaskResponse
+from Authentication.models import Profile, CustomUser
 from Events.models import Event
+import uuid
+from datetime import datetime
+from Organisation.models import Organisation
+from Institution.models import Institution
+
 
 
 # Create your models here.
 
+PARTICIPANTS = (
+    ('individuals', 'Individuals'), 
+    ('rooms', 'Rooms'), 
+    ('rooms_and_individuals', 'Both Rooms and Individuals'),
+)
 
 class Stack(models.Model):
     name = models.CharField(max_length=255)
@@ -98,11 +108,45 @@ class StackModerator(models.Model):
         return f"{self.profile.username} is a moderator of {self.stack.name}"
 
 class SpecializationRoom(models.Model):
-    specialization = models.ForeignKey(Specialization, on_delete=models.CASCADE, related_name='room_specialization')
-    room = models.ForeignKey(Room, on_delete=models.CASCADE, related_name='specialization_rooms')
-    added_on = models.DateTimeField(auto_now_add=True)
+    specialization = models.ForeignKey(Specialization, on_delete=models.CASCADE, related_name='specialization_room_specialization')
+    name = models.CharField(max_length=255, default='None')
+    room_code = models.CharField(max_length=200, unique=True, editable=False, default=uuid.uuid4().hex[:10].upper())
+    invitation_code = models.CharField(max_length=10, unique=True, default='')
     related_rooms = models.ManyToManyField(Room, blank=True, related_name='related_rooms')
     related_default_rooms = models.ManyToManyField(DefaultRoom, blank=True, related_name='related_default_rooms')
+    description = models.TextField(max_length=255, null=True)
+    institutions = models.ManyToManyField(Institution, blank=True, related_name='institution_related_to_specialization_room')
+    organisation = models.ManyToManyField(Organisation, blank=True, related_name='organisation_related_to_specialization_room')
+    created_by = models.ForeignKey(CustomUser, on_delete=models.CASCADE, null=True)
+    created_on = models.DateTimeField(default=datetime.now)
+    admins = models.ManyToManyField(CustomUser, related_name='specialization_room_admins', blank=True) # CustomUser can admin many rooms, a room can have many admins 
+    moderators = models.ManyToManyField(CustomUser, related_name='specialization_room_moderators', blank=True) # CustomUser can moderator many rooms, a room can have many moderators 
+    members = models.ManyToManyField(CustomUser, related_name='specialization_room_members', blank=True) # CustomUser can join many rooms, a room can have many CustomUsers
+    text = models.ManyToManyField(Text, related_name='specialization_room_texts', blank=True)
+    announcements = models.ManyToManyField(Announcements, related_name='specialization_room_announcements', blank=True)
+    tasks = models.ManyToManyField(Task, related_name='specialization_room_tasks', blank=True)
+    events = models.ManyToManyField(Event, related_name='specialization_room_events', blank=True)
+    reposts = models.ManyToManyField(Reposts, related_name='specialization_room_reposts', blank=True)
+    pins = models.ManyToManyField(Pin, related_name='specialization_room_pins', blank=True)
+    file_responses = models.ManyToManyField(FileResponse, related_name='specialization_room_file_responses', blank=True)
+    replies = models.ManyToManyField(Reply, related_name='specialization_room_replies', blank=True)
+    announcements_requests = models.ManyToManyField(AnnouncementsRequest, related_name='specialization_room_announcements_requests', blank=True)
+    completed_tasks = models.ManyToManyField(CompletedTask, related_name='specialization_room_completed_tasks', blank=True)
+    task_responses = models.ManyToManyField(TaskResponse, related_name='specialization_room_task_responses', blank=True)
+    resources = models.ManyToManyField('Resources.Resource', related_name='specialization_room_resources', blank=True)
+    capacity_counter = models.IntegerField(default=0)
+    capacity_quota = models.IntegerField(default=0)
+    past_memmbers = models.ManyToManyField(CustomUser, blank=True, related_name="specialization_room_past_members")
+    members_type = models.CharField(max_length=200, choices=PARTICIPANTS, default='individuals')
+
+
+    def save(self, *args, **kwargs):
+        if not self.invitation_code:
+            self.invitation_code = self.generate_invitation_code()
+        super().save(*args, **kwargs)
+    
+    def generate_invitation_code(self):
+        return uuid.uuid4().hex[:10].upper()
 
     def __str__(self):
         return f"Room {self.room.name} for Specialization {self.specialization.name}"

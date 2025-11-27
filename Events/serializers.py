@@ -1,4 +1,4 @@
-from Events.models import Event, EventCategory, EventAttendance, EventBudget, EventCategoryAssignment, EventCollaboration, EventFeedback, EventFeedbackResponse, EventFile, EventFollowUp, EventLogistics, EventMediaCoverage, EventPartnership, EventPhoto, EventPromotion, EventRegistration, EventReminder, EventSchedule, EventSession, EventSpeaker, EventSponsor, EventSponsorAgreement, EventSponsorBenefit, EventSponsorLogo, EventSponsorPackage, EventSponsorPayment, EventSponsorshipAgreementDocument, EventSponsorshipApplication, EventSponsorshipApproval, EventSponsorshipCertificate, EventSponsorshipContract, EventSponsorshipDowngrade, EventSponsorshipEvaluation, EventSponsorshipExtension, EventSponsorshipFeedback, EventSponsorshipHistory, EventSponsorshipInvoice, EventSponsorshipLetter, EventSponsorshipLevel, EventSponsorshipRecognition, EventSponsorshipRejection, EventSponsorshipRenewal, EventSponsorshipReport, EventSponsorshipTermination, EventSponsorshipTransfer, EventSponsorshipUpgrade, EventSurvey, EventSurveyQuestion, EventSurveyResponse, EventTag, EventTagAssignment, EventTicket, EventVideo, EventReport, EventInvitation
+from Events.models import Event, EventCategory, EventAttendance, EventBudget, EventCategoryAssignment, EventCollaboration, EventFeedback, EventFeedbackResponse, EventFile, EventFollowUp, EventLogistics, EventMediaCoverage, EventPartnership, EventPhoto, EventPromotion, EventRegistration, EventReminder, EventSchedule, EventSession, EventSpeaker, EventSponsor, EventSponsorAgreement, EventSponsorBenefit, EventSponsorLogo, EventSponsorPackage, EventSponsorPayment, EventSponsorshipAgreementDocument, EventSponsorshipApplication, EventSponsorshipApproval, EventSponsorshipCertificate, EventSponsorshipContract, EventSponsorshipDowngrade, EventSponsorshipEvaluation, EventSponsorshipExtension, EventSponsorshipFeedback, EventSponsorshipHistory, EventSponsorshipInvoice, EventSponsorshipLetter, EventSponsorshipLevel, EventSponsorshipRecognition, EventSponsorshipRejection, EventSponsorshipRenewal, EventSponsorshipReport, EventSponsorshipTermination, EventSponsorshipTransfer, EventSponsorshipUpgrade, EventSurvey, EventSurveyQuestion, EventSurveyResponse, EventTag, EventTagAssignment, EventTicket, EventVideo, EventReport, EventInvitation, EventLike, EventVisibility, VisibilityLog
 from rest_framework.serializers import ModelSerializer, Serializer
 from rest_framework import serializers
 from datetime import datetime
@@ -14,6 +14,16 @@ class EventSerializer(ModelSerializer):
             raise serializers.ValidationError("Scheduled time cannot be in the past.")
         return value
         
+class EventVisibilitySerializer(ModelSerializer):
+    class Meta:
+        model = EventVisibility
+        fields = '__all__'
+
+class VisibilityLogSerializer(ModelSerializer):
+    class Meta:
+        model = VisibilityLog
+        fields = '__all__'
+        read_only_fields = ['changed_on']
 
 class EventCategorySerializer(ModelSerializer):
     class Meta:
@@ -42,6 +52,12 @@ class EventCategoryAssignmentSerializer(ModelSerializer):
 class EventCollaborationSerializer(ModelSerializer):
     class Meta:
         model = EventCollaboration
+        fields = '__all__'
+        read_only_fields = ['timestamp']
+
+class EventLikeSerializer(ModelSerializer):
+    class Meta:
+        model = EventLike
         fields = '__all__'
         read_only_fields = ['timestamp']
 

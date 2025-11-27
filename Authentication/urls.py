@@ -1,5 +1,5 @@
 from django.urls import path
-from Authentication.views import RegisterView, LoginView, CustomUserViewSet, LecturerViewSet, OrgStaffViewSet, StudentAdminViewSet, OrgAdminViewSet, InstAdminViewSet, InstStaffViewSet, VerifyView
+from Authentication.views import RegisterView, LoginView, CustomUserViewSet, LecturerViewSet, OrgStaffViewSet, StudentAdminViewSet, OrgAdminViewSet, InstAdminViewSet, InstStaffViewSet, VerifyView, ProfileViewSet
 from rest_framework.routers import DefaultRouter
 
 router = DefaultRouter()
@@ -11,7 +11,7 @@ router.register(r'student_admins', StudentAdminViewSet, basename='student_admin'
 router.register(r'org_admins', OrgAdminViewSet, basename='org_admin')
 router.register(r'inst_admins', InstAdminViewSet, basename='inst_admin')
 router.register(r'inst_staffs', InstStaffViewSet, basename='inst_staff')
-# router.register(r'students', StudentViewSet, basename='student')
+router.register(r'profiles', ProfileViewSet, basename='profile')
 
 
 urlpatterns = [

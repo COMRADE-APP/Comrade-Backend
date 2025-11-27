@@ -19,6 +19,7 @@ class Room(models.Model):
     created_by = models.ForeignKey(CustomUser, on_delete=models.CASCADE, null=True)
     created_on = models.DateTimeField(default=datetime.now)
     admins = models.ManyToManyField(CustomUser, related_name='room_admins', blank=True) # CustomUser can admin many rooms, a room can have many admins 
+    moderators = models.ManyToManyField(CustomUser, related_name='room_moderators', blank=True) # CustomUser can moderator many rooms, a room can have many moderators 
     members = models.ManyToManyField(CustomUser, related_name='room_members', blank=True) # CustomUser can join many rooms, a room can have many CustomUsers
     text = models.ManyToManyField(Text, related_name='room_texts', blank=True)
     announcements = models.ManyToManyField(Announcements, related_name='room_announcements', blank=True)
@@ -32,6 +33,9 @@ class Room(models.Model):
     completed_tasks = models.ManyToManyField(CompletedTask, related_name='room_completed_tasks', blank=True)
     task_responses = models.ManyToManyField(TaskResponse, related_name='room_task_responses', blank=True)
     resources = models.ManyToManyField('Resources.Resource', related_name='room_resources', blank=True)
+    capacity_counter = models.IntegerField(default=0)
+    capacity_quota = models.IntegerField(default=0)
+    past_memmbers = models.ManyToManyField(CustomUser, blank=True, related_name="room_past_members")
 
 
     def save(self, *args, **kwargs):
@@ -49,13 +53,15 @@ class DefaultRoom(models.Model):
     name = models.CharField(max_length=255)
     room_code = models.CharField(max_length=200, unique=True, default=uuid.uuid4().hex[:10].upper(), editable=False)
     description = models.TextField(max_length=255, null=True)
-    institution = models.CharField(max_length=255)
+    inst_or_org_name = models.CharField(max_length=255)
+    reference_object_code = models.CharField(max_length=255, default='None')
     created_by = models.ForeignKey(CustomUser, on_delete=models.CASCADE, null=True)
     created_on = models.DateTimeField(default=datetime.now)
     rooms = models.ManyToManyField(Room, related_name='default_sub_rooms', blank=True) # A DefaultRoom can have many Rooms, a Room can belong to many DefaultRooms
     members = models.ManyToManyField(CustomUser, related_name='joined_default_rooms', blank=True) # CustomUser can join many rooms, a room can have many CustomUsers
     invitation_code = models.CharField(max_length=10, unique=True, editable=False)
     admins = models.ManyToManyField(CustomUser, related_name='admin_default_rooms', blank=True) # CustomUser can admin many rooms, a room can have many admins 
+    moderators = models.ManyToManyField(CustomUser, related_name='default_room_moderators', blank=True) # CustomUser can moderator many rooms, a room can have many moderators 
     text = models.ManyToManyField(Text, related_name='default_room_texts', blank=True)
     announcements = models.ManyToManyField(Announcements, related_name='default_room_announcements', blank=True)
     tasks = models.ManyToManyField(Task, related_name='default_room_tasks', blank=True)
@@ -68,6 +74,8 @@ class DefaultRoom(models.Model):
     completed_tasks = models.ManyToManyField(CompletedTask, related_name='default_room_completed_tasks', blank=True)
     task_responses = models.ManyToManyField(TaskResponse, related_name='default_room_task_responses', blank=True)
     resources = models.ManyToManyField('Resources.Resource', related_name='default_room_resources', blank=True)
+    capacity_counter = models.IntegerField(default=0)
+    past_memmbers = models.ManyToManyField(CustomUser, blank=True, related_name="default_room_past_members")
     
     def generate_invitation_code(self):
         return uuid.uuid4().hex[:10].upper()

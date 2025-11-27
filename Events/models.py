@@ -1,6 +1,8 @@
 from django.db import models
-from Authentication.models import Student, StudentAdmin, OrgAdmin, OrgStaff, InstAdmin, InstStaff, Lecturer, CustomUser
-from Organisation.models import Organisation, OrgBranch
+from Authentication.models import Student, StudentAdmin, OrgAdmin, OrgStaff, InstAdmin, InstStaff, Lecturer, CustomUser, Profile
+from Organisation.models import Organisation, OrgBranch, Division, Department, Section, Team, Project, Centre, Committee, Board, Unit, Institute, Program, OtherOrgUnit
+from Institution.models import Institution, InstBranch, Faculty, VCOffice, InstDepartment, AdminDep, Programme, HR, Admissions, HealthServices, Security, StudentAffairs, SupportServices, Finance, Marketing, Legal, ICT, CareerOffice, Counselling, RegistrarOffice, Transport, Library, Hostel, Cafeteria, OtherInstitutionUnit
+
 from datetime import datetime, timezone
 
 # Create your models here.
@@ -17,6 +19,12 @@ EVENT_STATE = (
     ('scheduled', 'Scheduled'),
     ('completed', 'Completed'),
     ('ongoing', 'Ongoing'),
+)
+
+BOOKING_STATE = (
+    ('open', 'Open'),
+    ('closed', 'Closed'),
+    ('pending', 'Pending')
 )
 
 ATTENDEE_STATUS = (
@@ -78,7 +86,8 @@ class Event(models.Model):
     start_time = models.TimeField()
     end_time = models.TimeField()
     booking_deadline = models.DateTimeField(default=datetime.now)
-    date = models.DateTimeField(default=datetime.now)
+    booking_status = models.CharField(max_length=200, choices=BOOKING_STATE, default='pending')
+    event_date = models.DateTimeField(default=datetime.now)
     deadline_reached = models.BooleanField(default=False)
     location = models.CharField(max_length=300)
     status = models.CharField(max_length=200, choices=EVENT_STATE, default='active')
@@ -86,9 +95,72 @@ class Event(models.Model):
     time_stamp = models.DateTimeField(auto_now_add=True)
     created_by = models.ForeignKey(CustomUser, null=False, on_delete=models.DO_NOTHING)
 
-
     def __str__(self):
         return self.name
+
+class EventVisibility(models.Model):
+    event = models.OneToOneField(Event, on_delete=models.CASCADE, related_name='event_visibility')
+    scheduled_time = models.DateTimeField(null=True, blank=True)
+    expiry_time = models.DateTimeField(null=True, blank=True)
+    rooms = models.ManyToManyField('Rooms.Room', blank=True)
+    default_rooms = models.ManyToManyField('Rooms.DefaultRoom', blank=True)
+    direct_message_rooms = models.ManyToManyField('Rooms.DirectMessageRoom', blank=True)
+    organisations = models.ManyToManyField(Organisation, blank=True)
+    organistion_branches = models.ManyToManyField(OrgBranch, blank=True)
+    divisions = models.ManyToManyField(Division, blank=True)
+    departments = models.ManyToManyField(Department, blank=True)
+    sections = models.ManyToManyField(Section, blank=True)
+    teams = models.ManyToManyField(Team, blank=True)
+    projects = models.ManyToManyField(Project, blank=True)
+    centres = models.ManyToManyField(Centre, blank=True)
+    committees = models.ManyToManyField(Committee, blank=True)
+    boards = models.ManyToManyField(Board, blank=True)
+    units = models.ManyToManyField(Unit, blank=True)
+    institutes = models.ManyToManyField(Institute, blank=True)
+    programs = models.ManyToManyField(Program, blank=True)
+    other_organisation_units = models.ManyToManyField(OtherOrgUnit, blank=True)
+    institutions = models.ManyToManyField(Institution, blank=True)
+    institution_branches = models.ManyToManyField(InstBranch, blank=True)
+    faculties = models.ManyToManyField(Faculty, blank=True)
+    vc_offices = models.ManyToManyField(VCOffice, blank=True)
+    inst_departments = models.ManyToManyField(InstDepartment, blank=True)
+    admin_deps = models.ManyToManyField(AdminDep, blank=True)
+    programmes = models.ManyToManyField(Programme, blank=True)
+    hrs = models.ManyToManyField(HR, blank=True)
+    admissions = models.ManyToManyField(Admissions, blank=True)
+    health_services = models.ManyToManyField(HealthServices, blank=True)
+    securities = models.ManyToManyField(Security, blank=True)
+    student_affairs = models.ManyToManyField(StudentAffairs, blank=True)
+    support_services = models.ManyToManyField(SupportServices, blank=True)
+    finances = models.ManyToManyField(Finance, blank=True)
+    marketings = models.ManyToManyField(Marketing, blank=True)
+    legals = models.ManyToManyField(Legal, blank=True)
+    icts = models.ManyToManyField(ICT, blank=True)
+    career_offices = models.ManyToManyField(CareerOffice, blank=True)
+    counsellings = models.ManyToManyField(Counselling, blank=True)
+    registrar_offices = models.ManyToManyField(RegistrarOffice, blank=True)
+    transports = models.ManyToManyField(Transport, blank=True)
+    libraries = models.ManyToManyField(Library, blank=True)
+    hostels = models.ManyToManyField(Hostel, blank=True)
+    cafeterias = models.ManyToManyField(Cafeteria, blank=True)
+    other_institution_units = models.ManyToManyField(OtherInstitutionUnit, blank=True)
+    users_with_access = models.ManyToManyField(Profile, blank=True)
+
+    def __str__(self):
+        return f'Visibility for {self.event.name} (Event)'
+    
+class VisibilityLog(models.Model):
+    resource = models.ForeignKey(Event, on_delete=models.CASCADE, related_name='event_visibility_logs')
+    changed_by = models.ForeignKey(Profile, on_delete=models.SET_NULL, related_name='event_visibility_changed_logs', null=True)
+    previous_visibility = models.ForeignKey(EventVisibility, on_delete=models.SET_NULL, related_name='event_previous_visibility_logs', null=True)
+    new_visibility = models.ForeignKey(EventVisibility, on_delete=models.SET_NULL, related_name='event_new_visibility_logs', null=True)
+    changed_on = models.DateTimeField(default=datetime.now)
+
+    def __str__(self):
+        return f"Visibility change for {self.event.title} by {self.changed_by.username} on {self.changed_on}"
+
+
+    
 class EventRegistration(models.Model):
     event = models.ForeignKey(Event, on_delete=models.DO_NOTHING)
     user = models.ForeignKey(CustomUser, null=False, on_delete=models.DO_NOTHING)
@@ -99,12 +171,19 @@ class EventRegistration(models.Model):
     def __str__(self):
         return f"{self.user} - {self.event.name}"
     
+class EventLike(models.Model):
+    event = models.ForeignKey(Event, on_delete=models.DO_NOTHING)
+    user = models.ForeignKey(CustomUser, null=False, on_delete=models.DO_NOTHING, related_name='commenter')
+    like = models.BooleanField(default=False)
+    comment = models.TextField(max_length=2000, null=True)
+    reaction = models.CharField(max_length=2000)
+    created_on = models.DateTimeField(default=datetime.now)
+    
 class EventFeedback(models.Model):
     event = models.ForeignKey(Event, on_delete=models.DO_NOTHING)
     user = models.ForeignKey(CustomUser, null=False, on_delete=models.DO_NOTHING)
     feedback = models.TextField(max_length=2000, default='')
     rating = models.IntegerField(default=0)
-    like = models.BooleanField(default=False)
     attendendance_status = models.CharField(max_length=200, choices=ATTEND_STATE, default='neutral')
     submitted_on = models.DateTimeField(auto_now_add=True)
 

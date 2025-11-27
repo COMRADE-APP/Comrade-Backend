@@ -325,7 +325,7 @@ class TaskViewSet(ModelViewSet):
     ordering_fields = ['time_stamp', 'status']  
 
     @action(methods=['post', 'get'], detail=False)
-    def expiry_sensor(self, request):
+    def set_expiry_duration(self, request):
         task_serializer = TaskSerializer(data=request.data)
 
         if not task_serializer.is_valid():
@@ -337,7 +337,7 @@ class TaskViewSet(ModelViewSet):
         if not expiry_date:
             return Response({'error': 'The due date of the Task was not indicated'}, status=status.HTTP_404_NOT_FOUND)
         
-        def _schedule_checker(task_id, target_time):
+        def _expiry_sensor(task_id, target_time):
             try:
                 while True:
                     now = _datetime.now()
@@ -356,7 +356,7 @@ class TaskViewSet(ModelViewSet):
                 # fail silently for background checker
                 return
 
-        checker_thread = threading.Thread(target=_schedule_checker, args=(task_id, expiry_date), daemon=True)
+        checker_thread = threading.Thread(target=_expiry_sensor, args=(task_id, expiry_date), daemon=True)
         checker_thread.start()
 
         return Response({'message': 'The task deadline has been reached'}, status=status.HTTP_202_ACCEPTED)

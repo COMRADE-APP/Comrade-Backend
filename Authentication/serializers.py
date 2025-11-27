@@ -80,10 +80,9 @@ class StudentSerializer(serializers.ModelSerializer):
     class Meta:
         model = Student
         fields = '__all__'
-        read_only_fields = ['user'] 
+        # read_only_fields = ['user'] 
 
     def validate(self, data):
-        # FIX: return data, not a dict
         if data.get('expecte_year_of_graduation') and data.get('year_of_admission'):
             if data['expecte_year_of_graduation'] < data['year_of_admission']:
                 raise serializers.ValidationError({'expecte_year_of_graduation': 'Expected graduation year cannot be less than admission year'})
@@ -94,74 +93,74 @@ class LecturerSerializer(serializers.ModelSerializer):
     class Meta:
         model = Lecturer
         fields = '__all__'
-        read_only_fields = ['user'] 
+        # read_only_fields = ['user'] 
 
 
 class OrgStaffSerializer(serializers.ModelSerializer):
     class Meta:
         model = OrgStaff
         fields = '__all__'
-        read_only_fields = ['user'] 
+        # read_only_fields = ['user'] 
 
 
 class StudentAdminSerializer(serializers.ModelSerializer):
     class Meta:
         model = StudentAdmin
         fields = '__all__'
-        read_only_fields = ['student']  # FIX: StudentAdmin links to Student, not user
+        # read_only_fields = ['student']  # FIX: StudentAdmin links to Student, not user
 
 
 class OrgAdminSerializer(serializers.ModelSerializer):
     class Meta:
         model = OrgAdmin
         fields = '__all__'
-        read_only_fields = ['staff']  # FIX: OrgAdmin links to OrgStaff, not user
+        # read_only_fields = ['staff']  # FIX: OrgAdmin links to OrgStaff, not user
 
 
 class InstAdminSerializer(serializers.ModelSerializer):
     class Meta:
         model = InstAdmin
         fields = '__all__'
-        read_only_fields = ['staff']  # FIX: InstAdmin links to InstStaff, not user
+        # read_only_fields = ['staff']  # FIX: InstAdmin links to InstStaff, not user
 
 
 class InstStaffSerializer(serializers.ModelSerializer):
     class Meta:
         model = InstStaff
         fields = '__all__'
-        read_only_fields = ['user'] 
+        # read_only_fields = ['user'] 
 
 
 class ProfileSerializer(serializers.ModelSerializer):
     class Meta:
         model = Profile
         fields = '__all__'
-        read_only_fields = ['user'] 
+        # read_only_fields = ['user'] 
 
 
 class AuthorSerializer(serializers.ModelSerializer):
     class Meta:
         model = Author
         fields = '__all__'
-        read_only_fields = ['user']
+        # read_only_fields = ['user']
 
 
 class EditorSerializer(serializers.ModelSerializer):
     class Meta:
         model = Editor
         fields = '__all__'
-        read_only_fields = ['user']
+        # read_only_fields = ['user']
 
 
 class ModeratorSerializer(serializers.ModelSerializer):
     class Meta:
         model = Moderator
         fields = '__all__'
-        read_only_fields = ['user']
+        # read_only_fields = ['user']
 
 
 class ComradeAdminSerializer(serializers.ModelSerializer):
     class Meta:
         model = ComradeAdmin
         fields = '__all__'
-        read_only_fields = ['user']
+        # read_only_fields = ['user']

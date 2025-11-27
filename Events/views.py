@@ -6,8 +6,8 @@ from rest_framework import status
 from rest_framework.permissions import IsAuthenticated, IsAdminUser, IsAuthenticatedOrReadOnly
 from rest_framework.viewsets import ModelViewSet
 from Events.serializers import EventSerializer
-from Events.models import Event, EventCategory, EventAttendance, EventBudget, EventCategoryAssignment, EventCollaboration, EventFeedback, EventFeedbackResponse, EventFile, EventFollowUp, EventLogistics, EventMediaCoverage, EventPartnership, EventPhoto, EventPromotion, EventRegistration, EventReminder, EventSchedule, EventSession, EventSpeaker, EventSponsor, EventSponsorAgreement, EventSponsorBenefit, EventSponsorLogo, EventSponsorPackage, EventSponsorPayment, EventSponsorshipAgreementDocument, EventSponsorshipApplication, EventSponsorshipApproval, EventSponsorshipCertificate, EventSponsorshipContract, EventSponsorshipDowngrade, EventSponsorshipEvaluation, EventSponsorshipExtension, EventSponsorshipFeedback, EventSponsorshipHistory, EventSponsorshipInvoice, EventSponsorshipLetter, EventSponsorshipLevel, EventSponsorshipRecognition, EventSponsorshipRejection, EventSponsorshipRenewal, EventSponsorshipReport, EventSponsorshipTermination, EventSponsorshipTransfer, EventSponsorshipUpgrade, EventSurvey, EventSurveyQuestion, EventSurveyResponse, EventTag, EventTagAssignment, EventTicket, EventVideo, EventReport, EventInvitation
-from Events.serializers import EventSerializer, EventCategorySerializer, EventAttendanceSerializer, EventBudgetSerializer, EventCategoryAssignmentSerializer, EventCollaborationSerializer, EventFeedbackSerializer, EventFeedbackResponseSerializer, EventFileSerializer, EventFollowUpSerializer, EventLogisticsSerializer, EventMediaCoverageSerializer, EventPartnershipSerializer, EventPhotoSerializer, EventPromotionSerializer, EventRegistrationSerializer, EventReminderSerializer, EventScheduleSerializer, EventSessionSerializer, EventSpeakerSerializer, EventSponsorSerializer, EventSponsorAgreementSerializer, EventSponsorBenefitSerializer, EventSponsorLogoSerializer, EventSponsorPackageSerializer, EventSponsorPaymentSerializer, EventSponsorshipAgreementDocumentSerializer, EventSponsorshipApplicationSerializer, EventSponsorshipApprovalSerializer, EventSponsorshipCertificateSerializer, EventSponsorshipContractSerializer, EventSponsorshipDowngradeSerializer, EventSponsorshipEvaluationSerializer, EventSponsorshipExtensionSerializer, EventSponsorshipFeedbackSerializer, EventSponsorshipHistorySerializer, EventSponsorshipInvoiceSerializer, EventSponsorshipLetterSerializer, EventSponsorshipLevelSerializer, EventSponsorshipRecognitionSerializer, EventSponsorshipRejectionSerializer, EventSponsorshipRenewalSerializer, EventSponsorshipReportSerializer, EventSponsorshipTerminationSerializer, EventSponsorshipTransferSerializer, EventSponsorshipUpgradeSerializer, EventSurveySerializer, EventSurveyQuestionSerializer, EventSurveyResponseSerializer, EventTagSerializer, EventTagAssignmentSerializer, EventTicketSerializer, EventVideoSerializer, EventReportSerializer, EventInvitationSerializer
+from Events.models import Event, EventCategory, EventAttendance, EventBudget, EventCategoryAssignment, EventCollaboration, EventFeedback, EventFeedbackResponse, EventFile, EventFollowUp, EventLogistics, EventMediaCoverage, EventPartnership, EventPhoto, EventPromotion, EventRegistration, EventReminder, EventSchedule, EventSession, EventSpeaker, EventSponsor, EventSponsorAgreement, EventSponsorBenefit, EventSponsorLogo, EventSponsorPackage, EventSponsorPayment, EventSponsorshipAgreementDocument, EventSponsorshipApplication, EventSponsorshipApproval, EventSponsorshipCertificate, EventSponsorshipContract, EventSponsorshipDowngrade, EventSponsorshipEvaluation, EventSponsorshipExtension, EventSponsorshipFeedback, EventSponsorshipHistory, EventSponsorshipInvoice, EventSponsorshipLetter, EventSponsorshipLevel, EventSponsorshipRecognition, EventSponsorshipRejection, EventSponsorshipRenewal, EventSponsorshipReport, EventSponsorshipTermination, EventSponsorshipTransfer, EventSponsorshipUpgrade, EventSurvey, EventSurveyQuestion, EventSurveyResponse, EventTag, EventTagAssignment, EventTicket, EventVideo, EventReport, EventInvitation, EventLike, EventVisibility, VisibilityLog
+from Events.serializers import EventSerializer, EventCategorySerializer, EventAttendanceSerializer, EventBudgetSerializer, EventCategoryAssignmentSerializer, EventCollaborationSerializer, EventFeedbackSerializer, EventFeedbackResponseSerializer, EventFileSerializer, EventFollowUpSerializer, EventLogisticsSerializer, EventMediaCoverageSerializer, EventPartnershipSerializer, EventPhotoSerializer, EventPromotionSerializer, EventRegistrationSerializer, EventReminderSerializer, EventScheduleSerializer, EventSessionSerializer, EventSpeakerSerializer, EventSponsorSerializer, EventSponsorAgreementSerializer, EventSponsorBenefitSerializer, EventSponsorLogoSerializer, EventSponsorPackageSerializer, EventSponsorPaymentSerializer, EventSponsorshipAgreementDocumentSerializer, EventSponsorshipApplicationSerializer, EventSponsorshipApprovalSerializer, EventSponsorshipCertificateSerializer, EventSponsorshipContractSerializer, EventSponsorshipDowngradeSerializer, EventSponsorshipEvaluationSerializer, EventSponsorshipExtensionSerializer, EventSponsorshipFeedbackSerializer, EventSponsorshipHistorySerializer, EventSponsorshipInvoiceSerializer, EventSponsorshipLetterSerializer, EventSponsorshipLevelSerializer, EventSponsorshipRecognitionSerializer, EventSponsorshipRejectionSerializer, EventSponsorshipRenewalSerializer, EventSponsorshipReportSerializer, EventSponsorshipTerminationSerializer, EventSponsorshipTransferSerializer, EventSponsorshipUpgradeSerializer, EventSurveySerializer, EventSurveyQuestionSerializer, EventSurveyResponseSerializer, EventTagSerializer, EventTagAssignmentSerializer, EventTicketSerializer, EventVideoSerializer, EventReportSerializer, EventInvitationSerializer, EventLikeSerializer, EventVisibilitySerializer, VisibilityLogSerializer
 from Announcements.models import Pin
 from Rooms.permissions import IsModerator
 from rest_framework.filters import SearchFilter, OrderingFilter
@@ -21,6 +21,7 @@ import time
 from Authentication.models import Profile
 from Rooms.models import Room, DefaultRoom, DirectMessage
 from urllib.parse import quote
+from django.core.mail import send_mail
 # Create your views here.
 
 
@@ -49,7 +50,6 @@ class EventViewSet(ModelViewSet):
     
     @action(detail=False, methods=['get'], permission_classes=[IsAuthenticated])
     def upcoming_events(self, request):
-        from django.utils import timezone
         now = timezone.now()
         events = Event.objects.filter(date__gte=now).order_by('date')
         page = self.paginate_queryset(events)
@@ -60,7 +60,6 @@ class EventViewSet(ModelViewSet):
         return Response(serializer.data, status=status.HTTP_200_OK)
     @action(detail=False, methods=['get'], permission_classes=[IsAuthenticated])
     def past_events(self, request):
-        from django.utils import timezone
         now = timezone.now()
         events = Event.objects.filter(date__lt=now).order_by('-date')
         page = self.paginate_queryset(events)
@@ -85,85 +84,6 @@ class EventViewSet(ModelViewSet):
         event.save()
         return Response({'status': 'RSVP cancelled'}, status=status.HTTP_200_OK)
     
-    @action(detail=True, methods=['post'], permission_classes=[IsAuthenticated])
-    def comment(self, request, id=None):
-        event = self.get_object()
-        user = request.user
-        comment_text = request.data.get('comment')
-        if comment_text:
-            from Events.models import EventComment
-            comment = EventComment.objects.create(event=event, user=user, comment=comment_text)
-            comment.save()
-            return Response({'status': 'Comment added'}, status=status.HTTP_200_OK)
-        return Response({'error': 'Comment text is required'}, status=status.HTTP_400_BAD_REQUEST)
-    
-    @action(detail=True, methods=['get'], permission_classes=[IsAuthenticated])
-    def comments(self, request, id=None):
-        event = self.get_object()
-        from Events.models import EventComment
-        comments = EventComment.objects.filter(event=event).order_by('-created_on')
-        serializer = EventCommentSerializer(comments, many=True)
-        return Response(serializer.data, status=status.HTTP_200_OK)
-    
-    @action(detail=True, methods=['post'], permission_classes=[IsAuthenticated])
-    def like(self, request, id=None):
-        event = self.get_object()
-        user = request.user
-        event.likes.add(user)
-        event.save()
-        return Response({'status': 'Event liked'}, status=status.HTTP_200_OK)
-    
-    @action(detail=True, methods=['post'], permission_classes=[IsAuthenticated])
-    def unlike(self, request, id=None):
-        event = self.get_object()
-        user = request.user
-        event.likes.remove(user)
-        event.save()
-        return Response({'status': 'Event unliked'}, status=status.HTTP_200_OK)
-    
-    @action(detail=True, methods=['get'], permission_classes=[IsAuthenticated])
-    def likes(self, request, id=None):
-        event = self.get_object()
-        likes_count = event.likes.count()
-        return Response({'likes_count': likes_count}, status=status.HTTP_200_OK)
-    
-    @action(detail=True, methods=['post'], permission_classes=[IsAuthenticated])
-    def upload_photo(self, request, id=None):
-        event = self.get_object()
-        photo = request.FILES.get('photo')
-        if photo:
-            from Events.models import EventPhoto
-            event_photo = EventPhoto.objects.create(event=event, photo=photo)
-            event_photo.save()
-            return Response({'status': 'Photo uploaded'}, status=status.HTTP_200_OK)
-        return Response({'error': 'Photo file is required'}, status=status.HTTP_400_BAD_REQUEST)
-    
-    @action(detail=True, methods=['get'], permission_classes=[IsAuthenticated])
-    def photos(self, request, id=None):
-        event = self.get_object()
-        from Events.models import EventPhoto
-        photos = EventPhoto.objects.filter(event=event)
-        serializer = EventPhotoSerializer(photos, many=True)
-        return Response(serializer.data, status=status.HTTP_200_OK)
-    
-    @action(detail=True, methods=['post'], permission_classes=[IsAuthenticated])
-    def upload_file(self, request, id=None):
-        event = self.get_object()
-        file = request.FILES.get('file')
-        if file:
-            from Events.models import EventFile
-            event_file = EventFile.objects.create(event=event, file=file)
-            event_file.save()
-            return Response({'status': 'File uploaded'}, status=status.HTTP_200_OK)
-        return Response({'error': 'File is required'}, status=status.HTTP_400_BAD_REQUEST)
-    
-    @action(detail=True, methods=['get'], permission_classes=[IsAuthenticated])
-    def files(self, request, id=None):
-        event = self.get_object()
-        from Events.models import EventFile
-        files = EventFile.objects.filter(event=event)
-        serializer = EventFileSerializer(files, many=True)
-        return Response(serializer.data, status=status.HTTP_200_OK)
     
     @action(detail=True, methods=['post'], permission_classes=[IsAuthenticated])
     def rate(self, request, id=None):
@@ -272,22 +192,8 @@ class EventViewSet(ModelViewSet):
 
         return Response({'status': f'Event shared on {platform}', 'link': link}, status=status.HTTP_200_OK)
     
-    @action(detail=True, methods=['post'], permission_classes=[IsAuthenticated])
-    def report(self, request, id=None):
-        event = self.get_object()
-        reason = request.data.get('reason')
 
-        
-        report = EventReport.objects.create(event=event, user=request.user, report_content=reason, )
-        report.save()
-        return Response({'status': 'Event reported'}, status=status.HTTP_200_OK)
-    
-    @action(detail=True, methods=['post'], permission_classes=[IsAuthenticated])
-    def repost(self, request, id=None):
-        event = self.get_object()
-        user = request.user
-        # Implement repost logic here (e.g., create a new event instance with reference to the original)
-        return Response({'status': 'Event reposted'}, status=status.HTTP_200_OK)
+
 
     
 
@@ -336,16 +242,146 @@ class EventViewSet(ModelViewSet):
         return Response({'error': 'Scheduled time is required'}, status=status.HTTP_400_BAD_REQUEST)
     
     
-         
-    '''Set booking deadlines'''
-    '''Set event expiry'''
-    '''Set reminders'''
-    '''Set material availability period'''
-    '''Add to blocked list'''
-    '''Restrict rooms'''
+    @action(detail=True, methods=['post', 'put', 'patch'])
+    def set_deadlines(self, request):
+        '''Set booking deadlines'''
+        event_id = request.data.get('event_id')
+        deadline = request.data.get('deadline')
+        if not event_id:
+            return Response({'error': 'Event Id needs to be passed.'})
+        
+        if not deadline:
+            return Response({'error': 'Event booking deadline needs to be set.'})
+        
+
+        def dealine_checker(event_id, target_time):
+            try:
+                while True:
+                    now = datetime.now()
+                    if target_time <= now:
+                        try:
+                            event = Event.objects.get(id=event_id)
+                            event.deadline_reached = True
+                            event.booking_status = 'closed'
+                            event.save()
+                        except Event.DoesNotExist:
+                            pass
+                    break
+                time.sleep(1)
+            except:
+                return
+        
+        deadline_thread = Thread(target=dealine_checker, args=(event_id, deadline), daemon=True)
+        deadline_thread.start()
+
+        return Response({
+            'message': f'The deadline for the event has reached.',
+            'event_id': event_id
+        }, status=status.HTTP_200_OK)
+
+
+    @action(detail=True, methods=['post', 'put', 'patch'])
+    def set_event_expiry(self, request):
+        '''Set event expiry'''
+        '''Set booking deadlines'''
+        event_id = request.data.get('event_id')
+        expiry = request.data.get('expiry')
+        if not event_id:
+            return Response({'error': 'Event Id needs to be passed.'})
+        
+        if not expiry:
+            return Response({'error': 'Event booking expiry needs to be set.'})
+        
+
+        def dealine_checker(event_id, target_time):
+            try:
+                while True:
+                    now = datetime.now()
+                    if target_time <= now:
+                        try:
+                            event = Event.objects.get(id=event_id)
+                            event.deadline_reached = True
+                            event.booking_status = 'closed'
+                            event.save()
+                        except Event.DoesNotExist:
+                            pass
+                    break
+                time.sleep(1)
+            except:
+                return
+        
+        expiry_thread = Thread(target=dealine_checker, args=(event_id, expiry), daemon=True)
+        expiry_thread.start()
+
+        return Response({
+            'message': f'The expiry for the event has reached.',
+            'event_id': event_id
+        }, status=status.HTTP_200_OK)
+    
+    @action(detail=False, methods=['post', 'put', 'patch'])
+    def set_reminder(self, request):
+        '''Set reminders'''
+        event = self.get_object()
+        event_id = request.data.get('event_id')
+        notification_period = request.data.get('notification_period')
+
+        if not notification_period:
+            return Response({'error': 'The notification period for the event is suppossed to be set.'}, status=status.HTTP_403_FORBIDDEN)
+
+        event_date = event.event_date
+        try:
+            event_date = Event.objects.get(id=event_id).event_date
+            reminder_date = event_date.minute - notification_period
+
+        except Event.DoesNotExist:
+            return Response({'error': 'The event does not exist.'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        
+        def _set_reminder(event, reminder_date):
+            try:
+                while True:
+                    now = datetime.now()
+                    if reminder_date <= now:
+                        try:
+                            # TODO: reminder sent to the user (logic should be here)
+                            user = request.user
+                            user = Profile.objects.get(user=user)
+                            email = user.user.email
+                            send_mail(f'Reminder: The {event.name} is around the corner.', f'Click to view the event: http://121.0.0.1/events/event/{event.id}', settings.DEFAULT_FROM_EMAIL, [email])
+                        except Exception as e:
+                            pass
+                    break
+                time.sleep(1)
+            except Exception as e:
+                return
+        
+
+        Thread(target=_set_reminder, args=(event, reminder_date), daemon=True)
+        Thread.start()
+
+        return Response({'message': f'A reminder was sent to the user email ({request.user.email}).'}, status=status.HTTP_200_OK)
+    
+    
+    
     '''Block according to the creator'''
 
+class EventVisibilityViewSet(ModelViewSet):
+    serializer_class = EventVisibilitySerializer
+    queryset = EventVisibility.objects.all()
+    permission_classes = [IsAuthenticatedOrReadOnly]
+
+    @action(detail=True, methods=['post'])
+    def create_visibility(self, request):
+        '''Set material availability period'''
+        pass
     
+    '''Add to blocked list'''
+    '''Restrict rooms'''
+
+class VisibilityLogViewSet(ModelViewSet):
+    serializer_class = VisibilityLogSerializer
+    queryset = VisibilityLog.objects.all()
+    permission_classes = [IsAuthenticatedOrReadOnly]
+
 
 class EventCategoryViewSet(ModelViewSet):
     serializer_class = EventCategorySerializer
@@ -435,6 +471,68 @@ class EventFeedbackResponseViewSet(ModelViewSet):
         # shareable_link = f"http://example.com/events/{event.id}/"
         return Response({'status': f'Event shared on {platform}', 'link': link}, status=status.HTTP_200_OK)
 
+
+class EventLikeViewSet(ModelViewSet):
+    serializer_class = EventLikeSerializer
+    queryset = EventLike.objects.all()
+    permission_classes = [IsAuthenticatedOrReadOnly]
+
+    @action(detail=True, methods=['post'], permission_classes=[IsAuthenticated])
+    def comment(self, request, id=None):
+        event = self.get_object()
+        user = request.user
+        comment_text = request.data.get('comment')
+        if comment_text:
+            comment = EventLike.objects.create(event=event, user=user, comment=comment_text)
+            comment.save()
+            return Response({'status': 'Comment added'}, status=status.HTTP_200_OK)
+        return Response({'error': 'Comment text is required'}, status=status.HTTP_400_BAD_REQUEST)
+    
+    @action(detail=True, methods=['get'], permission_classes=[IsAuthenticated])
+    def comments(self, request, id=None):
+        event = self.get_object()
+        comments = EventLike.objects.filter(event=event).order_by('-created_on')
+        serializer = EventLikeSerializer(comments, many=True)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+    
+    @action(detail=True, methods=['post'], permission_classes=[IsAuthenticated])
+    def like(self, request, id=None):
+        event = self.get_object()
+        user = request.user
+
+        if not event:
+            return Response({'error': 'No event was parsed from the frontend.'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+        event = EventLike.objects.filter(event=event, user=user)
+        if not event:
+            event = EventLike.objects.create(event=event, user=user)
+        
+        event.like = True
+        event.save()
+        return Response({'status': 'Event liked'}, status=status.HTTP_200_OK)
+    
+    @action(detail=True, methods=['post'], permission_classes=[IsAuthenticated])
+    def unlike(self, request, id=None):
+        event = self.get_object()
+        user = request.user
+
+        if not event:
+            return Response({'error': 'No event was parsed from the frontend.'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+        event = EventLike.objects.filter(event=event, user=user)
+        if not event:
+            event = EventLike.objects.create(event=event, user=user)
+        
+        event.unlike = True
+        event.save()
+        return Response({'status': 'Event unliked'}, status=status.HTTP_200_OK)
+    
+    @action(detail=True, methods=['get'], permission_classes=[IsAuthenticated])
+    def likes(self, request, id=None):
+        event = self.get_object()
+        likes_count = event.likes.count()
+        return Response({'likes_count': likes_count}, status=status.HTTP_200_OK)
+
 class EventCollaborationViewSet(ModelViewSet):
     serializer_class = EventCollaborationSerializer
     queryset = EventCollaboration.objects.all()
@@ -444,6 +542,7 @@ class EventFileViewSet(ModelViewSet):
     serializer_class = EventFileSerializer
     queryset = EventFile.objects.all()
     permission_classes = [IsAuthenticatedOrReadOnly]
+
 
 class EventInvitationViewSet(ModelViewSet):
     serializer_class = EventInvitationSerializer

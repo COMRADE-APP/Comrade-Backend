@@ -23,6 +23,8 @@ class Organisation(models.Model):
     is_learning_inst = models.BooleanField(default=False)
     industry = models.CharField(max_length=5000)
     created_on = models.DateTimeField(default=datetime.now)
+    members = models.ManyToManyField('Authentication.CustomUser', blank=True)
+
 
 
 class OrgBranch(models.Model):
@@ -37,6 +39,8 @@ class OrgBranch(models.Model):
     town = models.CharField(max_length=100)
     city = models.CharField(max_length=500)
     created_on = models.DateTimeField(default=datetime.now)
+    members = models.ManyToManyField('Authentication.CustomUser', blank=True)
+
 
 
 
@@ -55,6 +59,7 @@ class Division(models.Model):
     name = models.CharField(max_length=500)
     div_code = models.CharField(max_length=200, unique=True, primary_key=True)
     created_on = models.DateTimeField(default=datetime.now)
+    members = models.ManyToManyField('Authentication.CustomUser', blank=True)
 
     
 class Department(models.Model):
@@ -62,6 +67,7 @@ class Department(models.Model):
     name = models.CharField(max_length=500)
     dep_code = models.CharField(max_length=200, unique=True, primary_key=True)
     created_on = models.DateTimeField(default=datetime.now)
+    members = models.ManyToManyField('Authentication.CustomUser', blank=True)
 
 
 class Section(models.Model):
@@ -69,6 +75,7 @@ class Section(models.Model):
     name = models.CharField(max_length=500)
     section_code = models.CharField(max_length=200, unique=True, primary_key=True)
     created_on = models.DateTimeField(default=datetime.now)
+    members = models.ManyToManyField('Authentication.CustomUser', blank=True)
 
 
 class Unit(models.Model):
@@ -76,6 +83,7 @@ class Unit(models.Model):
     name = models.CharField(max_length=500)
     unit_code = models.CharField(max_length=200, unique=True, primary_key=True)
     created_on = models.DateTimeField(default=datetime.now)
+    members = models.ManyToManyField('Authentication.CustomUser', blank=True)
 
 
 class Team(models.Model):
@@ -83,6 +91,7 @@ class Team(models.Model):
     name = models.CharField(max_length=500)
     team_code = models.CharField(max_length=200, unique=True, primary_key=True)
     created_on = models.DateTimeField(default=datetime.now)
+    members = models.ManyToManyField('Authentication.CustomUser', blank=True)
 
 
 class Committee(models.Model):
@@ -90,6 +99,7 @@ class Committee(models.Model):
     name = models.CharField(max_length=500)
     committee_code = models.CharField(max_length=200, unique=True, primary_key=True)
     created_on = models.DateTimeField(default=datetime.now)
+    members = models.ManyToManyField('Authentication.CustomUser', blank=True)
 
 
 class Board(models.Model):
@@ -97,6 +107,7 @@ class Board(models.Model):
     name = models.CharField(max_length=500)
     board_code = models.CharField(max_length=200, unique=True, primary_key=True)
     created_on = models.DateTimeField(default=datetime.now)
+    members = models.ManyToManyField('Authentication.CustomUser', blank=True)
 
 
 class Project(models.Model):
@@ -104,6 +115,7 @@ class Project(models.Model):
     name = models.CharField(max_length=500)
     project_code = models.CharField(max_length=200, unique=True, primary_key=True)
     created_on = models.DateTimeField(default=datetime.now)
+    members = models.ManyToManyField('Authentication.CustomUser', blank=True)
 
 
 class Program(models.Model):
@@ -111,6 +123,7 @@ class Program(models.Model):
     name = models.CharField(max_length=500)
     program_code = models.CharField(max_length=200, unique=True, primary_key=True)
     created_on = models.DateTimeField(default=datetime.now)
+    members = models.ManyToManyField('Authentication.CustomUser', blank=True)
 
 
 class Centre(models.Model):
@@ -118,6 +131,7 @@ class Centre(models.Model):
     name = models.CharField(max_length=500)
     centre_code = models.CharField(max_length=200, unique=True, primary_key=True)
     created_on = models.DateTimeField(default=datetime.now)
+    members = models.ManyToManyField('Authentication.CustomUser', blank=True)
 
 
 class Institute(models.Model):
@@ -125,6 +139,7 @@ class Institute(models.Model):
     name = models.CharField(max_length=500)
     institute_code = models.CharField(max_length=200, unique=True, primary_key=True)
     created_on = models.DateTimeField(default=datetime.now)
+    members = models.ManyToManyField('Authentication.CustomUser', blank=True)
 
 class OtherOrgUnit(models.Model):
     organisation = models.OneToOneField(Organisation, on_delete=models.DO_NOTHING, null=True)
@@ -132,6 +147,7 @@ class OtherOrgUnit(models.Model):
     name = models.CharField(max_length=500)
     unit_code = models.CharField(max_length=200, unique=True, primary_key=True)
     created_on = models.DateTimeField(default=datetime.now)
+    members = models.ManyToManyField('Authentication.CustomUser', blank=True)
 
 
 

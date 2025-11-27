@@ -17,6 +17,7 @@ from django.urls import reverse
 
 
 class RegisterView(APIView):
+    
     def post(self, request):
         serializer = BaseUserSerializer(data = request.data)
 
@@ -82,12 +83,23 @@ class LoginView(APIView):
         if user is None:
             return Response({"detail": "Authentication failed."}, status=status.HTTP_400_BAD_REQUEST)
         
+        # generate verification link
+        uid = urlsafe_base64_encode(force_bytes(user.pk))
+        token = default_token_generator.make_token(user)
+        verify_url = f"{request.scheme}://{request.get_host()}/auth/verify-email/?uid={uid}&token={token}/verify"
+        verify_path = reverse('verify')  # name='verify' in Authentication/urls.py
+        verify_url = request.build_absolute_uri(f"{verify_path}?uid={uid}&token={token}")
+
+        
+        # Send email to the recipient
+        send_mail('Verify your account', f'Click to verify: {verify_url}', settings.DEFAULT_FROM_EMAIL, [user.email])
+        
         data = {
             "user_id": user.id,
             "email": user.email,
             "first_name": user.first_name,
             "user_type": user.user_type,
-            "message": "Login successful."
+            "message": f"Login successful. Enter Verification code sent on your phone number: {user.phone_number : 6f}****"
         }
         return Response(data, status=status.HTTP_200_OK)
     
@@ -112,27 +124,22 @@ class CustomUserViewSet(ModelViewSet):
         serializer = BaseUserSerializer(data=request.data)
         
         if serializer.is_valid():
-            user = serializer.save()            
-            # map user_type -> boolean flag name
-            flag_map = {
-                'student': 'is_student',
-                'lecturer': 'is_lecturer',
-                'organisational_staff': 'is_org_staff',
-                'student_admin': 'is_student_admin',
-                'organisational_admin': 'is_org_admin',
-                'institutional_admin': 'is_inst_admin',
-                'institutional_staff': 'is_inst_staff',
-                'admin': 'is_admin',
-                'moderator': 'is_moderator',
-                'author': 'is_author',
-                'editor': 'is_editor',
-            }
-            flag = flag_map.get(user.user_type)
-            if flag:
-                setattr(user, flag, True)
+            user = serializer.save()    
+
+             # generate verification link
+            uid = urlsafe_base64_encode(force_bytes(user.pk))
+            token = default_token_generator.make_token(user)
+            verify_url = f"{request.scheme}://{request.get_host()}/auth/verify-email/?uid={uid}&token={token}/verify"
+            verify_path = reverse('verify')  # name='verify' in Authentication/urls.py
+            verify_url = request.build_absolute_uri(f"{verify_path}?uid={uid}&token={token}")
+
+            
+            # Send email to the recipient
+            send_mail('Verify your account', f'Click to verify: {verify_url}', settings.DEFAULT_FROM_EMAIL, [user.email])
+            print(send_mail('Verify your account', f'Click to verify: {verify_url}', settings.DEFAULT_FROM_EMAIL, [user.email]))
 
             user.save()
-            return Response({"message": "User registered successfully"}, status=status.HTTP_201_CREATED)
+            return Response({"message": "User registered successfully. Check your email."}, status=status.HTTP_201_CREATED)
         
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 

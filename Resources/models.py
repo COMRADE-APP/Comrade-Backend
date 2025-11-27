@@ -109,6 +109,8 @@ class Resource(models.Model):
     
 class ResourceVisibility(models.Model):
     resource = models.OneToOneField(Resource, on_delete=models.CASCADE, related_name='resource_visibility')
+    scheduled_time = models.DateTimeField(null=True, blank=True)
+    expiry_time = models.DateTimeField(null=True, blank=True)
     rooms = models.ManyToManyField(Room, blank=True)
     default_rooms = models.ManyToManyField(DefaultRoom, blank=True)
     direct_message_rooms = models.ManyToManyField(DirectMessageRoom, blank=True)
@@ -159,9 +161,9 @@ class ResourceVisibility(models.Model):
 
 class VisibilityLog(models.Model):
     resource = models.ForeignKey(Resource, on_delete=models.CASCADE, related_name='visibility_logs')
-    changed_by = models.ForeignKey(Profile, on_delete=models.CASCADE, related_name='visibility_changed_logs', null=True)
-    previous_visibility = models.OneToOneField(ResourceVisibility, on_delete=models.CASCADE, related_name='previous_visibility_logs', null=True)
-    new_visibility = models.OneToOneField(ResourceVisibility, on_delete=models.CASCADE, related_name='new_visibility_logs')
+    changed_by = models.ForeignKey(Profile, on_delete=models.SET_NULL, related_name='visibility_changed_logs', null=True)
+    previous_visibility = models.ForeignKey(ResourceVisibility, on_delete=models.SET_NULL, related_name='previous_visibility_logs', null=True)
+    new_visibility = models.ForeignKey(ResourceVisibility, on_delete=models.SET_NULL, related_name='new_visibility_logs', null=True)
     changed_on = models.DateTimeField(default=datetime.now)
 
     def __str__(self):
