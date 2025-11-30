@@ -48,6 +48,8 @@ INSTALLED_APPS = [
     'Organisation',
     'Institution',
     'Task',
+    'Payment',
+    'Research'
 ]
 
 MIDDLEWARE = [

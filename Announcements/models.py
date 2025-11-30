@@ -11,7 +11,8 @@ ANN_STATUS = (
     ('pending', 'Pending'),
     ('scheduled', 'Scheduled'),
     ('sent', 'Sent'),
-    ('not_sent', 'Not Sent')
+    ('not_sent', 'Not Sent'),
+    ('draft', 'Draft')
 )
 VER_STATUS = (
     ('pending', 'Pending'),
@@ -49,7 +50,7 @@ VIS_TYPES = (
 # Creator's Side of the platform
 """Admins and Moderator's models implemetations inside and outside rooms"""
 class Announcements(models.Model):
-    user = models.OneToOneField(CustomUser, on_delete=models.DO_NOTHING)
+    user = models.ForeignKey(CustomUser, on_delete=models.DO_NOTHING)
     heading = models.CharField(max_length=200, null=False)
     content = models.TextField(max_length=5000, null=False)
     visibility = models.CharField(max_length=200, null=False, choices=VIS_TYPES, default='private')
@@ -63,19 +64,18 @@ class Announcements(models.Model):
 
 
 class AnnouncementsRequest(models.Model):
-    user = models.OneToOneField(Student, on_delete=models.DO_NOTHING)
-    verified_by = models.OneToOneField(CustomUser, on_delete=models.DO_NOTHING)
+    user = models.ForeignKey(Student, on_delete=models.DO_NOTHING)
+    verified_by = models.ForeignKey(CustomUser, on_delete=models.DO_NOTHING)
     verification_status = models.CharField(max_length=200, null=False, choices=VER_STATUS, default='pending')
     heading = models.CharField(max_length=200, null=False)
     content = models.TextField(max_length=5000, null=False)
     visibility = models.CharField(max_length=200, null=False, choices=VIS_TYPES, default='private')
     verification_time_stamp = models.DateTimeField(default=datetime.now)
-    status = models.CharField(max_length=200, choices=ANN_STATUS, 
-    default='pending')
+    status = models.CharField(max_length=200, choices=ANN_STATUS, default='pending')
     time_stamp = models.DateTimeField(default=datetime.now)
 
 class Task(models.Model):
-    user = models.OneToOneField(CustomUser, on_delete=models.DO_NOTHING)
+    user = models.ForeignKey(CustomUser, on_delete=models.DO_NOTHING)
     heading = models.CharField(max_length=200, null=False)
     description = models.TextField(max_length=5000, null=False)
     visibility = models.CharField(max_length=200, null=False, choices=VIS_TYPES, default='private')
@@ -86,7 +86,7 @@ class Task(models.Model):
     time_stamp = models.DateTimeField(default=datetime.now)
 
 class Question(models.Model):
-    task = models.OneToOneField(Task, on_delete=models.DO_NOTHING)
+    task = models.ForeignKey(Task, on_delete=models.DO_NOTHING)
     heading = models.CharField(max_length=200, null=False)
     position = models.IntegerField(default=1)
     description = models.TextField(max_length=5000, null=False)
@@ -103,16 +103,16 @@ class SubQuestion(models.Model):
     time_stamp = models.DateTimeField(default=datetime.now)
 
 class Choice(models.Model):
-    question = models.OneToOneField(Question, on_delete=models.DO_NOTHING, null=True)
-    sub_question = models.OneToOneField(SubQuestion, on_delete=models.DO_NOTHING, null=True, blank=True)
+    question = models.ForeignKey(Question, on_delete=models.DO_NOTHING, null=True)
+    sub_question = models.ForeignKey(SubQuestion, on_delete=models.DO_NOTHING, null=True, blank=True)
     content = models.CharField(max_length=5000, null=False)
     is_correct = models.BooleanField(default=False)
     selected = models.BooleanField(default=False)
     time_stamp = models.DateTimeField(default=datetime.now)
 
 class FileResponse(models.Model):
-    question = models.OneToOneField(Question, on_delete=models.DO_NOTHING)
-    sub_question = models.OneToOneField(SubQuestion, on_delete=models.DO_NOTHING, null=True, blank=True)
+    question = models.ForeignKey(Question, on_delete=models.DO_NOTHING)
+    sub_question = models.ForeignKey(SubQuestion, on_delete=models.DO_NOTHING, null=True, blank=True)
     position = models.IntegerField(default=1)
     description = models.TextField(max_length=5000, null=True, blank=True)
     content = models.FileField(upload_to='task_files/')
@@ -121,7 +121,7 @@ class FileResponse(models.Model):
 
 
 # class SubTask(models.Model):
-#     user = models.OneToOneField(Task, on_delete=models.DO_NOTHING)
+#     user = models.ForeignKey(Task, on_delete=models.DO_NOTHING)
 #     description = models.TextField(max_length=5000, null=False)
 #     time_stamp = models.DateTimeField(default=datetime.now)
 #     task_type = models.CharField(max_length=200, null=False, choices=TASK_TYPE, default='text')
@@ -144,26 +144,27 @@ class FileResponse(models.Model):
 
 """Student's models implemetations"""
 class Text(models.Model):
-    user = models.OneToOneField(CustomUser, on_delete=models.DO_NOTHING)
+    user = models.ForeignKey(CustomUser, on_delete=models.DO_NOTHING)
     content = models.CharField(max_length=5000, null=False)
     status = models.CharField(max_length=200, choices=ANN_STATUS, 
     default='pending')
     time_stamp = models.DateTimeField(default=datetime.now)
-    # source = models.OneToOneField(User, on_delete=models.DO_NOTHING)
+    # source = models.ForeignKey(User, on_delete=models.DO_NOTHING)
 
 class Reply(models.Model):
-    reference_text = models.OneToOneField(Text, on_delete=models.DO_NOTHING)
-    user = models.OneToOneField(Student, on_delete=models.DO_NOTHING)
+    reference_text = models.ForeignKey(Text, on_delete=models.DO_NOTHING)
+    reference_reply = models.ForeignKey('self', on_delete=models.DO_NOTHING, null=True)
+    user = models.ForeignKey(Student, on_delete=models.DO_NOTHING)
     content = models.CharField(max_length=5000, null=False)
     status = models.CharField(max_length=200, choices=ANN_STATUS, 
     default='pending')
     time_stamp = models.DateTimeField(default=datetime.now)
 
 class Reposts(models.Model):
-    user = models.OneToOneField(CustomUser, on_delete=models.DO_NOTHING)
-    announcement = models.OneToOneField(Announcements, blank=True, on_delete=models.DO_NOTHING, null=True)
-    task = models.OneToOneField(Task, blank=True, on_delete=models.DO_NOTHING, null=True)
-    event = models.OneToOneField(Event, blank=True, on_delete=models.DO_NOTHING, null=True)
+    user = models.ForeignKey(CustomUser, on_delete=models.DO_NOTHING)
+    announcement = models.ForeignKey(Announcements, blank=True, on_delete=models.DO_NOTHING, null=True)
+    task = models.ForeignKey(Task, blank=True, on_delete=models.DO_NOTHING, null=True)
+    event = models.ForeignKey(Event, blank=True, on_delete=models.DO_NOTHING, null=True)
     caption = models.TextField(default='', max_length=5000)
     image = models.FileField(upload_to='reposts/images', null=True, blank=True)
     video = models.FileField(upload_to='reposts/videos', null=True, blank=True)
@@ -172,7 +173,7 @@ class Reposts(models.Model):
     default='pending')
 
 class Pin(models.Model):
-    user = models.OneToOneField(CustomUser, on_delete=models.DO_NOTHING)
+    user = models.ForeignKey(CustomUser, on_delete=models.DO_NOTHING)
     announcements = models.ManyToManyField(Announcements, related_name='pinned_announcements', blank=True)
     tasks = models.ManyToManyField(Task, related_name='pinned_tasks', blank=True)
     events = models.ManyToManyField(Event, related_name='pinned_events', blank=True)
@@ -182,45 +183,51 @@ class Pin(models.Model):
     default='pending')
 
 class CompletedTask(models.Model):
-    user = models.OneToOneField(CustomUser, on_delete=models.DO_NOTHING)
-    task = models.OneToOneField(Task, on_delete=models.DO_NOTHING)
+    user = models.ForeignKey(CustomUser, on_delete=models.DO_NOTHING)
+    task = models.ForeignKey(Task, on_delete=models.DO_NOTHING)
     is_completed = models.BooleanField(default=False)
     completed_on = models.DateTimeField(default=datetime.now)
+    status = models.CharField(max_length=200, choices=ANN_STATUS, default='pending')
+
 
 class QuestionResponse(models.Model):
-    user = models.OneToOneField(CustomUser, on_delete=models.DO_NOTHING)
-    task = models.OneToOneField(Task, on_delete=models.DO_NOTHING)
-    question = models.OneToOneField(Question, on_delete=models.DO_NOTHING)
-    sub_question = models.OneToOneField(SubQuestion, on_delete=models.DO_NOTHING, null=True, blank=True)
+    user = models.ForeignKey(CustomUser, on_delete=models.DO_NOTHING)
+    task = models.ForeignKey(Task, on_delete=models.DO_NOTHING)
+    question = models.ForeignKey(Question, on_delete=models.DO_NOTHING)
+    sub_question = models.ForeignKey(SubQuestion, on_delete=models.DO_NOTHING, null=True, blank=True)
     answer_text = models.TextField(max_length=5000, null=False)
-    answer_choice = models.OneToOneField(Choice, on_delete=models.DO_NOTHING)
+    answer_choice = models.ForeignKey(Choice, on_delete=models.DO_NOTHING)
     answer_file = models.FileField(upload_to='task_answers/')
     score = models.FloatField(default=0.0)
     time_stamp = models.DateTimeField(default=datetime.now)
+    status = models.CharField(max_length=200, choices=ANN_STATUS, default='pending')
 
 class TaskResponse(models.Model):
-    user = models.OneToOneField(CustomUser, on_delete=models.DO_NOTHING)
-    task = models.OneToOneField(Task, on_delete=models.DO_NOTHING)
+    user = models.ForeignKey(CustomUser, on_delete=models.DO_NOTHING)
+    task = models.ForeignKey(Task, on_delete=models.DO_NOTHING)
     question_responses = models.ManyToManyField(QuestionResponse, blank=True)
     total_score = models.FloatField(default=0.0)
     time_stamp = models.DateTimeField(default=datetime.now)
+    status = models.CharField(max_length=200, choices=ANN_STATUS, default='pending')
 
 # Remember: Task files saving should be in terms of folders (Weekly, monthly or yearly, daily, or roomwise)
 # FileResponse, CompletedTask, Question, QuestionResponse
 class Reaction(models.Model):
-    user = models.OneToOneField(CustomUser, on_delete=models.DO_NOTHING)
-    announcement = models.OneToOneField(Announcements, blank=True, on_delete=models.DO_NOTHING, null=True)
-    task = models.OneToOneField(Task, blank=True, on_delete=models.DO_NOTHING, null=True)
-    text = models.OneToOneField(Text, blank=True, on_delete=models.DO_NOTHING, null=True)
-    dm = models.OneToOneField('Rooms.DirectMessage', blank=True, on_delete=models.DO_NOTHING, null=True)
+    user = models.ForeignKey(CustomUser, on_delete=models.DO_NOTHING)
+    announcement = models.ForeignKey(Announcements, blank=True, on_delete=models.DO_NOTHING, null=True)
+    task = models.ForeignKey(Task, blank=True, on_delete=models.DO_NOTHING, null=True)
+    text = models.ForeignKey(Text, blank=True, on_delete=models.DO_NOTHING, null=True)
+    dm = models.ForeignKey('Rooms.DirectMessage', blank=True, on_delete=models.DO_NOTHING, null=True)
     reaction_type = models.CharField(max_length=100, null=False)
     time_stamp = models.DateTimeField(default=datetime.now)
+    status = models.CharField(max_length=200, choices=ANN_STATUS, default='pending')
 
 class Comment(models.Model):
-    user = models.OneToOneField(CustomUser, on_delete=models.DO_NOTHING)
-    announcement = models.OneToOneField(Announcements, blank=True, on_delete=models.DO_NOTHING, null=True)
-    task = models.OneToOneField(Task, blank=True, on_delete=models.DO_NOTHING, null=True)
-    text = models.OneToOneField(Text, blank=True, on_delete=models.DO_NOTHING, null=True)
-    dm = models.OneToOneField('Rooms.DirectMessage', blank=True, on_delete=models.DO_NOTHING, null=True)
+    user = models.ForeignKey(CustomUser, on_delete=models.DO_NOTHING)
+    announcement = models.ForeignKey(Announcements, blank=True, on_delete=models.DO_NOTHING, null=True)
+    task = models.ForeignKey(Task, blank=True, on_delete=models.DO_NOTHING, null=True)
+    text = models.ForeignKey(Text, blank=True, on_delete=models.DO_NOTHING, null=True)
+    dm = models.ForeignKey('Rooms.DirectMessage', blank=True, on_delete=models.DO_NOTHING, null=True)
     content = models.TextField(max_length=5000, null=False)
     time_stamp = models.DateTimeField(default=datetime.now)
+    status = models.CharField(max_length=200, choices=ANN_STATUS, default='pending')

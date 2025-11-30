@@ -1,17 +1,59 @@
 from django.shortcuts import render
 from rest_framework.viewsets import ModelViewSet
-from Specialization.models import Specialization, Stack, SavedSpecialization, SavedStack, SpecializationAdmin, SpecializationMembership, SpecializationModerator, SpecializationRoom, StackAdmin, StackMembership, StackModerator, CompletedSpecialization, CompletedStack
-from Specialization.serializers import SpecializationSerializer, StackSerializer, SavedSpecializationSerializer, SavedStackSerializer, SpecializationAdminSerializer, SpecializationMembershipSerializer, SpecializationModeratorSerializer, SpecializationRoomSerializer, StackAdminSerializer, StackMembershipSerializer, StackModeratorSerializer, CompletedSpecializationSerializer, CompletedStackSerializer
+from Specialization.models import Specialization, Stack, SavedSpecialization, SavedStack, SpecializationAdmin, SpecializationMembership, SpecializationModerator, SpecializationRoom, StackAdmin, StackMembership, StackModerator, CompletedSpecialization, CompletedStack, PositionTracker
+from Specialization.serializers import SpecializationSerializer, StackSerializer, SavedSpecializationSerializer, SavedStackSerializer, SpecializationAdminSerializer, SpecializationMembershipSerializer, SpecializationModeratorSerializer, SpecializationRoomSerializer, StackAdminSerializer, StackMembershipSerializer, StackModeratorSerializer, CompletedSpecializationSerializer, CompletedStackSerializer, PositionTrackerSerializer
+from Authentication.models import Profile
+from rest_framework.decorators import action
+from rest_framework import status
+from rest_framework.response import Response
+from rest_framework.permissions import IsAuthenticated
+from django.shortcuts import get_object_or_404
 
 
 # Create your views here.
 class SpecializationViewSet(ModelViewSet):
     queryset = Specialization.objects.all()
     serializer_class = SpecializationSerializer
+    permission_classes = [IsAuthenticated]
 
 class StackViewSet(ModelViewSet):
     queryset = Stack.objects.all()
     serializer_class = StackSerializer
+    permission_classes = [IsAuthenticated]
+
+    @action(detail=True, methods=['post'])
+    def create_stack(self, request):
+        serializer = StackSerializer(data=request.data)
+
+        if not serializer.is_valid:
+            return Response({'error': f'Invalid data input. \n{serializer.error_messages}'}, status=status.HTTP_400_BAD_REQUEST)
+        
+        # profile = Profile.objects.get(user=request.user)
+        profile = get_object_or_404(Profile, user=request.user)
+        serializer.save(created_by=profile)
+
+        data = {
+            'stack_data': serializer.data,
+            'message': 'Stack created successfully.'
+        }
+        return Response(data, status=status.HTTP_201_CREATED)
+    
+    @action(detail=True, methods=['post'])
+    def duplicate_stack(self, request, id=None):
+        serializer = StackSerializer(data=request.data)
+
+        if not serializer.is_valid():
+            return Response({'error': 'Duplication failed. Check if the stack is saved or in draft already.'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        data = {
+            'data': serializer.data,
+            'message': 'Stack duplicated successfully.'
+        }
+
+        return Response(data, status=status.HTTP_201_CREATED)
+
+
+
+
 
 class SavedSpecializationViewSet(ModelViewSet):
     queryset = SavedSpecialization.objects.all()
@@ -57,4 +99,7 @@ class SpecializationRoomViewSet(ModelViewSet):
     queryset = SpecializationRoom.objects.all()
     serializer_class = SpecializationRoomSerializer
 
+class PositionTrackerViewSet(ModelViewSet):
+    queryset = PositionTracker.objects.all()
+    serializer_class = PositionTrackerSerializer
 

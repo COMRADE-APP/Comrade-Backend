@@ -18,21 +18,26 @@ from Events.models import EventReport
 from threading import Thread
 from django.utils import timezone
 import time
-from Authentication.models import Profile
+from Authentication.models import Profile, CustomUser
+from Authentication.serializers import ProfileSerializer
 from Rooms.models import Room, DefaultRoom, DirectMessage
 from urllib.parse import quote
 from django.core.mail import send_mail
+from django.conf import settings
+import copy
+from django.shortcuts import get_object_or_404
+from Resources.views import VISIBILITY_MAP
 # Create your views here.
 
 
 class EventViewSet(ModelViewSet):
     serializer_class = EventSerializer
     queryset = Event.objects.all()
-    permission_classes = [IsModerator]
+    permission_classes = [IsAuthenticated]
     pagination_class = PageNumberPagination
     filter_backends = [SearchFilter, OrderingFilter]
-    lookup_field = 'title'
-    search_fields = ['title', 'description', 'location']
+    lookup_field = 'id'
+    search_fields = ['id', 'name', 'description', 'location']
     filterset_fields = ['date', 'location', 'created_by']
 
     # Custom user actions
@@ -51,7 +56,7 @@ class EventViewSet(ModelViewSet):
     @action(detail=False, methods=['get'], permission_classes=[IsAuthenticated])
     def upcoming_events(self, request):
         now = timezone.now()
-        events = Event.objects.filter(date__gte=now).order_by('date')
+        events = Event.objects.filter(event_date__gte=now).order_by('event_date')
         page = self.paginate_queryset(events)
         if page is not None:
             serializer = self.get_serializer(page, many=True)
@@ -61,7 +66,7 @@ class EventViewSet(ModelViewSet):
     @action(detail=False, methods=['get'], permission_classes=[IsAuthenticated])
     def past_events(self, request):
         now = timezone.now()
-        events = Event.objects.filter(date__lt=now).order_by('-date')
+        events = Event.objects.filter(event_date__lt=now).order_by('-event_date')
         page = self.paginate_queryset(events)
         if page is not None:
             serializer = self.get_serializer(page, many=True)
@@ -69,7 +74,7 @@ class EventViewSet(ModelViewSet):
         serializer = self.get_serializer(events, many=True)
         return Response(serializer.data, status=status.HTTP_200_OK)
     @action(detail=True, methods=['post'], permission_classes=[IsAuthenticated])
-    def rsvp(self, request, id=None):
+    def rsvp(self, request, name=None):
         event = self.get_object()
         user = request.user
         event.attendees.add(user)
@@ -77,7 +82,7 @@ class EventViewSet(ModelViewSet):
         return Response({'status': 'RSVP successful'}, status=status.HTTP_200_OK)
     
     @action(detail=True, methods=['post'], permission_classes=[IsAuthenticated])
-    def cancel_rsvp(self, request, id=None):
+    def cancel_rsvp(self, request, name=None):
         event = self.get_object()
         user = request.user
         event.attendees.remove(user)
@@ -86,29 +91,7 @@ class EventViewSet(ModelViewSet):
     
     
     @action(detail=True, methods=['post'], permission_classes=[IsAuthenticated])
-    def rate(self, request, id=None):
-        event = self.get_object()
-        rating_value = request.data.get('rating')
-        if rating_value and 1 <= int(rating_value) <= 5:
-            from Events.models import EventFeedback
-            rating, created = EventFeedback.objects.get_or_create(event=event, user=request.user)
-            rating.rating = rating_value
-            rating.save()
-            return Response({'status': 'Event rated'}, status=status.HTTP_200_OK)
-        return Response({'error': 'Rating value must be between 1 and 5'}, status=status.HTTP_400_BAD_REQUEST)
-    
-    @action(detail=True, methods=['get'], permission_classes=[IsAuthenticated])
-    def rating(self, request, id=None):
-        event = self.get_object()
-        from Events.models import EventFeedback
-        ratings = EventFeedback.objects.filter(event=event)
-        if ratings.exists():
-            average_rating = ratings.aggregate(models.Avg('rating'))['rating__avg']
-            return Response({'average_rating': average_rating}, status=status.HTTP_200_OK)
-        return Response({'average_rating': 0}, status=status.HTTP_200_OK)
-    
-    @action(detail=True, methods=['post'], permission_classes=[IsAuthenticated])
-    def bookmark(self, request, id=None):
+    def bookmark(self, request, name=None):
         event = self.get_object()
         user = request.user
         bookmarked_events = Pin.objects.create(user=user, event=event)
@@ -116,34 +99,34 @@ class EventViewSet(ModelViewSet):
         return Response({'status': 'Event bookmarked'}, status=status.HTTP_200_OK)
     
     @action(detail=True, methods=['post'], permission_classes=[IsAuthenticated])
-    def remove_bookmark(self, request, id=None):
+    def remove_bookmark(self, request, name=None):
         event = self.get_object()
         user = request.user
         Pin.objects.filter(user=user, event=event).delete()
         return Response({'status': 'Bookmark removed'}, status=status.HTTP_200_OK)
     
     @action(detail=True, methods=['get'], permission_classes=[IsAuthenticated])
-    def is_bookmarked(self, request, id=None):  
+    def is_bookmarked(self, request, name=None):  
         event = self.get_object()
         user = request.user
-        is_bookmarked = Pin.objects.filter(user=user, event=event).exists()
+        is_bookmarked = Pin.objects.filter(user=user, events=event).exists()
         return Response({'is_bookmarked': is_bookmarked}, status=status.HTTP_200_OK)
     
     @action(detail=True, methods=['get'], permission_classes=[IsAuthenticated])
-    def attendees(self, request, id=None):
+    def attendees(self, request, name=None):
         event = self.get_object()
         attendees = event.attendees.all()
-        attendees_data = [{'id': attendee.id, 'username': attendee.username} for attendee in attendees]
+        attendees_data = [{'last_name': attendee.last_name, 'first_name': attendee.first_name} for attendee in attendees]
         return Response(attendees_data, status=status.HTTP_200_OK)
     
     @action(detail=True, methods=['get'], permission_classes=[IsAuthenticated])
-    def attendee_count(self, request, id=None):
+    def attendee_count(self, request, name=None):
         event = self.get_object()
         count = event.attendees.count()
         return Response({'attendee_count': count}, status=status.HTTP_200_OK)
     
     @action(detail=True, methods=['post'], permission_classes=[IsAuthenticated])
-    def share(self, request, id=None):
+    def share(self, request, name=None):
         event = self.get_object()
         platform = request.data.get('platform')
         link = request.data.get('link')
@@ -201,7 +184,7 @@ class EventViewSet(ModelViewSet):
     # Moderator/Admin actions
     '''Actions for admin/moderator users to manage events such as approve, reject, feature, etc.'''
     @action(detail=True, methods=['put', 'patch'])
-    def schedule_event(self, request, pk=None):
+    def schedule_event(self, request, name=None):
         '''Schedule events'''
         event_id = request.data.get('id')
         event = Event.objects.get(id=event_id)
@@ -360,22 +343,421 @@ class EventViewSet(ModelViewSet):
 
         return Response({'message': f'A reminder was sent to the user email ({request.user.email}).'}, status=status.HTTP_200_OK)
     
+    # from the normal user
+    @action(detail=True, methods=['post'])
+    def block_creator_content(self, request):
+        '''Block according to the creator'''
+        # TODO: choose the identifier for the creator to be identify them easily
+        creator_email = request.data.get('creator_email')
+
+        try:
+            creator = CustomUser.objects.get(email=creator_email)
+            user = CustomUser.objects.get(email=request.user.email)
+
+        except CustomUser.DoesNotExist:
+            return Response({'error': f'User with the email {creator_email} does not exist.'}, status=status.HTTP_404_NOT_FOUND)
+
+        try:
+            blocked_events = Event.objects.filter(created_by=creator)
+            profile = Profile.objects.get(user=user)
+            profile.blocked_events.add(blocked_events)
+            profile.save()
+
+            return Response({'message': f'Events from {profile.user.first_name} {profile.user.last_name} has been blocked. Click on blocked events to view them.'}, status=status.HTTP_200_OK)
+
+        except Event.DoesNotExist:
+            return Response({'error': 'The creator does not has not created any events yet.'}, status=status.HTTP_404_NOT_FOUND)
+        
+    # Set members to viewable
+    @action(detail=True, methods=['post'])
+    def activate_attendees_view(self, request, name=None):
+        event = self.get_object()
+
+        if not event:
+            return Response({'error': 'No event was detected.'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        
+        event.attendees_viewable = True
+        event.save()
+        # attendees = ProfileSerializer(data=(event.attendees), many=True)
+        data = {f'{attendee.first_name} {attendee.last_name}' for attendee in event.attendees}
+        data['message'] = f'Attendees for the event ({event.name}) are now viewable.'
+
+        return Response(data, status=status.HTTP_200_OK)
     
+    # Deactivate the event feedback giving
+    @action(detail=True, methods=['post'])
+    def deactivate_feedback(self, request, name=None):
+        event = self.get_object()
+
+        if not event:
+            return Response({'error': 'No event was detected.'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        
+        event.activate_feedback = False
+        event.save()
+        # attendees = ProfileSerializer(data=(event.attendees), many=True)
+        data = {f'{attendee.first_name} {attendee.last_name}' for attendee in event.attendees}
+        data['message'] = f'Attendees for the event ({event.name}) are now viewable.'
+
+        return Response(data, status=status.HTTP_200_OK)
     
-    '''Block according to the creator'''
+    @action(detail=True, methods=['post'])
+    def duplicate_event(self, request, name=None):
+        """ Duplicate Events Attrributes"""
+        event = EventSerializer(data=request.data)
+        event.validated_data.pop('id')
+        event.save()
+        return Response({'message': 'Event duplicated successfully. Saved as draft.'}, status=status.HTTP_201_CREATED)
+
+
+    
+
+
 
 class EventVisibilityViewSet(ModelViewSet):
     serializer_class = EventVisibilitySerializer
     queryset = EventVisibility.objects.all()
     permission_classes = [IsAuthenticatedOrReadOnly]
 
+    # @action(detail=True, methods=['post'])
+    # def create_visibility(self, request):
+    #     '''Set material availability period'''
+    #     pass
+    
+    # '''Add to blocked list'''
+    # '''Restrict rooms'''
+     # Creating a visibility and logging it (for the first time).
     @action(detail=True, methods=['post'])
     def create_visibility(self, request):
-        '''Set material availability period'''
-        pass
+        event_id = request.data.get("event_id")
+        visibility_groups = request.data.get("visibility", {})
+
+        if not event_id:
+            return Response({"error": "event_id is required."}, status=status.HTTP_400_BAD_REQUEST)
+
+        event = get_object_or_404(Event, id=event_id)
+
+        visibility, created = EventVisibility.objects.get_or_create(event=event)
+        old_visibility = None  # No previous visibility for creation
+        changed_by = request.user
+
+        for group_name, ids in visibility_groups.items():
+
+            if group_name not in VISIBILITY_MAP:
+                return Response({
+                    "error": f"Invalid visibility type: {group_name}"
+                }, status=status.HTTP_400_BAD_REQUEST)
+
+            model, field_name = VISIBILITY_MAP[group_name]
+
+            # Fetch all objects matching the IDs
+            objects = model.objects.filter(id__in=ids)
+
+            if objects.count() != len(ids):
+                return Response({
+                    "error": f"Some IDs in {group_name} do not exist."
+                }, status=status.HTTP_400_BAD_REQUEST)
+
+            # Add to the many-to-many field
+            getattr(visibility, field_name).add(*objects)
+
+        visibility.save()
+        new_visibility = copy.copy(visibility)
+        try:
+            VisibilityLog.objects.create(
+                event=event,
+                old_visibility=old_visibility,
+                new_visibility=new_visibility,
+                changed_by=changed_by
+            )
+            return Response({
+                "message": "Visibility created successfully and logged.", "visibility": visibility_groups
+            }, status=201)
+        except Exception as e:
+            return Response({
+                "error": f"Failed to log visibility creation: {str(e)}"
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+    #
+    @action(detail=True, methods=['patch', 'put'])
+    def remove_visibility(self, request, pk=None):
+        visibility_id = request.data.get("visibility_id")
+        visibility_groups = request.data.get("visibility", {})
+
+        if not visibility_id:
+            return Response({"error": "visibility_id is required."}, status=status.HTTP_400_BAD_REQUEST)
+
+        visibility = get_object_or_404(EventVisibility, id=visibility_id)
+        if not visibility:
+            return Response({"error": "EventVisibility not found."}, status=404)
+
+        old_visibility = copy.copy(visibility)
+
+        for group_name, ids in visibility_groups.items():
+
+            if group_name not in VISIBILITY_MAP:
+                return Response({
+                    "error": f"Invalid visibility type: {group_name}"
+                }, status=status.HTTP_400_BAD_REQUEST)
+
+            model, field_name = VISIBILITY_MAP[group_name]
+
+            # Fetch all objects matching the IDs
+            objects = model.objects.filter(id__in=ids)
+
+            if objects.count() != len(ids):
+                return Response({
+                    "error": f"Some IDs in {group_name} do not exist."
+                }, status=status.HTTP_400_BAD_REQUEST)
+
+            # Remove from the many-to-many field
+            getattr(visibility, field_name).remove(*objects)
+
+        visibility.save()
+        new_visibility = copy.copy(visibility)
+        changed_by = request.user
+
+        try:
+            if old_visibility != new_visibility:
+                VisibilityLog.objects.create(
+                    event=visibility.event,
+                    old_visibility=old_visibility,
+                    new_visibility=new_visibility,
+                    changed_by=changed_by
+                )
+                return Response({
+                        "message": "Visibility items removed successfully. The action has been logged.",
+                        "removed": visibility_groups
+                    }, status=status.HTTP_200_OK)
+        except Exception as e:
+            return Response({
+                "error": f"Failed to log visibility change: {str(e)}"
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)        
+
     
-    '''Add to blocked list'''
-    '''Restrict rooms'''
+    # @action(detail=True, methods=['patch', 'put'])
+    # def add_visibility(self, request, pk=None):
+    #     visibility_id = request.data.get("visibility_id")
+    #     visibility_groups = request.data.get("visibility", {})
+
+    #     if not visibility_id:
+    #         return Response({"error": "visibility_id is required."}, status=status.HTTP_400_BAD_REQUEST)
+
+    #     visibility = get_object_or_404(EventVisibility, id=visibility_id)
+
+    #     for group_name, ids in visibility_groups.items():
+
+    #         if group_name not in VISIBILITY_MAP:
+    #             return Response({
+    #                 "error": f"Invalid visibility type: {group_name}"
+    #             }, status=status.HTTP_400_BAD_REQUEST)
+
+    #         model, field_name = VISIBILITY_MAP[group_name]
+
+    #         # Fetch all objects matching the IDs
+    #         objects = model.objects.filter(id__in=ids)
+
+    #         if objects.count() != len(ids):
+    #             return Response({
+    #                 "error": f"Some IDs in {group_name} do not exist."
+    #             }, status=status.HTTP_400_BAD_REQUEST)
+
+    #         # Add to the many-to-many field
+    #         getattr(visibility, field_name).add(*objects)
+
+    #     visibility.save()
+
+    #     return Response({
+    #         "message": "Visibility items added successfully.",
+    #         "added": visibility_groups
+    #     }, status=status.HTTP_200_OK)
+    
+    # Make a event public
+    @action(detail=True, methods=['post', 'put', 'patch'])
+    def make_public(self, request, pk=None):
+        visibility_id = request.data.get("visibility_id")
+        if not visibility_id:
+            return Response({"error": "visibility_id is required."}, status=status.HTTP_400_BAD_REQUEST)
+        
+        visibility = get_object_or_404(EventVisibility, id=visibility_id)
+        old_visibility = visibility
+        created_by = request.user
+        
+        visibility.event.visibility = 'public'
+        visibility.event.save()
+        visibility.save()
+        new_visibility = copy.copy(visibility)
+
+        try:
+            VisibilityLog.objects.create(
+                event=visibility.event,
+                old_visibility=old_visibility,
+                new_visibility=new_visibility,
+                changed_by=created_by
+            )
+            return Response({
+                "message": "event made public successfully and logged."
+            }, status=status.HTTP_200_OK)
+        except Exception as e:
+            return Response({
+                "error": f"Failed to log making event public: {str(e)}"
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        
+    @action(detail=False, methods=['post', 'put', 'patch'])
+    def set_duration_availability(self, request):
+        visibility_id = request.data.get("visibility_id")
+        visibility_groups = request.data.get("visibility", {})
+        expiry_time = request.data.get('expiry_time')
+        
+
+        if not visibility_id:
+            return Response({"error": "visibility_id is required."}, status=status.HTTP_400_BAD_REQUEST)
+
+        visibility = get_object_or_404(EventVisibility, id=visibility_id)
+        old_visibility = copy.copy(visibility)
+        created_by = request.user
+
+
+        for group_name, ids in visibility_groups.items():
+
+            if group_name not in VISIBILITY_MAP:
+                return Response({
+                    "error": f"Invalid visibility type: {group_name}"
+                }, status=status.HTTP_400_BAD_REQUEST)
+
+            model, field_name = VISIBILITY_MAP[group_name]
+
+            # Fetch all objects matching the IDs
+            objects = model.objects.filter(id__in=ids)
+
+            if objects.count() != len(ids):
+                return Response({
+                    "error": f"Some IDs in {group_name} do not exist."
+                }, status=status.HTTP_400_BAD_REQUEST)
+
+            # Add to the many-to-many field
+            getattr(visibility, field_name).add(*objects)
+
+        visibility.save()
+        new_visibility = copy.copy(visibility)
+
+        VisibilityLog.objects.create(
+                event=visibility.event,
+                old_visibility=old_visibility,
+                new_visibility=new_visibility,
+                changed_by=created_by
+            )
+
+        # check if expiry time is reached
+        def _expiry_checker(visibility_id, target_time):
+            try:
+                while True:
+                    now = datetime.now()
+                    if now >= target_time:
+                        try:
+                            visibility = EventVisibility.objects.get(pk=visibility_id)
+                            # remove the visibility
+                            getattr(visibility, field_name).remove(*objects)
+                            VisibilityLog.objects.create(
+                                event=visibility.event,
+                                old_visibility=new_visibility,
+                                new_visibility=old_visibility,
+                                changed_by=created_by
+                            )
+                            visibility.save()
+                        except EventVisibility.DoesNotExist:
+                            pass
+                    break
+                time.sleep(1)
+            except Exception:
+                # fail silently for background checker
+                return
+
+        checker_thread = Thread(target=_expiry_checker, args=(visibility_id, expiry_time), daemon=True)
+        checker_thread.start()
+
+        return Response({
+            "message": "Visibility items added successfully.",
+            "added": visibility_groups
+        }, status=status.HTTP_200_OK)
+    
+    @action(detail=False, methods=['post', 'put', 'patch'])
+    def schedule_visibility(self, request):
+        visibility_id = request.data.get("visibility_id")
+        visibility_groups = request.data.get("visibility", {})
+        expiry_time = request.data.get('expiry_time')
+        event_id = request.data.get('event_id')
+        
+
+        if not expiry_time:
+            return Response({"error": "Expiry time is required."}, status=status.HTTP_400_BAD_REQUEST)
+        
+        if not event_id:
+            return Response({"error": "event is required."}, status=status.HTTP_400_BAD_REQUEST)
+        
+        if not visibility_id and event_id:
+            event = get_object_or_404(Event, id=event_id)
+
+            visibility = EventVisibility.objects.create(event=event, expiry_time=expiry_time)
+        else:
+            visibility = get_object_or_404(EventVisibility, id=visibility_id)
+
+        old_visibility = copy.copy(visibility)
+        created_by = request.user
+
+
+        # check if expiry time is reached
+        def _schedule_checker(visibility_id, target_time):
+            try:
+                while True:
+                    now = datetime.now()
+                    if now >= target_time:
+                        try:
+                             for group_name, ids in visibility_groups.items():
+
+                                if group_name not in VISIBILITY_MAP:
+                                    return Response({
+                                        "error": f"Invalid visibility type: {group_name}"
+                                    }, status=status.HTTP_400_BAD_REQUEST)
+
+                                model, field_name = VISIBILITY_MAP[group_name]
+
+                                # Fetch all objects matching the IDs
+                                objects = model.objects.filter(id__in=ids)
+
+                                if objects.count() != len(ids):
+                                    return Response({
+                                        "error": f"Some IDs in {group_name} do not exist."
+                                    }, status=status.HTTP_400_BAD_REQUEST)
+
+                                # Add to the many-to-many field
+                                getattr(visibility, field_name).add(*objects)
+
+                                visibility.save()
+                                new_visibility = copy.copy(visibility)
+
+                                VisibilityLog.objects.create(
+                                        event=visibility.event,
+                                        old_visibility=old_visibility,
+                                        new_visibility=new_visibility,
+                                        changed_by=created_by
+                                    )
+                                visibility.save()
+                        except EventVisibility.DoesNotExist:
+                            pass
+                    break
+                time.sleep(1)
+            except Exception:
+                # fail silently for background checker
+                return
+
+        checker_thread = Thread(target=_schedule_checker, args=(visibility_id, expiry_time), daemon=True)
+        checker_thread.start()
+
+        return Response({
+            "message": "Visibility items added successfully.",
+            "added": visibility_groups
+        }, status=status.HTTP_200_OK)
 
 class VisibilityLogViewSet(ModelViewSet):
     serializer_class = VisibilityLogSerializer
@@ -408,13 +790,39 @@ class EventFeedbackViewSet(ModelViewSet):
     queryset = EventFeedback.objects.all()
     permission_classes = [IsAuthenticatedOrReadOnly]
 
+    @action(detail=True, methods=['post'], permission_classes=[IsAuthenticated])
+    def rate(self, request, name=None):
+        event = self.get_object()
+        if not event.activate_feedback:
+            return Response({'message': 'This event does not allow feedback.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        rating_value = request.data.get('rating')
+        if rating_value and 1 <= int(rating_value) <= 5:
+            rating, created = EventFeedback.objects.get_or_create(event=event, user=request.user)
+            rating.rating = rating_value
+            rating.save()
+            return Response({'status': 'Event rated'}, status=status.HTTP_200_OK)
+        return Response({'error': 'Rating value must be between 1 and 5'}, status=status.HTTP_400_BAD_REQUEST)
+    
+    @action(detail=True, methods=['get'], permission_classes=[IsAuthenticated])
+    def rating(self, request, name=None):
+        event = self.get_object()
+        if not event.viewable:
+            return Response({'message': 'This event does not allow comments viewwing.'}, status=status.HTTP_400_BAD_REQUEST)
+        
+        ratings = EventFeedback.objects.filter(event=event)
+        if ratings.exists():
+            average_rating = ratings.aggregate(models.Avg('rating'))['rating__avg']
+            return Response({'average_rating': average_rating}, status=status.HTTP_200_OK)
+        return Response({'average_rating': 0}, status=status.HTTP_200_OK)
+
 class EventFeedbackResponseViewSet(ModelViewSet):
     serializer_class = EventFeedbackResponseSerializer
     queryset = EventFeedbackResponse.objects.all()
     permission_classes = [IsModerator]
 
     @action(detail=True, methods=['post'], permission_classes=[IsAuthenticated])
-    def respond(self, request, id=None):
+    def respond(self, request, name=None):
         serializer = EventFeedbackResponseSerializer(data=request.data)
         if not serializer.is_valid():
             return Response({'error': f'Invalid data input. This is the error: {serializer.error_messages}'}, status=status.HTTP_400_BAD_REQUEST)
@@ -436,7 +844,7 @@ class EventFeedbackResponseViewSet(ModelViewSet):
         return Response({'status': 'Response submitted successfully'}, status=status.HTTP_200_OK)
 
     @action(detail=True, methods=['post'], permission_classes=[IsAuthenticated])
-    def block_from_creator(self, request, id=None):
+    def block_from_creator(self, request, name=None):
         feedback = self.get_object()
         event = feedback.event
         creator = event.created_by
@@ -448,7 +856,7 @@ class EventFeedbackResponseViewSet(ModelViewSet):
         return Response({'status': 'Creator blocked successfully'}, status=status.HTTP_200_OK)
 
     @action(detail=True, methods=['post'], permission_classes=[IsAuthenticated])
-    def unblock_from_creator(self, request, id=None):
+    def unblock_from_creator(self, request, name=None):
         feedback = self.get_object()
         event = feedback.event
         creator = event.created_by
@@ -461,7 +869,7 @@ class EventFeedbackResponseViewSet(ModelViewSet):
 
     # TODO: Implement sharing after dms and rooms are configured
     @action(detail=True, methods=['post'], permission_classes=[IsAuthenticated])
-    def share_event(self, request, id=None):
+    def share_event(self, request, name=None):
         '''Share event from feedback'''
         feedback = self.get_object()
         event = feedback.event
@@ -470,6 +878,8 @@ class EventFeedbackResponseViewSet(ModelViewSet):
         # Implement sharing logic here (e.g., generate shareable link, integrate with social media APIs)
         # shareable_link = f"http://example.com/events/{event.id}/"
         return Response({'status': f'Event shared on {platform}', 'link': link}, status=status.HTTP_200_OK)
+    
+
 
 
 class EventLikeViewSet(ModelViewSet):
@@ -478,10 +888,13 @@ class EventLikeViewSet(ModelViewSet):
     permission_classes = [IsAuthenticatedOrReadOnly]
 
     @action(detail=True, methods=['post'], permission_classes=[IsAuthenticated])
-    def comment(self, request, id=None):
+    def comment(self, request, name=None):
         event = self.get_object()
         user = request.user
         comment_text = request.data.get('comment')
+        if not event.activate_feedback:
+            return Response({'message': 'This event does not allow feedback.'}, status=status.HTTP_400_BAD_REQUEST)
+        
         if comment_text:
             comment = EventLike.objects.create(event=event, user=user, comment=comment_text)
             comment.save()
@@ -489,16 +902,22 @@ class EventLikeViewSet(ModelViewSet):
         return Response({'error': 'Comment text is required'}, status=status.HTTP_400_BAD_REQUEST)
     
     @action(detail=True, methods=['get'], permission_classes=[IsAuthenticated])
-    def comments(self, request, id=None):
+    def comments(self, request, name=None):
         event = self.get_object()
+
+        if not event.viewable:
+            return Response({'message': 'This event does not allow comments viewwing.'}, status=status.HTTP_400_BAD_REQUEST)
         comments = EventLike.objects.filter(event=event).order_by('-created_on')
         serializer = EventLikeSerializer(comments, many=True)
         return Response(serializer.data, status=status.HTTP_200_OK)
     
     @action(detail=True, methods=['post'], permission_classes=[IsAuthenticated])
-    def like(self, request, id=None):
+    def like(self, request, name=None):
         event = self.get_object()
         user = request.user
+
+        if not event.activate_feedback:
+            return Response({'message': 'This event does not allow feedback.'}, status=status.HTTP_400_BAD_REQUEST)
 
         if not event:
             return Response({'error': 'No event was parsed from the frontend.'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
@@ -512,9 +931,12 @@ class EventLikeViewSet(ModelViewSet):
         return Response({'status': 'Event liked'}, status=status.HTTP_200_OK)
     
     @action(detail=True, methods=['post'], permission_classes=[IsAuthenticated])
-    def unlike(self, request, id=None):
+    def unlike(self, request, name=None):
         event = self.get_object()
         user = request.user
+        
+        if not event.activate_feedback:
+            return Response({'message': 'This event does not allow feedback.'}, status=status.HTTP_400_BAD_REQUEST)
 
         if not event:
             return Response({'error': 'No event was parsed from the frontend.'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
@@ -528,8 +950,12 @@ class EventLikeViewSet(ModelViewSet):
         return Response({'status': 'Event unliked'}, status=status.HTTP_200_OK)
     
     @action(detail=True, methods=['get'], permission_classes=[IsAuthenticated])
-    def likes(self, request, id=None):
+    def likes(self, request, name=None):
         event = self.get_object()
+
+        if not event.viewable:
+            return Response({'message': 'This event does not allow comments viewwing.'}, status=status.HTTP_400_BAD_REQUEST)
+        
         likes_count = event.likes.count()
         return Response({'likes_count': likes_count}, status=status.HTTP_200_OK)
 
@@ -586,7 +1012,7 @@ class EventRegistrationViewSet(ModelViewSet):
 
 
     @action(detail=True, methods=['post'])
-    def book_slot(self, request, id=None):
+    def book_slot(self, request, name=None):
         event = self.get_object()
         serializer = EventRegistrationSerializer(data=request.data)
 

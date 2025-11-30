@@ -1,6 +1,6 @@
 from django.urls import path, include
 from rest_framework.routers import DefaultRouter
-from Specialization.views import SpecializationViewSet, StackViewSet, SavedSpecializationViewSet, SavedStackViewSet, SpecializationAdminViewSet, SpecializationMembershipViewSet, SpecializationModeratorViewSet, SpecializationRoomViewSet, StackAdminViewSet, StackMembershipViewSet, StackModeratorViewSet, CompletedSpecializationViewSet, CompletedStackViewSet
+from Specialization.views import SpecializationViewSet, StackViewSet, SavedSpecializationViewSet, SavedStackViewSet, SpecializationAdminViewSet, SpecializationMembershipViewSet, SpecializationModeratorViewSet, SpecializationRoomViewSet, StackAdminViewSet, StackMembershipViewSet, StackModeratorViewSet, CompletedSpecializationViewSet, CompletedStackViewSet, PositionTrackerViewSet
 
 
 router = DefaultRouter()
@@ -18,6 +18,7 @@ router.register(r'stack_moderators', StackModeratorViewSet, basename='stack_mode
 router.register(r'specialization_memberships', SpecializationMembershipViewSet, basename='specialization_membership')
 router.register(r'stack_memberships', StackMembershipViewSet, basename='stack_membership')
 router.register(r'specialization_rooms', SpecializationRoomViewSet, basename='specialization_room')
+router.register(r'position_trackers', PositionTrackerViewSet, basename='position_tracker')
 
 
 

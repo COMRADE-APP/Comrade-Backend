@@ -2,6 +2,7 @@ from django.db import models
 from Authentication.models import Student, StudentAdmin, OrgAdmin, OrgStaff, InstAdmin, InstStaff, Lecturer, CustomUser, Profile
 from Organisation.models import Organisation, OrgBranch, Division, Department, Section, Team, Project, Centre, Committee, Board, Unit, Institute, Program, OtherOrgUnit
 from Institution.models import Institution, InstBranch, Faculty, VCOffice, InstDepartment, AdminDep, Programme, HR, Admissions, HealthServices, Security, StudentAffairs, SupportServices, Finance, Marketing, Legal, ICT, CareerOffice, Counselling, RegistrarOffice, Transport, Library, Hostel, Cafeteria, OtherInstitutionUnit
+# from Resources.models import Resource
 
 from datetime import datetime, timezone
 
@@ -87,6 +88,9 @@ class Event(models.Model):
     end_time = models.TimeField()
     booking_deadline = models.DateTimeField(default=datetime.now)
     booking_status = models.CharField(max_length=200, choices=BOOKING_STATE, default='pending')
+    attendees = models.ManyToManyField(CustomUser, blank=True, related_name='event_attendees')
+    attendees_viewable = models.BooleanField(default=False)
+    activate_feedback = models.BooleanField(default=True)
     event_date = models.DateTimeField(default=datetime.now)
     deadline_reached = models.BooleanField(default=False)
     location = models.CharField(max_length=300)
@@ -97,6 +101,7 @@ class Event(models.Model):
 
     def __str__(self):
         return self.name
+    
 
 class EventVisibility(models.Model):
     event = models.OneToOneField(Event, on_delete=models.CASCADE, related_name='event_visibility')
@@ -177,6 +182,7 @@ class EventLike(models.Model):
     like = models.BooleanField(default=False)
     comment = models.TextField(max_length=2000, null=True)
     reaction = models.CharField(max_length=2000)
+    viewable = models.BooleanField(default=True)
     created_on = models.DateTimeField(default=datetime.now)
     
 class EventFeedback(models.Model):
@@ -185,6 +191,7 @@ class EventFeedback(models.Model):
     feedback = models.TextField(max_length=2000, default='')
     rating = models.IntegerField(default=0)
     attendendance_status = models.CharField(max_length=200, choices=ATTEND_STATE, default='neutral')
+    viewable = models.BooleanField(default=True)
     submitted_on = models.DateTimeField(auto_now_add=True)
 
     def __str__(self):

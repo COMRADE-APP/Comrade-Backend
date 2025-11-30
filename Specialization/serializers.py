@@ -1,5 +1,5 @@
 from rest_framework.serializers import ModelSerializer
-from Specialization.models import Specialization, Stack, SavedSpecialization, SavedStack, SpecializationAdmin, SpecializationMembership, SpecializationModerator, SpecializationRoom, StackAdmin, StackMembership, StackModerator, CompletedSpecialization, CompletedStack
+from Specialization.models import Specialization, Stack, SavedSpecialization, SavedStack, SpecializationAdmin, SpecializationMembership, SpecializationModerator, SpecializationRoom, StackAdmin, StackMembership, StackModerator, CompletedSpecialization, CompletedStack, PositionTracker
 
 
 class SpecializationSerializer(ModelSerializer):
@@ -65,5 +65,10 @@ class CompletedStackSerializer(ModelSerializer):
 class SpecializationRoomSerializer(ModelSerializer):
     class Meta:
         model = SpecializationRoom
+        fields = '__all__'
+
+class PositionTrackerSerializer(ModelSerializer):
+    class Meta:
+        model = PositionTracker
         fields = '__all__'
 

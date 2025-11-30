@@ -5,6 +5,7 @@ from Authentication.models import Profile
 from Institution.models import Institution, InstBranch, Faculty, VCOffice, InstDepartment, AdminDep, Programme, HR, Admissions, HealthServices, Security, StudentAffairs, SupportServices, Finance, Marketing, Legal, ICT, CareerOffice, Counselling, RegistrarOffice, Transport, Library, Hostel, Cafeteria, OtherInstitutionUnit
 from Organisation.models import Organisation, OrgBranch, Division, Department, Section, Team, Project, Centre, Committee, Board, Unit, Institute, Program, OtherOrgUnit
 from datetime import datetime
+from Events.models import Event 
 
 
 
@@ -75,6 +76,7 @@ class Resource(models.Model):
     res_text = models.TextField(blank=True, null=True)
     res_link = models.URLField(blank=True, null=True)
     created_by = models.ForeignKey(Profile, related_name='created_resources', on_delete=models.CASCADE, null=True)
+    price_tag = models.DecimalField(decimal_places=2, max_digits=100, default=0.0)
     authors = models.ManyToManyField(Profile, related_name='authored_resources', blank=True)
     editors = models.ManyToManyField(Profile, related_name='edited_resources', blank=True)
     created_on = models.DateTimeField(default=datetime.now)
@@ -154,6 +156,7 @@ class ResourceVisibility(models.Model):
     cafeterias = models.ManyToManyField(Cafeteria, blank=True)
     other_institution_units = models.ManyToManyField(OtherInstitutionUnit, blank=True)
     users_with_access = models.ManyToManyField(Profile, blank=True)
+    events = models.ManyToManyField(Event, blank=True)
 
     def __str__(self):
         return f"Visibility settings for {self.resource.title}"

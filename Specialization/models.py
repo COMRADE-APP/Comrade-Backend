@@ -23,30 +23,43 @@ class Stack(models.Model):
     name = models.CharField(max_length=255)
     description = models.TextField(max_length=500, null=True, blank=True)
     created_by = models.ManyToManyField(Profile, related_name='stack_creators', blank=True)
-    created_on = models.DateTimeField(auto_now_add=True)
+    created_on = models.DateTimeField(default=datetime.now)
     resources = models.ManyToManyField(Resource, related_name='stack_resources', blank=True)
     tasks = models.ManyToManyField(Task, related_name='stack_tasks', blank=True)
     announcements = models.ManyToManyField(Announcements, related_name='stack_announcements', blank=True)
     events = models.ManyToManyField(Event, related_name='stack_events', blank=True)
     links = models.ManyToManyField(Links, related_name='stack_links', blank=True)
+    members = models.ManyToManyField(Profile, blank=True, related_name='stack_members_collection')
+    admins = models.ManyToManyField(Profile, blank=True, related_name='stack_admins_collections')
+    moderator = models.ManyToManyField(Profile, blank=True, related_name='stack_moderators_collections')
+
 
     def __str__(self):
         return self.name
+    
  
 class Specialization(models.Model):
     name = models.CharField(max_length=255)
     description = models.TextField(max_length=500, null=True, blank=True)
     created_by = models.ForeignKey(Profile, on_delete=models.CASCADE, related_name='created_specializations')
-    created_on = models.DateTimeField(auto_now_add=True)
+    created_on = models.DateTimeField(default=datetime.now)
     stacks = models.ManyToManyField(Stack, related_name='specialization_stacks', blank=True)
-
+    members = models.ManyToManyField(Profile, blank=True, related_name='specialization_members_collection')
+    admins = models.ManyToManyField(Profile, blank=True, related_name='specialization_admins_collections')
+    moderator = models.ManyToManyField(Profile, blank=True, related_name='specialization_moderators_collections')
+    
     def __str__(self):
-        return self.name   
+        return self.name 
+
+class PositionTracker(models.Model):
+    stack = models.ForeignKey(Stack, on_delete=models.CASCADE)
+    position = models.IntegerField()
+    specialization = models.ForeignKey(Specialization, on_delete=models.CASCADE)
 
 class SavedStack(models.Model):
     profile = models.ForeignKey(Profile, on_delete=models.CASCADE, related_name='saved_stacks')
     stack = models.ForeignKey(Stack, on_delete=models.CASCADE, related_name='saved_by_profiles')
-    saved_on = models.DateTimeField(auto_now_add=True)
+    saved_on = models.DateTimeField(default=datetime.now)
 
     def __str__(self):
         return f"{self.profile.username} saved {self.stack.name}"
@@ -54,39 +67,39 @@ class SavedStack(models.Model):
 class SavedSpecialization(models.Model):
     profile = models.ForeignKey(Profile, on_delete=models.CASCADE, related_name='saved_specializations')
     specialization = models.ForeignKey(Specialization, on_delete=models.CASCADE, related_name='saved_by_profiles')
-    saved_on = models.DateTimeField(auto_now_add=True)
+    saved_on = models.DateTimeField(default=datetime.now)
 
     def __str__(self):
         return f"{self.profile.username} saved {self.specialization.name}"
     
 class SpecializationMembership(models.Model):
     profile = models.ForeignKey(Profile, on_delete=models.CASCADE, related_name='specialization_memberships')
-    specialization = models.ForeignKey(Specialization, on_delete=models.CASCADE, related_name='members')
-    joined_on = models.DateTimeField(auto_now_add=True)
+    specialization = models.ForeignKey(Specialization, on_delete=models.CASCADE)
+    joined_on = models.DateTimeField(default=datetime.now)
 
     def __str__(self):
         return f"{self.profile.username} is a member of {self.specialization.name}"
     
 class StackMembership(models.Model):
     profile = models.ForeignKey(Profile, on_delete=models.CASCADE, related_name='stack_memberships')
-    stack = models.ForeignKey(Stack, on_delete=models.CASCADE, related_name='members')
-    joined_on = models.DateTimeField(auto_now_add=True)
+    stack = models.ForeignKey(Stack, on_delete=models.CASCADE)
+    joined_on = models.DateTimeField(default=datetime.now)
 
     def __str__(self):
         return f"{self.profile.username} is a member of {self.stack.name}"
     
 class SpecializationAdmin(models.Model):
-    profile = models.ForeignKey(Profile, on_delete=models.CASCADE, related_name='specialization_admins')
-    specialization = models.ForeignKey(Specialization, on_delete=models.CASCADE, related_name='admins')
-    assigned_on = models.DateTimeField(auto_now_add=True)
+    profile = models.ForeignKey(Profile, on_delete=models.CASCADE, related_name='specialization_admin')
+    specialization = models.ForeignKey(Specialization, on_delete=models.CASCADE)
+    assigned_on = models.DateTimeField(default=datetime.now)
 
     def __str__(self):
         return f"{self.profile.username} is an admin of {self.specialization.name}"
 
 class StackAdmin(models.Model):
-    profile = models.ForeignKey(Profile, on_delete=models.CASCADE, related_name='stack_admins')
-    stack = models.ForeignKey(Stack, on_delete=models.CASCADE, related_name='admins')
-    assigned_on = models.DateTimeField(auto_now_add=True)
+    profile = models.ForeignKey(Profile, on_delete=models.CASCADE, related_name='stack_admin')
+    stack = models.ForeignKey(Stack, on_delete=models.CASCADE)
+    assigned_on = models.DateTimeField(default=datetime.now)
 
     def __str__(self):
         return f"{self.profile.username} is an admin of {self.stack.name}"
@@ -94,7 +107,7 @@ class StackAdmin(models.Model):
 class SpecializationModerator(models.Model):
     profile = models.ForeignKey(Profile, on_delete=models.CASCADE, related_name='specialization_moderators')
     specialization = models.ForeignKey(Specialization, on_delete=models.CASCADE, related_name='moderators')
-    assigned_on = models.DateTimeField(auto_now_add=True)
+    assigned_on = models.DateTimeField(default=datetime.now)
 
     def __str__(self):
         return f"{self.profile.username} is a moderator of {self.specialization.name}"
@@ -102,7 +115,7 @@ class SpecializationModerator(models.Model):
 class StackModerator(models.Model):
     profile = models.ForeignKey(Profile, on_delete=models.CASCADE, related_name='stack_moderators')
     stack = models.ForeignKey(Stack, on_delete=models.CASCADE, related_name='moderators')
-    assigned_on = models.DateTimeField(auto_now_add=True)
+    assigned_on = models.DateTimeField(default=datetime.now)
 
     def __str__(self):
         return f"{self.profile.username} is a moderator of {self.stack.name}"
@@ -114,6 +127,7 @@ class SpecializationRoom(models.Model):
     invitation_code = models.CharField(max_length=10, unique=True, default='')
     related_rooms = models.ManyToManyField(Room, blank=True, related_name='related_rooms')
     related_default_rooms = models.ManyToManyField(DefaultRoom, blank=True, related_name='related_default_rooms')
+    related_specialization_rooms = models.ManyToManyField('self', blank=True)
     description = models.TextField(max_length=255, null=True)
     institutions = models.ManyToManyField(Institution, blank=True, related_name='institution_related_to_specialization_room')
     organisation = models.ManyToManyField(Organisation, blank=True, related_name='organisation_related_to_specialization_room')
@@ -154,7 +168,7 @@ class SpecializationRoom(models.Model):
 
 class CompletedStack(models.Model):
     stack = models.ForeignKey(Stack, on_delete=models.CASCADE, related_name='completed_stack')
-    completed_on = models.DateTimeField(auto_now_add=True)
+    completed_on = models.DateTimeField(default=datetime.now)
     completed_by = models.ForeignKey(Profile, on_delete=models.CASCADE)
 
     def __str__(self):
@@ -162,7 +176,7 @@ class CompletedStack(models.Model):
     
 class CompletedSpecialization(models.Model):
     specialization = models.ForeignKey(Specialization, on_delete=models.CASCADE, related_name='completed_specialization')
-    completed_on = models.DateTimeField(auto_now_add=True)
+    completed_on = models.DateTimeField(default=datetime.now)
     completed_by = models.ForeignKey(Profile, on_delete=models.CASCADE)
 
     def __str__(self):
