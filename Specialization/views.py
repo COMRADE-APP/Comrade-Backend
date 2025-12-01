@@ -7,6 +7,7 @@ from rest_framework.decorators import action
 from rest_framework import status
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
+from Specialization.permissions import IsAdmin, IsCreator, IsModerator
 from django.shortcuts import get_object_or_404
 
 
@@ -14,12 +15,32 @@ from django.shortcuts import get_object_or_404
 class SpecializationViewSet(ModelViewSet):
     queryset = Specialization.objects.all()
     serializer_class = SpecializationSerializer
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, IsModerator]
+
+    @action(detail=True, methods=['post'], permission_classes=[IsCreator])
+    def duplicate(self, request, id=None):
+        serializer = SpecializationSerializer(data=request.data)
+
+        if not serializer.is_valid():
+            return Response({'error': 'An error was encountered while trying to duplicate the specialization.'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        try:
+            id = serializer.validated_data.pop('id')
+            user = request.user
+            profile = Profile.objects.get(user=user)
+            serializer.validated_data['created_by'] = profile
+            serializer.save()
+            data = {
+                'data': serializer.data,
+                'message': 'Specialization duplicated successfully'
+            }
+            return Response(data, status=status.HTTP_201_CREATED)
+        except Exception as e:
+            return Response({'error': 'The duplication of the specialization encountered an error.'}, status=status.HTTP_404_NOT_FOUND)
 
 class StackViewSet(ModelViewSet):
     queryset = Stack.objects.all()
     serializer_class = StackSerializer
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, IsModerator]
 
     @action(detail=True, methods=['post'])
     def create_stack(self, request):
@@ -38,7 +59,7 @@ class StackViewSet(ModelViewSet):
         }
         return Response(data, status=status.HTTP_201_CREATED)
     
-    @action(detail=True, methods=['post'])
+    @action(detail=True, methods=['post'], permission_classes=[IsCreator])
     def duplicate_stack(self, request, id=None):
         serializer = StackSerializer(data=request.data)
 

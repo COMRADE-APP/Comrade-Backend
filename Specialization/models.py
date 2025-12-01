@@ -41,7 +41,7 @@ class Stack(models.Model):
 class Specialization(models.Model):
     name = models.CharField(max_length=255)
     description = models.TextField(max_length=500, null=True, blank=True)
-    created_by = models.ForeignKey(Profile, on_delete=models.CASCADE, related_name='created_specializations')
+    created_by = models.ManyToManyField(Profile, blank=True, related_name='created_specializations')
     created_on = models.DateTimeField(default=datetime.now)
     stacks = models.ManyToManyField(Stack, related_name='specialization_stacks', blank=True)
     members = models.ManyToManyField(Profile, blank=True, related_name='specialization_members_collection')

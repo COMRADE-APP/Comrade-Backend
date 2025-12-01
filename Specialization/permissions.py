@@ -6,7 +6,7 @@ class IsModerator(BasePermission):
     def has_object_permission(self, request, view, obj):
         profile = Profile.objects.get(user=request.user)
 
-        return profile in obj.moderators.all() 
+        return profile in (obj.moderators.all(), obj.admins.all(), obj.created_by)
 
 class IsAdmin(BasePermission):
     def has_object_permission(self, request, view, obj):
@@ -19,5 +19,10 @@ class IsCreator(BasePermission):
         profile = Profile.objects.get(user=request.user)
 
         return profile == obj.created_by
+    
+class IsMember(BasePermission):
+    def has_object_permission(self, request, view, obj):
+        profile = Profile.objects.get(user=request.user)
 
+        return profile in obj.members.all()
 
