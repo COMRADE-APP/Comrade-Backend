@@ -1,5 +1,5 @@
 from django.contrib import admin
-from Specialization.models import Specialization, Stack, SavedSpecialization, SavedStack, SpecializationAdmin, SpecializationMembership, SpecializationModerator, SpecializationRoom, StackAdmin, StackMembership, StackModerator, CompletedSpecialization, CompletedStack, PositionTracker
+from Specialization.models import Specialization, Stack, SavedSpecialization, SavedStack, SpecializationAdmin, SpecializationMembership, SpecializationModerator, SpecializationRoom, StackAdmin, StackMembership, StackModerator, CompletedSpecialization, CompletedStack, PositionTracker, Certificate, IssuedCertificate
 
 # Register your models here.
 admin.site.register(Specialization)
@@ -16,4 +16,5 @@ admin.site.register(StackModerator)
 admin.site.register(CompletedSpecialization)
 admin.site.register(CompletedStack)
 admin.site.register(PositionTracker)
-
+admin.site.register(Certificate)
+admin.site.register(IssuedCertificate)

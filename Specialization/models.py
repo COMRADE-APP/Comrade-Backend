@@ -39,7 +39,7 @@ class Stack(models.Model):
     
  
 class Specialization(models.Model):
-    name = models.CharField(max_length=255)
+    name = models.CharField(max_length=255, unique=False)
     description = models.TextField(max_length=500, null=True, blank=True)
     created_by = models.ManyToManyField(Profile, blank=True, related_name='created_specializations')
     created_on = models.DateTimeField(default=datetime.now)
@@ -181,3 +181,18 @@ class CompletedSpecialization(models.Model):
 
     def __str__(self):
         return f"Completed Stack {self.specialization.name} by {self.completed_by}"
+    
+class Certificate(models.Model):
+    specialization = models.ManyToManyField(Specialization, blank=True)
+    stack = models.ManyToManyField(Stack, blank=True)
+    issuer_name = models.CharField(max_length=50000)
+    certificate_file = models.FileField(upload_to='specialization/certificates/')
+    created_on = models.DateTimeField(default=datetime.now)
+    created_by = models.ForeignKey(Profile, on_delete=models.DO_NOTHING, null=True)
+
+class IssuedCertificate(models.Model):
+    specialization = models.ManyToManyField(Specialization, blank=True)
+    stack = models.ManyToManyField(Stack, blank=True)
+    issued_to = models.ForeignKey(Profile, on_delete=models.DO_NOTHING, null=False)
+    certificate_file = models.FileField(upload_to='specialization/certificates/issued/')
+    issued_on = models.DateTimeField(default=datetime.now)

@@ -1,6 +1,6 @@
 from django.urls import path, include
 from rest_framework.routers import DefaultRouter
-from Specialization.views import SpecializationViewSet, StackViewSet, SavedSpecializationViewSet, SavedStackViewSet, SpecializationAdminViewSet, SpecializationMembershipViewSet, SpecializationModeratorViewSet, SpecializationRoomViewSet, StackAdminViewSet, StackMembershipViewSet, StackModeratorViewSet, CompletedSpecializationViewSet, CompletedStackViewSet, PositionTrackerViewSet
+from Specialization.views import SpecializationViewSet, StackViewSet, SavedSpecializationViewSet, SavedStackViewSet, SpecializationAdminViewSet, SpecializationMembershipViewSet, SpecializationModeratorViewSet, SpecializationRoomViewSet, StackAdminViewSet, StackMembershipViewSet, StackModeratorViewSet, CompletedSpecializationViewSet, CompletedStackViewSet, PositionTrackerViewSet, CertificateViewSet, IssuedCertificateViewSet
 
 
 router = DefaultRouter()
@@ -19,7 +19,8 @@ router.register(r'specialization_memberships', SpecializationMembershipViewSet, 
 router.register(r'stack_memberships', StackMembershipViewSet, basename='stack_membership')
 router.register(r'specialization_rooms', SpecializationRoomViewSet, basename='specialization_room')
 router.register(r'position_trackers', PositionTrackerViewSet, basename='position_tracker')
-
+router.register(r'certificates', CertificateViewSet, basename='certificate')
+router.register(r'issued_certificates', IssuedCertificateViewSet, basename='issued_certificate')
 
 
 urlpatterns = []
