@@ -1,5 +1,5 @@
 from django.contrib import admin
-from Announcements.models import Task, Announcements, Reply, AnnouncementsRequest, Reposts, Text, Choice, Pin, FileResponse, CompletedTask, Question, QuestionResponse, SubQuestion, TaskResponse
+from Announcements.models import Task, Announcements, Reply, AnnouncementsRequest, Reposts, Text, Choice, Pin, FileResponse, CompletedTask, Question, QuestionResponse, SubQuestion, TaskResponse, Reaction, Comment
 # Register your models here.
 
 admin.site.register(Task)
@@ -16,3 +16,5 @@ admin.site.register(Question)
 admin.site.register(SubQuestion)
 admin.site.register(QuestionResponse)
 admin.site.register(TaskResponse)
+admin.site.register(Reaction)
+admin.site.register(Comment)

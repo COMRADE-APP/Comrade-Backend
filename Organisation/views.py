@@ -1,11 +1,11 @@
 from django.shortcuts import render
-from Organisation.models import Organisation, OrgBranch, Division, Department, Section, Team, Project, Centre, Committee, Board, Unit, Institute, Program
+from Organisation.models import Organisation, OrgBranch, Division, Department, Section, Team, Project, Centre, Committee, Board, Unit, Institute, Program, OtherOrgUnit
 from rest_framework.viewsets import ModelViewSet
 from rest_framework.response import Response
 from rest_framework import status
 from rest_framework.decorators import action
 from rest_framework.permissions import IsAuthenticatedOrReadOnly, AllowAny
-from Organisation.serializers import OrganisationSerializer, OrgBranchSerializer, DivisionSerializer, DepartmentSerializer, SectionSerializer, TeamSerializer, ProjectSerializer, CentreSerializer, CommitteeSerializer, BoardSerializer, UnitSerializer, InstituteSerializer, ProgramSerializer
+from Organisation.serializers import OrganisationSerializer, OrgBranchSerializer, DivisionSerializer, DepartmentSerializer, SectionSerializer, TeamSerializer, ProjectSerializer, CentreSerializer, CommitteeSerializer, BoardSerializer, UnitSerializer, InstituteSerializer, ProgramSerializer, OtherOrgUnitSerializer
 
 
 # Create your views here.
@@ -86,6 +86,11 @@ class CentreViewSet(ModelViewSet):
     permission_classes = [IsAuthenticatedOrReadOnly]
     serializer_class = CentreSerializer
     
+
+class OtherOrgUnitViewSet(ModelViewSet):
+    queryset = OtherOrgUnit.objects.all()
+    permission_classes = [IsAuthenticatedOrReadOnly]
+    serializer_class = OtherOrgUnitSerializer
     
 
     

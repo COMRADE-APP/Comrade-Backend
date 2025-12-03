@@ -17,6 +17,10 @@ Including another URLconf
 from django.contrib import admin
 from django.urls import path, include
 import rest_framework
+# from rest_framework.documentation import include_docs_urls # new
+# from rest_framework.schemas import get_schema_view
+
+# schema_view = get_schema_view(title='comrade API')
 
 urlpatterns = [
     path('admin/', admin.site.urls),
@@ -25,5 +29,10 @@ urlpatterns = [
     path('rooms/', include('Rooms.urls')),
     path('announcements/', include('Announcements.urls')),
     path('resources/', include('Resources.urls')),
-    path('api/', include('rest_framework.urls'))
+    path('events/', include('Events.urls')),
+    path('specializations/', include('Specialization.urls')),
+    path('payments/', include('Payment.urls')),
+    path('api/', include(rest_framework.urls)),
+    # path('docs/', include_docs_urls(title='Blog API')), # new
+    # path('schema/', schema_view),
 ]

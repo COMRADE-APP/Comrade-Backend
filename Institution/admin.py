@@ -1,5 +1,5 @@
 from django.contrib import admin
-from Institution.models import Institution, InstBranch, Faculty, VCOffice, InstDepartment, AdminDep, Programme, HR, Admissions, HealthServices, Security, StudentAffairs, SupportServices, Finance, Marketing, Legal, ICT, CareerOffice, Counselling, RegistrarOffice, Transport, Library, Hostel, Cafeteria
+from Institution.models import Institution, InstBranch, Faculty, VCOffice, InstDepartment, AdminDep, Programme, HR, Admissions, HealthServices, Security, StudentAffairs, SupportServices, Finance, Marketing, Legal, ICT, CareerOffice, Counselling, RegistrarOffice, Transport, Library, Hostel, Cafeteria, OtherInstitutionUnit
 # Register your models here.
 
 admin.site.register(Institution)
@@ -26,3 +26,4 @@ admin.site.register(Transport)
 admin.site.register(Library)
 admin.site.register(Hostel)
 admin.site.register(Cafeteria)
+admin.site.register(OtherInstitutionUnit)
