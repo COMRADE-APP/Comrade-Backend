@@ -874,6 +874,54 @@ class VisibilityViewSet(ModelViewSet):
             "message": "Visibility items added successfully.",
             "added": visibility_groups
         }, status=status.HTTP_200_OK)
+    
+    @action(detail=True, methods=['post', 'put', 'patch'])
+    def deactivate_instance(self, request, pk=None):
+        visibility_code = request.data.get('visibility_code')
+        main_entity = request.data.get('main_entity')
+
+        if not visibility_code and pk:
+            try:
+                visibility = get_object_or_404(Visibility, visibility_code=pk)
+            except Visibility.DoesNotExist:
+                return Response({'error': 'visibility with that id does not exist.'}, status=status.HTTP_400_BAD_REQUEST)
+        else:
+            try:
+                visibility = get_object_or_404(Visibility, visibility_code=visibility_code)
+            except Visibility.DoesNotExist:
+                return Response({'error': 'Visibility with that code does not exist.'}, status=status.HTTP_400_BAD_REQUEST)
+            
+        try:
+            # Fetch the model instance to be deactivate
+            model, field_name = VISIBILITY_OPTIONS_MAP[main_entity]
+            entity = getattr(visibility, 'main_entity')
+            entity = entity.first()
+            model = get_object_or_404(model, id=entity.id)
+
+            # Save the old visibility for logging purposes
+            old_visibility = copy.copy(visibility)
+
+
+            visibility = Visibility.objects.create(main_entity=main_entity, operation_state='deactivate')
+            profile = get_object_or_404(Profile, user=request.user)
+            # admins = ComradeAdmin.objects.all()
+            getattr(visibility, main_entity).add(profile)
+            visibility.save()
+
+            new_visibility = copy.copy(visibility)
+
+            MainVisibilityLog.objects.create(
+                old_visibility=old_visibility,
+                new_visibility=new_visibility,
+                changed_by=profile,
+            )
+
+            return Response({'message': f'The {main_entity} instance has been deactivated successfully.'}, status=status.HTTP_200_OK)
+        except Exception as e:
+            return Response({'error': f'The following error occured: {e}'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+        
+
 
 class LinkViewSet(ModelViewSet):
     queryset = Link.objects.all()

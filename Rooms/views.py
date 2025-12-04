@@ -5,7 +5,7 @@ from django.shortcuts import get_object_or_404
 from rest_framework import status
 from rest_framework.decorators import action
 from rest_framework.response import Response
-from Resources.models import Resource, ResourceVisibility
+from Resources.models import Resource, ResourceVisibility 
 from Resources.serializers import ResourceSerializer, ResourceVisibilitySerializer
 from Rooms.models import Room, DefaultRoom, DirectMessage, DirectMessageRoom, ForwadingLog
 from Rooms.serializers import RoomSerializer, DefaultRoomSerializer, DirectMessageSerializer, DirectMessageRoomSerializer, ForwadingLogSerializer
@@ -427,6 +427,8 @@ class RoomViewSet(ModelViewSet):
     @action(detail=True, methods=['post'])
     def deactivate(self, request, pk=None):
         room = Room.objects.get(pk=pk)
+
+        
         # room = self.get_object()
         # room.admins.clear()
         # room.moderators.clear()

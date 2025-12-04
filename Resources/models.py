@@ -18,6 +18,19 @@ RESOURCE_TYPES = (
     ('doc', 'Document File'),
 )
 
+# Operation Status for models (used together with visibility model)
+OPERATION_STATUS = (
+    ('active', 'Active'),
+    ('deactivated', 'Deactivated'),
+    ('deleted', 'Deleted'),
+    ('suspended', 'Suspended'),
+    ('under_review', 'Under Review'),
+    ('draft', 'Draft'),
+    ('pending', 'Pending'),
+    ('sensored', 'Sensored'),
+    ('blocked', 'Blocked'),
+)
+
 # Visibility types
 VIS_TYPES = (
     ('only_me', 'Only Me'),
@@ -240,6 +253,7 @@ class Link(models.Model):
 class Visibility(models.Model):
     main_entity = models.CharField(max_length=1000, choices=VIS_OPT_TYPES, default='resource')
     visibility_code = models.CharField(max_length=2000, unique=True, primary_key=True)
+    operation_state = models.CharField(choices=OPERATION_STATUS, default='pending')
     scheduled_time = models.DateTimeField(blank=True)
     expiry_time = models.DateTimeField(blank=True)
     resources = models.ManyToManyField(Resource, blank=True, related_name='main_visibility_resources')
