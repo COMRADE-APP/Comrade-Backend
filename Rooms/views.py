@@ -72,6 +72,8 @@ class RoomViewSet(ModelViewSet):
             return Response({"message": "user already exists in the room."}, status=status.HTTP_400_BAD_REQUEST)
         
         room.members.add(user)
+        room.capacity_counter += 1
+        room.save()
         return Response({"message": "Successfully joined the room."}, status=status.HTTP_200_OK)
     
     @action(detail=True, methods=['post'])
@@ -83,6 +85,8 @@ class RoomViewSet(ModelViewSet):
             return Response({"message": "user is not a member of the room."}, status=status.HTTP_400_BAD_REQUEST)
         
         room.members.remove(user)
+        room.capacity_counter -= 1
+        room.save()
         return Response({"message": "Successfully left the room."}, status=status.HTTP_200_OK)
     
     @action(detail=True, methods=['get'])
@@ -383,10 +387,15 @@ class RoomViewSet(ModelViewSet):
     @action(detail=True, methods=['get', 'post'])
     def add_member(self, request, pk=None):
         room = self.get_object()
+        if int(room.capacity_counter) >= int(room.capacity_quota):
+            return Response({'error': 'Sorry, the room is full at the moment.'}, status=status.HTTP_400_BAD_REQUEST)
+            
         if request.method == 'POST' and request.user.is_student_admin or request.user.is_inst_admin or request.user.is_org_admin or request.user.is_admin:
             user_id = request.data.get('user_id')
             user = get_object_or_404(User, id=user_id)
             room.members.add(user)
+            room.capacity_counter +=1
+            room.save()
             return Response({"message": "User has been added to the room."}, status=status.HTTP_200_OK)
         else:
             return Response({"message": "You do not have permission to add members to this room."}, status=status.HTTP_403_FORBIDDEN)
@@ -398,6 +407,8 @@ class RoomViewSet(ModelViewSet):
             user_id = request.data.get('user_id')
             user = get_object_or_404(User, id=user_id)
             room.members.remove(user)
+            room.capacity_counter -=1
+            room.save()
             return Response({"message": "User has been removed from the room."}, status=status.HTTP_200_OK)
         else:
             return Response({"message": "You do not have permission to remove members from this room."}, status=status.HTTP_403_FORBIDDEN)
@@ -413,6 +424,26 @@ class RoomViewSet(ModelViewSet):
         else:
             return Response({"message": "You do not have permission to convert this room to a default room."}, status=status.HTTP_403_FORBIDDEN)
         
+    @action(detail=True, methods=['post'])
+    def deactivate(self, request, pk=None):
+        room = Room.objects.get(pk=pk)
+        # room = self.get_object()
+        # room.admins.clear()
+        # room.moderators.clear()
+        # room.members.clear()
+        # room.save()
+
+    @action(detail=True, methods=['post'])
+    def delete(self, request, pk=None):
+        room = Room.objects.get(pk=pk)
+        # room = self.get_object()
+
+        room.admins.clear()
+        room.moderators.clear()
+        room.members.clear()
+        room.save()
+
+        return Response({'message':'Room has been deleted successfully. You have until 60 days to reverse the action. When 60 days are reached, the room will be deleted parmanently.'}, status=status.HTTP_200_OK)
     
 
 class DefaultRoomViewSet(ModelViewSet):
