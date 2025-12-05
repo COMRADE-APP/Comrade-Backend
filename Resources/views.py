@@ -902,7 +902,7 @@ class VisibilityViewSet(ModelViewSet):
             old_visibility = copy.copy(visibility)
 
 
-            visibility = Visibility.objects.create(main_entity=main_entity, operation_state='deactivate')
+            visibility = Visibility.objects.create(main_entity=main_entity, operation_state='deactivated')
             profile = get_object_or_404(Profile, user=request.user)
             # admins = ComradeAdmin.objects.all()
             getattr(visibility, main_entity).add(profile)
@@ -919,6 +919,100 @@ class VisibilityViewSet(ModelViewSet):
             return Response({'message': f'The {main_entity} instance has been deactivated successfully.'}, status=status.HTTP_200_OK)
         except Exception as e:
             return Response({'error': f'The following error occured: {e}'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+    @action(detail=True, methods=['post', 'put', 'patch'])
+    def delete_instance(self, request, pk=None):
+        visibility_code = request.data.get('visibility_code')
+        main_entity = request.data.get('main_entity')
+
+        if not visibility_code and pk:
+            try:
+                visibility = get_object_or_404(Visibility, visibility_code=pk)
+            except Visibility.DoesNotExist:
+                return Response({'error': 'visibility with that id does not exist.'}, status=status.HTTP_400_BAD_REQUEST)
+        else:
+            try:
+                visibility = get_object_or_404(Visibility, visibility_code=visibility_code)
+            except Visibility.DoesNotExist:
+                return Response({'error': 'Visibility with that code does not exist.'}, status=status.HTTP_400_BAD_REQUEST)
+            
+        try:
+            # Fetch the model instance to be deactivate
+            model, field_name = VISIBILITY_OPTIONS_MAP[main_entity]
+            entity = getattr(visibility, main_entity)
+            entity = entity.first()
+            model = get_object_or_404(model, id=entity.id)
+
+            # Save the old visibility for logging purposes
+            old_visibility = copy.copy(visibility)
+
+
+            visibility = Visibility.objects.create(main_entity=main_entity, operation_state='deleted')
+            profile = get_object_or_404(Profile, user=request.user)
+            admins = ComradeAdmin.objects.all()
+            getattr(visibility, main_entity).add(admins)
+            visibility.save()
+
+            new_visibility = copy.copy(visibility)
+
+            MainVisibilityLog.objects.create(
+                old_visibility=old_visibility,
+                new_visibility=new_visibility,
+                changed_by=profile,
+            )
+
+            return Response({'message': f'The {main_entity} instance has been deleted successfully. You have until 60 days to reverse the action. When 60 days are reached, the {main_entity} instance will be deleted parmanently.'}, status=status.HTTP_200_OK)
+        except Exception as e:
+            return Response({'error': f'The following error occured: {e}'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        
+    @action(detail=True, methods=['post', 'put', 'patch'])
+    def reverse_deactivation_deletion(self, request, pk=None):
+        visibility_code = request.data.get('visibility_code')
+        option_before = request.data.get('operational_state')
+
+        if not visibility_code and pk:
+            try:
+                visibility = get_object_or_404(Visibility, visibility_code=pk)
+            except Visibility.DoesNotExist:
+                return Response({'error': 'visibility with that id does not exist.'}, status=status.HTTP_400_BAD_REQUEST)
+        else:
+            try:
+                visibility = get_object_or_404(Visibility, visibility_code=visibility_code)
+            except Visibility.DoesNotExist:
+                return Response({'error': 'Visibility with that code does not exist.'}, status=status.HTTP_400_BAD_REQUEST)
+            
+        try:
+            # Fetch the previous visibility
+            visibility_log = get_object_or_404(MainVisibilityLog, new_visibility=visibility.visibility_code)
+            previous_visibility = get_object_or_404(Visibility, visibility_code=visibility_log.previous_visibility)
+            
+            # restore the object to the previous visibility
+            main_entity = visibility.main_entity
+            # entity = getattr(visibility, main_entity)
+            # entity = entity.first()
+
+            # indicate the main visibility and state
+            previous_visibility.pk = None
+            previous_visibility.operation_state = 'active'
+            # restore the visibility successfully
+            previous_visibility.save()
+
+            # changed by
+            profile = get_object_or_404(Profile, user=request.user)
+
+
+            MainVisibilityLog.objects.create(
+                old_visibility=visibility,
+                new_visibility=previous_visibility,
+                changed_by=profile
+            )
+
+            return Response({"message": f"The {main_entity}'s instance has been restored successfully. It is now available to user that had the access before being {option_before}."}, status=status.HTTP_201_CREATED)
+        
+        except Exception as e:
+            return Response({'error': f'The following error occured: {e}'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
 
         
 
