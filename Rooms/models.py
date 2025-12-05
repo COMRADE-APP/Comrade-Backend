@@ -9,6 +9,28 @@ import uuid
 # from Resources.models import Resource
 
 # Create your models here.
+
+OPERATION_STATUS = (
+    ('active', 'Active'),
+    ('deactivated', 'Deactivated'),
+    ('deleted', 'Deleted'),
+    ('suspended', 'Suspended'),
+    ('under_review', 'Under Review'),
+    ('draft', 'Draft'),
+    ('pending', 'Pending'),
+    ('sensored', 'Sensored'),
+    ('blocked', 'Blocked'),
+)
+
+TEXTING_STATUS = (
+    ('admins_only', 'Admins Only'),
+    ('admins_moderators_only', 'Admins and Moderators Only'),
+    ('all_members', 'All Members'),
+    ('creator_only', 'Creator Only'),
+)
+
+
+
 class Room(models.Model):
     name = models.CharField(max_length=255)
     room_code = models.CharField(max_length=200, unique=True, editable=False, default=uuid.uuid4().hex[:10].upper())
@@ -36,6 +58,8 @@ class Room(models.Model):
     capacity_counter = models.IntegerField(default=0)
     capacity_quota = models.IntegerField(default=0)
     past_memmbers = models.ManyToManyField(CustomUser, blank=True, related_name="room_past_members")
+    operation_state = models.CharField(max_length=200, choices=OPERATION_STATUS, default='pending')
+    text_priority = models.CharField(max_length=200, choices=TEXTING_STATUS, default='creator')
 
 
     def save(self, *args, **kwargs):
@@ -76,6 +100,8 @@ class DefaultRoom(models.Model):
     resources = models.ManyToManyField('Resources.Resource', related_name='default_room_resources', blank=True)
     capacity_counter = models.IntegerField(default=0)
     past_memmbers = models.ManyToManyField(CustomUser, blank=True, related_name="default_room_past_members")
+    operation_state = models.CharField(max_length=200, choices=OPERATION_STATUS, default='pending')
+    text_priority = models.CharField(max_length=200, choices=TEXTING_STATUS, default='creator')
     
     def generate_invitation_code(self):
         return uuid.uuid4().hex[:10].upper()
@@ -134,3 +160,6 @@ class ForwadingLog(models.Model):
     user = models.ForeignKey(CustomUser, on_delete=models.DO_NOTHING)
     direct_message = models.ForeignKey(DirectMessage, on_delete=models.DO_NOTHING)
     forwarded_on = models.DateTimeField(default=datetime.now)
+
+
+

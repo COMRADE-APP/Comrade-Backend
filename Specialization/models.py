@@ -1,6 +1,6 @@
 from django.db import models
-from Rooms.models import Room, DefaultRoom
-from Resources.models import Resource, Links
+from Rooms.models import Room, DefaultRoom, OPERATION_STATUS, TEXTING_STATUS
+from Resources.models import Resource, Link
 from Announcements.models import Task, Announcements, Reply, AnnouncementsRequest, Reposts, Text, Pin, FileResponse, CompletedTask, TaskResponse
 from Authentication.models import Profile, CustomUser
 from Events.models import Event
@@ -28,7 +28,7 @@ class Stack(models.Model):
     tasks = models.ManyToManyField(Task, related_name='stack_tasks', blank=True)
     announcements = models.ManyToManyField(Announcements, related_name='stack_announcements', blank=True)
     events = models.ManyToManyField(Event, related_name='stack_events', blank=True)
-    links = models.ManyToManyField(Links, related_name='stack_links', blank=True)
+    links = models.ManyToManyField(Link, related_name='stack_links', blank=True)
     members = models.ManyToManyField(Profile, blank=True, related_name='stack_members_collection')
     admins = models.ManyToManyField(Profile, blank=True, related_name='stack_admins_collections')
     moderator = models.ManyToManyField(Profile, blank=True, related_name='stack_moderators_collections')
@@ -152,6 +152,8 @@ class SpecializationRoom(models.Model):
     capacity_quota = models.IntegerField(default=0)
     past_memmbers = models.ManyToManyField(CustomUser, blank=True, related_name="specialization_room_past_members")
     members_type = models.CharField(max_length=200, choices=PARTICIPANTS, default='individuals')
+    operation_state = models.CharField(max_length=200, choices=OPERATION_STATUS, default='pending')
+    text_priority = models.CharField(max_length=200, choices=TEXTING_STATUS, default='creator')
 
 
     def save(self, *args, **kwargs):
