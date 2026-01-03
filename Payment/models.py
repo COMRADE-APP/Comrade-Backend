@@ -1,357 +1,376 @@
 from django.db import models
-from Authentication.models import Profile
+from Authentication.models import CustomUser
 from datetime import datetime
+import uuid
 
-# Create your models here.
+# Payment Options
 PAY_OPT = (
     ('paypal', 'PayPal'),
     ('mpesa', 'M-Pesa'),
-    ('mastercard', 'MasterCard (Debit or Credit Card)'),
-    ('amex', 'American Express'),
-    ('discover', 'Discover Card'),
-    ('western_union', 'Western Union'),
-    ('stripe', 'Stripe'),
-    ('cashapp', 'Cash App'),
-    ('apple_pay', 'Apple Pay'),
-    ('google_pay', 'Google Pay'),
-    ('square', 'Square'),
-    ('bank_transfer', 'Bank Transfer'),
-    ('skrill', 'Skrill'),
-    ('neteller', 'Neteller'),
-    ('alipay', 'Alipay'),
-    ('wechat_pay', 'WeChat Pay'),
-    ('jcb', 'JCB'),
-    ('diners_club', "Diner's Club"),
-    ('unionpay', 'UnionPay'),
-    ('maestro', 'Maestro'),
+    ('mastercard', 'MasterCard'),
     ('visa', 'Visa'),
-    ('venmo', 'Venmo'),
-    ('gcash', 'G-Cash'),
+    ('stripe', 'Stripe'),
+    ('bank_transfer', 'Bank Transfer'),
     ('comrade_balance', 'Comrade Balance'),
-)
-PAY_TYPE = (
-    ('individual', 'Individual Purchase'),
-    ('group', 'Group Purchase')
-)
-
-TIER_OPT = (
-    ('free', 'Free Membership'),
-    ('standard', 'Standard Membership'),
-    ('premium', 'Premium Membersip'),
-    ('gold', 'Gold Membership'),
 )
 
 TRANSACTION_CATEGORY = (
     ('purchase', 'Purchase'),
-    ('refund', 'Refund'),
-    ('withdrawal', 'Withdrawal'),
-    ('deposit', 'Deposit'),
     ('transfer', 'Transfer'),
-    ('bid', 'Bid'),
-    ('donation', 'Donation'),
-    ('subscription', 'Subscription'),
-    ('fee', 'Fee'),
+    ('deposit', 'Deposit'),
+    ('withdrawal', 'Withdrawal'),
+    ('refund', 'Refund'),
     ('contribution', 'Contribution'),
-    ('other', 'Other'),
+    ('subscription', 'Subscription'),
 )
 
 TRANSACTION_STATUS = (
     ('pending', 'Pending'),
+    ('authorized', 'Authorized'),
+    ('verified', 'Verified'),
     ('completed', 'Completed'),
     ('failed', 'Failed'),
-    ('refunded', 'Refunded'),
     ('cancelled', 'Cancelled'),
-    ('in_review', 'In Review'),
-    ('verified', 'Verified'),
-    ('declined', 'Declined'),
-    ('authorized', 'Authorized'),
-    ('settled', 'Settled'),
-    ('reversed', 'Reversed'),
-    ('expired', 'Expired'),
 )
 
-PAY_OPT_TYPE = (
-    ('external', 'External Payment Option'),
-    ('internal', 'Internal Payment Option (Comrade Balance)'),
+PAYMENT_METHOD = (
+    ('INTERNAL', 'Internal (Comrade Balance)'),
+    ('EXTERNAL', 'External Payment Gateway'),
 )
+
+GROUP_TYPE = (
+    ('SAVINGS', 'Savings Group'),
+    ('PURCHASE', 'Purchase Group'),
+)
+
+MEMBER_ROLE = (
+    ('ADMIN', 'Administrator'),
+    ('MEMBER', 'Member'),
+)
+
+FREQUENCY = (
+    ('DAILY', 'Daily'),
+    ('WEEKLY', 'Weekly'),
+    ('MONTHLY', 'Monthly'),
+    ('YEARLY', 'Yearly'),
+)
+
+INVITATION_STATUS = (
+    ('PENDING', 'Pending'),
+    ('ACCEPTED', 'Accepted'),
+    ('DECLINED', 'Declined'),
+    ('EXPIRED', 'Expired'),
+)
+
+SUBSCRIPTION_TYPE = (
+    ('BASIC', 'Basic'),
+    ('PREMIUM', 'Premium'),
+    ('ENTERPRISE', 'Enterprise'),
+)
+
+SUBSCRIPTION_STATUS = (
+    ('ACTIVE', 'Active'),
+    ('CANCELLED', 'Cancelled'),
+    ('EXPIRED', 'Expired'),
+)
+
 
 class PaymentProfile(models.Model):
-    user = models.ForeignKey(Profile, on_delete=models.CASCADE)
-    payment_option = models.CharField(max_length=2000, choices=PAY_OPT, default='paypal')
-    payment_number = models.CharField(max_length=10000, default='')
-    transaction_token = models.CharField(max_length=10000, default='')
-    comrade_balance = models.DecimalField(decimal_places=2, max_digits=12, default=0.00)
-    profile_token = models.CharField(max_length=10000, default='', unique=True)
-    
-    # Tier Management
-    tier = models.CharField(max_length=20, choices=TIER_OPT, default='free')
-    
-    # Purchase Tracking for Limits
-    monthly_purchases = models.IntegerField(default=0)
-    last_purchase_month = models.IntegerField(default=1) # Month index (1-12)
-    
-    class Meta:
-        indexes = [
-            models.Index(fields=['user']),
-            models.Index(fields=['profile_token']),
-            models.Index(fields=['tier']),
-        ]
-
-class TransactionToken(models.Model):
-    payment_profile = models.ForeignKey(PaymentProfile, on_delete=models.CASCADE)
-    import uuid
-    transaction_code = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    transaction_type = models.CharField(max_length=200, choices=TRANSACTION_CATEGORY, default='purchase')
-    amount = models.DecimalField(decimal_places=2, max_digits=12)
-    pay_from = models.CharField(max_length=200, choices=PAY_OPT_TYPE, default='external')
-    payment_option = models.CharField(max_length=2000, choices=PAY_OPT, default='paypal')
-    created_at = models.DateTimeField(default=datetime.now)
-    recipient_profile = models.ForeignKey(PaymentProfile, on_delete=models.CASCADE, related_name='recipient_profile', null=True, blank=True)
-    
-    class Meta:
-        indexes = [
-            models.Index(fields=['payment_profile']),
-            models.Index(fields=['-created_at']),
-            models.Index(fields=['transaction_type']),
-        ]
-
-class PaymentAuthorization(models.Model):
-    payment_profile = models.ForeignKey(PaymentProfile, on_delete=models.CASCADE)
-    authorization_code = models.CharField(max_length=10000, unique=True)
-    created_at = models.DateTimeField(default=datetime.now)
-
-class PaymentVerification(models.Model):
-    payment_profile = models.ForeignKey(PaymentProfile, on_delete=models.CASCADE)
-    verification_code = models.CharField(max_length=10000, unique=True)
-    created_at = models.DateTimeField(default=datetime.now)
-
-class TransactionTracker(models.Model):
-    transaction_token = models.ForeignKey(TransactionToken, on_delete=models.CASCADE)
-    authorization_token = models.ForeignKey(PaymentAuthorization, on_delete=models.CASCADE, null=True, blank=True)
-    verification_token = models.ForeignKey(PaymentVerification, on_delete=models.CASCADE, null=True, blank=True)
-    status = models.CharField(max_length=200, choices=TRANSACTION_STATUS, default='pending')
-    updated_at = models.DateTimeField(default=datetime.now)
-
-class TransactionHistory(models.Model):
-    payment_profile = models.ForeignKey(PaymentProfile, on_delete=models.CASCADE)
-    transaction_token = models.ForeignKey(TransactionToken, on_delete=models.CASCADE)
-    authorization_token = models.ForeignKey(PaymentAuthorization, on_delete=models.CASCADE)
-    verification_token = models.ForeignKey(PaymentVerification, on_delete=models.CASCADE)
-    payment_type = models.CharField(max_length=200, choices=PAY_TYPE, default='individual')
-    status = models.CharField(max_length=200, choices=TRANSACTION_STATUS, default='pending')
-    created_at = models.DateTimeField(default=datetime.now)
-
-class PaymentItem(models.Model):
-    name = models.CharField(max_length=2000)
-    cost = models.DecimalField(decimal_places=2, max_digits=12)
-    quantity = models.FloatField()
-    total_cost = models.DecimalField(decimal_places=2, max_digits=12)
-    description = models.TextField(blank=True)
-    created_at = models.DateTimeField(default=datetime.now)
-    
-    def save(self, *args, **kwargs):
-        self.total_cost = self.cost * self.quantity
-        super().save(*args, **kwargs)
-
-class PaymentLog(models.Model):
-    payment_profile = models.ForeignKey(PaymentProfile, on_delete=models.CASCADE, related_name='purchase_profile')
-    amount = models.DecimalField(decimal_places=2, max_digits=12)
-    purchase_item = models.ManyToManyField(PaymentItem, blank=True)
-    payment_type = models.CharField(max_length=2000, choices=PAY_TYPE, default='individual')
-    payment_date = models.DateTimeField(default=datetime.now)
-    recipient = models.ForeignKey(PaymentProfile, on_delete=models.CASCADE, related_name='sale_profile')
-    notes = models.TextField(blank=True)
-
-# Payment Group - Group savings/purchases
-class PaymentGroups(models.Model):
-    import uuid
-    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    name = models.CharField(max_length=5000)
-    description = models.TextField(blank=True)
-    creator = models.ForeignKey(PaymentProfile, on_delete=models.CASCADE, related_name='created_groups', blank=True, null=True)
-    max_capacity = models.IntegerField(default=3) # Default to Free tier limit
-    tier = models.CharField(max_length=200, choices=TIER_OPT, default='free')
-    item_grouping = models.ManyToManyField(PaymentItem, blank=True)
-    
-    # Group settings
-    target_amount = models.DecimalField(decimal_places=2, max_digits=12, null=True, blank=True)
-    current_amount = models.DecimalField(decimal_places=2, max_digits=12, default=0.00)
-    expiry_date = models.DateTimeField(null=True, blank=True)
-    is_active = models.BooleanField(default=True)
-    auto_purchase = models.BooleanField(default=False)
-    requires_approval = models.BooleanField(default=True)
-    
-    created_at = models.DateTimeField(default=datetime.now)
+    """User payment account with balance tracking"""
+    user = models.OneToOneField(CustomUser, on_delete=models.CASCADE, related_name='payment_profile')
+    comrade_balance = models.DecimalField(max_digits=12, decimal_places=2, default=0.00)
+    total_sent = models.DecimalField(max_digits=12, decimal_places=2, default=0.00)
+    total_received = models.DecimalField(max_digits=12, decimal_places=2, default=0.00)
+    payment_methods = models.JSONField(default=list, blank=True)
+    default_payment_method = models.CharField(max_length=50, choices=PAY_OPT, default='comrade_balance')
+    created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
     
     class Meta:
         indexes = [
-            models.Index(fields=['creator']),
-            models.Index(fields=['is_active']),
+            models.Index(fields=['user']),
+            models.Index(fields=['comrade_balance']),
+        ]
+    
+    def __str__(self):
+        return f"{self.user.email} - Balance: ${self.comrade_balance}"
+
+
+class TransactionToken(models.Model):
+    """Core transaction model with tokenization"""
+    sender = models.ForeignKey(CustomUser, on_delete=models.CASCADE, related_name='sent_transactions')
+    receiver = models.ForeignKey(CustomUser, on_delete=models.CASCADE, related_name='received_transactions', null=True, blank=True)
+    amount = models.DecimalField(max_digits=12, decimal_places=2)
+    token = models.UUIDField(default=uuid.uuid4, editable=False, unique=True, db_index=True)
+    payment_method = models.CharField(max_length=20, choices=PAYMENT_METHOD, default='INTERNAL')
+    external_payment_provider = models.CharField(max_length=100, blank=True)
+    transaction_type = models.CharField(max_length=50, choices=TRANSACTION_CATEGORY, default='transfer')
+    status = models.CharField(max_length=20, choices=TRANSACTION_STATUS, default='pending')
+    description = models.TextField(blank=True)
+    metadata = models.JSONField(default=dict, blank=True)
+    authorization_code = models.CharField(max_length=255, blank=True)
+    verification_date = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    
+    class Meta:
+        indexes = [
+            models.Index(fields=['sender']),
+            models.Index(fields=['receiver']),
+            models.Index(fields=['token']),
+            models.Index(fields=['status']),
             models.Index(fields=['-created_at']),
+        ]
+        ordering = ['-created_at']
+    
+    def __str__(self):
+        return f"TXN-{self.token} - ${self.amount}"
+    
+    @property
+    def token_display(self):
+        return f"TXN-{self.token}"
+
+
+class PaymentGroups(models.Model):
+    """Group savings or collaborative purchasing"""
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    name = models.CharField(max_length=255)
+    description = models.TextField()
+    admin = models.ForeignKey(CustomUser, on_delete=models.CASCADE, related_name='administered_groups')
+    group_type = models.CharField(max_length=20, choices=GROUP_TYPE, default='SAVINGS')
+    target_amount = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True)
+    current_amount = models.DecimalField(max_digits=12, decimal_places=2, default=0.00)
+    currency = models.CharField(max_length=3, default='USD')
+    deadline = models.DateTimeField(null=True, blank=True)
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    
+    class Meta:
+        indexes = [
+            models.Index(fields=['admin']),
+            models.Index(fields=['group_type']),
+            models.Index(fields=['is_active']),
         ]
         verbose_name_plural = 'Payment Groups'
     
     def __str__(self):
-        return self.name
+        return f"{self.name} ({self.group_type})"
 
-# Payment Group Members
-class PaymentGroupMember(models.Model):
-    payment_group = models.ForeignKey(PaymentGroups, on_delete=models.CASCADE, related_name='members')
-    payment_profile = models.ForeignKey(PaymentProfile, on_delete=models.CASCADE)
-    is_admin = models.BooleanField(default=False)
-    contribution_percentage = models.DecimalField(decimal_places=2, max_digits=5, default=0.00)
-    total_contributed = models.DecimalField(decimal_places=2, max_digits=12, default=0.00)
-    joined_at = models.DateTimeField(default=datetime.now)
+
+class GroupMembers(models.Model):
+    """Tracks members in payment groups"""
+    group = models.ForeignKey(PaymentGroups, on_delete=models.CASCADE, related_name='members')
+    user = models.ForeignKey(CustomUser, on_delete=models.CASCADE, related_name='group_memberships')
+    role = models.CharField(max_length=10, choices=MEMBER_ROLE, default='MEMBER')
+    total_contributed = models.DecimalField(max_digits=12, decimal_places=2, default=0.00)
+    joined_at = models.DateTimeField(auto_now_add=True)
     
     class Meta:
-        unique_together = ['payment_group', 'payment_profile']
+        unique_together = ['group', 'user']
         indexes = [
-            models.Index(fields=['payment_group']),
-            models.Index(fields=['payment_profile']),
+            models.Index(fields=['group']),
+            models.Index(fields=['user']),
+            models.Index(fields=['role']),
         ]
+        verbose_name_plural = 'Group Members'
+    
+    def __str__(self):
+        return f"{self.user.email} in {self.group.name}"
 
-# Contribution tracking
+
 class Contribution(models.Model):
-    import uuid
-    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    payment_group = models.ForeignKey(PaymentGroups, on_delete=models.CASCADE, related_name='contributions')
-    member = models.ForeignKey(PaymentGroupMember, on_delete=models.CASCADE)
-    amount = models.DecimalField(decimal_places=2, max_digits=12)
+    """Individual contributions to payment groups"""
+    group = models.ForeignKey(PaymentGroups, on_delete=models.CASCADE, related_name='contributions')
+    member = models.ForeignKey(CustomUser, on_delete=models.CASCADE, related_name='contributions')
+    amount = models.DecimalField(max_digits=12, decimal_places=2)
     transaction = models.ForeignKey(TransactionToken, on_delete=models.SET_NULL, null=True, blank=True)
-    contributed_at = models.DateTimeField(default=datetime.now)
-    notes = models.TextField(blank=True)
+    contribution_date = models.DateTimeField(auto_now_add=True)
     
     class Meta:
         indexes = [
-            models.Index(fields=['payment_group']),
-            models.Index(fields=['-contributed_at']),
+            models.Index(fields=['group']),
+            models.Index(fields=['member']),
+            models.Index(fields=['-contribution_date']),
         ]
+        ordering = ['-contribution_date']
+    
+    def __str__(self):
+        return f"{self.member.email} contributed ${self.amount} to {self.group.name}"
 
-# Standing Orders for recurring contributions
+
 class StandingOrder(models.Model):
-    member = models.ForeignKey(PaymentGroupMember, on_delete=models.CASCADE, related_name='standing_orders')
-    amount = models.DecimalField(decimal_places=2, max_digits=12)
-    frequency = models.CharField(max_length=50, choices=(
-        ('daily', 'Daily'),
-        ('weekly', 'Weekly'),
-        ('biweekly', 'Bi-Weekly'),
-        ('monthly', 'Monthly'),
-    ))
-    next_contribution_date = models.DateTimeField()
+    """Recurring payment automation"""
+    user = models.ForeignKey(CustomUser, on_delete=models.CASCADE, related_name='standing_orders')
+    recipient = models.ForeignKey(CustomUser, on_delete=models.CASCADE, related_name='received_standing_orders', null=True, blank=True)
+    amount = models.DecimalField(max_digits=12, decimal_places=2)
+    frequency = models.CharField(max_length=20, choices=FREQUENCY)
+    payment_method = models.CharField(max_length=20, choices=PAYMENT_METHOD, default='INTERNAL')
+    description = models.TextField()
+    start_date = models.DateField()
+    end_date = models.DateField(null=True, blank=True)
+    last_executed = models.DateTimeField(null=True, blank=True)
+    next_execution = models.DateTimeField()
     is_active = models.BooleanField(default=True)
-    created_at = models.DateTimeField(default=datetime.now)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
     
     class Meta:
         indexes = [
-            models.Index(fields=['next_contribution_date', 'is_active']),
+            models.Index(fields=['user']),
+            models.Index(fields=['is_active']),
+            models.Index(fields=['next_execution']),
         ]
+    
+    def __str__(self):
+        return f"{self.user.email} - {self.frequency} ${self.amount}"
 
-# Group Invitations
+
 class GroupInvitation(models.Model):
-    import uuid
-    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    payment_group = models.ForeignKey(PaymentGroups, on_delete=models.CASCADE, related_name='invitations')
-    invited_profile = models.ForeignKey(PaymentProfile, on_delete=models.CASCADE)
-    invited_by = models.ForeignKey(PaymentProfile, on_delete=models.CASCADE, related_name='sent_invitations')
-    status = models.CharField(max_length=20, choices=(
-        ('pending', 'Pending'),
-        ('accepted', 'Accepted'),
-        ('rejected', 'Rejected'),
-        ('expired', 'Expired'),
-    ), default='pending')
-    invitation_link = models.CharField(max_length=500, unique=True)
-    created_at = models.DateTimeField(default=datetime.now)
+    """Invite system for payment groups"""
+    group = models.ForeignKey(PaymentGroups, on_delete=models.CASCADE, related_name='invitations')
+    inviter = models.ForeignKey(CustomUser, on_delete=models.CASCADE, related_name='sent_group_invitations')
+    invitee_email = models.EmailField()
+    status = models.CharField(max_length=20, choices=INVITATION_STATUS, default='PENDING')
     expires_at = models.DateTimeField()
+    created_at = models.DateTimeField(auto_now_add=True)
     
     class Meta:
-        unique_together = ['payment_group', 'invited_profile']
         indexes = [
+            models.Index(fields=['group']),
+            models.Index(fields=['invitee_email']),
             models.Index(fields=['status']),
             models.Index(fields=['expires_at']),
         ]
-
-# Shop Products / Services
-class Product(models.Model):
-    PRODUCT_TYPES = (
-        ('physical', 'Physical Product'),
-        ('digital', 'Digital Product'),
-        ('service', 'Service'),
-        ('subscription', 'Subscription'), # Resource, Specialization, etc.
-        ('recommendation', 'Recommendation'),
-    )
-    
-    name = models.CharField(max_length=255)
-    description = models.TextField()
-    price = models.DecimalField(decimal_places=2, max_digits=12)
-    product_type = models.CharField(max_length=50, choices=PRODUCT_TYPES, default='physical')
-    image_url = models.URLField(blank=True, null=True)
-    
-    # Logic flags
-    is_sharable = models.BooleanField(default=True) # Can be bought by a group
-    requires_subscription = models.BooleanField(default=False)
-    duration_days = models.IntegerField(default=30) # For subscriptions
-    
-    created_at = models.DateTimeField(auto_now_add=True)
     
     def __str__(self):
-        return self.name
+        return f"Invitation to {self.invitee_email} for {self.group.name}"
 
-# User Subscription to Products/Services
-class UserSubscription(models.Model):
-    user = models.ForeignKey(PaymentProfile, on_delete=models.CASCADE, related_name='subscriptions')
-    product = models.ForeignKey(Product, on_delete=models.CASCADE)
-    start_date = models.DateTimeField(auto_now_add=True)
-    end_date = models.DateTimeField()
-    is_active = models.BooleanField(default=True)
-    auto_renew = models.BooleanField(default=False)
-    
-    class Meta:
-        indexes = [
-            models.Index(fields=['user', 'is_active']),
-            models.Index(fields=['end_date']),
-        ]
 
-# Group Target/Goals (Piggy Bank)
 class GroupTarget(models.Model):
-    LOCK_OPTIONS = (
-        ('unlocked', 'Unlocked'),
-        ('locked_time', 'Locked until Date'),
-        ('locked_goal', 'Locked until Goal'),
-    )
-    
-    payment_group = models.ForeignKey(PaymentGroups, on_delete=models.CASCADE, related_name='targets')
-    target_item = models.ForeignKey(PaymentItem, on_delete=models.SET_NULL, null=True, blank=True)
-    target_product = models.ForeignKey(Product, on_delete=models.SET_NULL, null=True, blank=True) # Link to Shop Product
-    
-    name = models.CharField(max_length=255, default='Piggy Bank')
-    target_amount = models.DecimalField(decimal_places=2, max_digits=12)
-    current_amount = models.DecimalField(decimal_places=2, max_digits=12, default=0.00)
+    """Savings goals/milestones for groups (piggy bank feature)"""
+    group = models.ForeignKey(PaymentGroups, on_delete=models.CASCADE, related_name='targets')
+    name = models.CharField(max_length=255)
     description = models.TextField()
-    
-    # Piggy Bank Logic
-    locking_status = models.CharField(max_length=20, choices=LOCK_OPTIONS, default='unlocked')
-    maturity_date = models.DateTimeField(null=True, blank=True)
-    is_sharable = models.BooleanField(default=True) # If false, funds are segregated per user
-    
-    is_bid = models.BooleanField(default=False) # Is this a bid?
-    bid_status = models.CharField(max_length=20, default='pending') # pending, accumulated, confirmed
-    
-    achieved = models.BooleanField(default=False)
-    achieved_at = models.DateTimeField(null=True, blank=True)
-    created_at = models.DateTimeField(default=datetime.now)
+    target_amount = models.DecimalField(max_digits=12, decimal_places=2)
+    current_amount = models.DecimalField(max_digits=12, decimal_places=2, default=0.00)
+    target_date = models.DateField(null=True, blank=True)
+    is_achieved = models.BooleanField(default=False)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
     
     class Meta:
         indexes = [
-            models.Index(fields=['payment_group', 'achieved']),
+            models.Index(fields=['group']),
+            models.Index(fields=['is_achieved']),
+            models.Index(fields=['target_date']),
         ]
+    
+    def __str__(self):
+        return f"{self.name} - {self.group.name}"
+    
+    @property
+    def progress_percentage(self):
+        if self.target_amount > 0:
+            return round((self.current_amount / self.target_amount) * 100, 2)
+        return 0.0
 
-# Individual Savings within a Group Target (for non-sharable)
-class IndividualShare(models.Model):
-    target = models.ForeignKey(GroupTarget, on_delete=models.CASCADE, related_name='shares')
-    member = models.ForeignKey(PaymentGroupMember, on_delete=models.CASCADE)
-    target_amount = models.DecimalField(decimal_places=2, max_digits=12)
-    current_amount = models.DecimalField(decimal_places=2, max_digits=12, default=0.00)
-    quantity = models.IntegerField(default=1) # Target quantity of item
-    achieved = models.BooleanField(default=False)
 
+class PaymentItem(models.Model):
+    """Items/purposes for transactions"""
+    name = models.CharField(max_length=255)
+    description = models.TextField()
+    price = models.DecimalField(max_digits=12, decimal_places=2)
+    currency = models.CharField(max_length=3, default='USD')
+    is_active = models.BooleanField(default=True)
+    
+    class Meta:
+        indexes = [
+            models.Index(fields=['is_active']),
+        ]
+    
+    def __str__(self):
+        return f"{self.name} - ${self.price}"
+
+
+class Product(models.Model):
+    """Products available for purchase"""
+    name = models.CharField(max_length=255)
+    description = models.TextField()
+    price = models.DecimalField(max_digits=12, decimal_places=2)
+    category = models.CharField(max_length=100)
+    stock_quantity = models.IntegerField(default=0)
+    is_available = models.BooleanField(default=True)
+    image = models.ImageField(upload_to='products/', null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    
+    class Meta:
+        indexes = [
+            models.Index(fields=['category']),
+            models.Index(fields=['is_available']),
+        ]
+    
+    def __str__(self):
+        return f"{self.name} - ${self.price}"
+
+
+class UserSubscription(models.Model):
+    """Subscription management for users"""
+    user = models.OneToOneField(CustomUser, on_delete=models.CASCADE, related_name='subscription')
+    subscription_type = models.CharField(max_length=20, choices=SUBSCRIPTION_TYPE, default='BASIC')
+    status = models.CharField(max_length=20, choices=SUBSCRIPTION_STATUS, default='ACTIVE')
+    start_date = models.DateField(auto_now_add=True)
+    end_date = models.DateField(null=True, blank=True)
+    auto_renew = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    
+    class Meta:
+        indexes = [
+            models.Index(fields=['user']),
+            models.Index(fields=['status']),
+            models.Index(fields=['subscription_type']),
+        ]
+    
+    def __str__(self):
+        return f"{self.user.email} - {self.subscription_type}"
+
+
+# Legacy models (keeping for compatibility)
+class PaymentLog(models.Model):
+    """Legacy payment log model"""
+    payment_profile = models.ForeignKey(PaymentProfile, on_delete=models.CASCADE, related_name='logs')
+    amount = models.DecimalField(max_digits=12, decimal_places=2)
+    payment_type = models.CharField(max_length=50)
+    payment_date = models.DateTimeField(auto_now_add=True)
+    notes = models.TextField(blank=True)
+
+
+class PaymentAuthorization(models.Model):
+    """Payment authorization records"""
+    transaction = models.ForeignKey(TransactionToken, on_delete=models.CASCADE, related_name='authorizations')
+    authorization_code = models.CharField(max_length=255, unique=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+
+class PaymentVerification(models.Model):
+    """Payment verification records"""
+    transaction = models.ForeignKey(TransactionToken, on_delete=models.CASCADE, related_name='verifications')
+    verification_code = models.CharField(max_length=255, unique=True)
+    verified_at = models.DateTimeField(auto_now_add=True)
+
+
+class TransactionHistory(models.Model):
+    """Historical transaction records"""
+    transaction = models.ForeignKey(TransactionToken, on_delete=models.CASCADE, related_name='history')
+    status = models.CharField(max_length=20)
+    timestamp = models.DateTimeField(auto_now_add=True)
+    notes = models.TextField(blank=True)
+
+
+class TransactionTracker(models.Model):
+    """Track transaction status changes"""
+    transaction = models.ForeignKey(TransactionToken, on_delete=models.CASCADE, related_name='tracker')
+    status = models.CharField(max_length=20)
+    updated_at = models.DateTimeField(auto_now=True)

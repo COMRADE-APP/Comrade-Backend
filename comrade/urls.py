@@ -32,6 +32,7 @@ urlpatterns = [
     path('events/', include('Events.urls')),
     path('specializations/', include('Specialization.urls')),
     path('payments/', include('Payment.urls')),
+    path('api/verification/', include('Verification.urls')),
     path('api/devices/', include('DeviceManagement.urls')),
     path('api/activity/', include('ActivityLog.urls')),
     path('api/', include(rest_framework.urls)),
