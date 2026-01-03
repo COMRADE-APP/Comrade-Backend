@@ -6,8 +6,9 @@ env/
 *.env.example
 
 
-# ignore .md files
-*.md
+# ignore implementation files
+IMPLEMENTATION_STATUS.md
+PAYMENT_SYSTEM.md
 
 # Byte-compiled / Cache files
 __pycache__/
