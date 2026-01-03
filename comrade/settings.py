@@ -28,6 +28,7 @@ INSTALLED_APPS = [
     'django.contrib.sessions',
     'django.contrib.messages',
     'django.contrib.staticfiles',
+    'django.contrib.sites',  # Required for django-allauth
     'Authentication',
     'rest_framework',
     'UserManagement',
@@ -78,11 +79,11 @@ CORS_ALLOWED_ORIGINS = [
 ]
 
 # Twilio configuration
-ACCOUNT_SID = os.getenv('TWILIO_ACCOUNT_SID', '')
-AUTH_TOKEN = os.getenv('TWILIO_AUTH_TOKEN', '')
-COUNTRY_CODE = os.getenv('COUNTRY_CODE', '')
-TWILIO_WHATSAPP_NUMBER = os.getenv('TWILIO_WHATSAPP_NUMBER', '')
-TWILIO_PHONE_NUMBER = os.getenv('TWILIO_PHONE_NUMBER', '')
+ACCOUNT_SID = os.getenv('TWILIO_ACCOUNT_SID')
+AUTH_TOKEN = os.getenv('TWILIO_AUTH_TOKEN')
+COUNTRY_CODE = os.getenv('COUNTRY_CODE', '+1')
+TWILIO_WHATSAPP_NUMBER = os.getenv('TWILIO_WHATSAPP_NUMBER')
+TWILIO_PHONE_NUMBER = os.getenv('TWILIO_PHONE_NUMBER')
 
 # Email configuration
 EMAIL_HOST = os.getenv('EMAIL_HOST', 'smtp.gmail.com')
@@ -169,6 +170,9 @@ AUTHENTICATION_BACKENDS = [
     'allauth.account.auth_backends.AuthenticationBackend',
 ]
 
+# Site ID for django.contrib.sites (required by allauth)
+SITE_ID = 1
+
 SOCIALACCOUNT_PROVIDERS = {
     'google': {
         'APP': {
@@ -178,12 +182,31 @@ SOCIALACCOUNT_PROVIDERS = {
         },
         'SCOPE': ['profile', 'email'],
         'AUTH_PARAMS': {'access_type': 'online', 'prompt': 'consent'},
+    },
+    'facebook': {
+        'APP': {
+            'client_id': os.getenv('FACEBOOK_APP_ID', ''),
+            'secret': os.getenv('FACEBOOK_APP_SECRET', ''),
+        },
+        'METHOD': 'oauth2',
+        'SCOPE': ['email', 'public_profile'],
+        'FIELDS': [
+            'id',
+            'email',
+            'name',
+            'first_name',
+            'last_name',
+        ],
+        'VERIFIED_EMAIL': False,
     }
 }
 
 SOCIALACCOUNT_LOGIN_ON_GET = True
 SOCIALACCOUNT_ADAPTER = 'Authentication.adapters.MySocialAccountAdapter'
-ACCOUNT_EMAIL_REQUIRED = True
-ACCOUNT_USERNAME_REQUIRED = False
-ACCOUNT_AUTHENTICATION_METHOD = 'email'
+ACCOUNT_ADAPTER = 'Authentication.adapters.MyAccountAdapter'
+
+# Updated allauth settings (v0.50+)
+ACCOUNT_LOGIN_METHODS = {'email'}
+ACCOUNT_SIGNUP_FIELDS = ['email*', 'password1*', 'password2*']
+
 FRONTEND_URL = os.getenv('FRONTEND_URL', 'http://localhost:3000')

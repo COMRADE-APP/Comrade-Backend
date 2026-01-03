@@ -35,6 +35,7 @@ urlpatterns = [
     path('api/devices/', include('DeviceManagement.urls')),
     path('api/activity/', include('ActivityLog.urls')),
     path('api/', include(rest_framework.urls)),
+    path('accounts/', include('allauth.urls')),  # OAuth endpoints
     # path('docs/', include_docs_urls(title='Blog API')), # new
     # path('schema/', schema_view),
 ]
