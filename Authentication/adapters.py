@@ -1,0 +1,113 @@
+from allauth.account.adapters import DefaultAccountAdapter
+from allauth.socialaccount.adapters import DefaultSocialAccountAdapter
+from allauth.socialaccount.models import EmailAddress
+from django.conf import settings
+import logging
+
+logger = logging.getLogger(__name__)
+
+
+class MyAccountAdapter(DefaultAccountAdapter):
+    """
+    Custom account adapter for email-only authentication
+    No username field - email is the primary identifier
+    """
+    
+    def get_login_redirect_url(self, request):
+        """Redirect to frontend dashboard after login"""
+        return f"{settings.FRONTEND_URL}dashboard"
+    
+    def get_signup_redirect_url(self, request):
+        """Redirect to frontend dashboard after signup"""
+        return f"{settings.FRONTEND_URL}dashboard"
+    
+    def save_user(self, request, user, form, commit=True):
+        """
+        Save user with email as primary identifier
+        Username is set to None
+        """
+        user = super().save_user(request, user, form, commit=False)
+        user.username = None  # Force username to None
+        user.is_active = True
+        
+        if commit:
+            user.save()
+            # Auto-verify email for email/password registration
+            email, created = EmailAddress.objects.get_or_create(
+                user=user,
+                email=user.email.lower()
+            )
+            if created or not email.verified:
+                email.verified = True
+                email.primary = True
+                email.save()
+        
+        return user
+
+
+class MySocialAccountAdapter(DefaultSocialAccountAdapter):
+    """
+    Custom social account adapter for OAuth providers
+    Ensures email-only authentication and proper redirects
+    """
+    
+    def get_login_redirect_url(self, request):
+        """Redirect to frontend dashboard after social login"""
+        return f"{settings.FRONTEND_URL}dashboard"
+    
+    def get_signup_redirect_url(self, request):
+        """Redirect to frontend dashboard after social signup"""
+        return f"{settings.FRONTEND_URL}dashboard"
+    
+    def populate_user(self, request, sociallogin, data):
+        """Populate user from social data without username"""
+        user = super().populate_user(request, sociallogin, data)
+        user.username = None  # No username needed
+        return user
+    
+    def save_user(self, request, sociallogin, form=None):
+        """
+        Save social login user
+        Ensures email is verified and username is None
+        """
+        user = super().save_user(request, sociallogin, form)
+        user.username = None
+        user.is_active = True
+        user.save()
+        
+        # Auto-verify email for social logins
+        if user.email:
+            email, created = EmailAddress.objects.get_or_create(
+                user=user,
+                email=user.email.lower()
+            )
+            email.verified = True
+            email.primary = True
+            email.save()
+        
+        logger.info(f"Social user saved: {user.email}")
+        return user
+    
+    def pre_social_login(self, request, sociallogin):
+        """
+        Connect social account to existing user with same email
+        """
+        if sociallogin.is_existing:
+            return
+        
+        try:
+            email = sociallogin.account.extra_data.get('email')
+            if not email:
+                return
+            
+            # Try to find existing user with same email
+            from Authentication.models import CustomUser
+            existing_user = CustomUser.objects.filter(email=email).first()
+            
+            if existing_user:
+                # Connect social account to existing user
+                sociallogin.connect(request, existing_user)
+                logger.info(f"Connected social account to existing user: {email}")
+                
+        except Exception as e:
+            logger.error(f"Error in pre_social_login: {str(e)}")
