@@ -5,7 +5,6 @@ Includes document verification, member management, and admin framework
 from django.db import models
 from django.contrib.contenttypes.models import ContentType
 from django.contrib.contenttypes.fields import GenericForeignKey
-from Authentication.models import CustomUser
 from datetime import datetime, timedelta
 import uuid
 
@@ -86,14 +85,14 @@ class Institution(models.Model):
     
     # Verification
     status = models.CharField(max_length=20, choices=VERIFICATION_STATUS, default='pending')
-    created_by = models.ForeignKey(CustomUser, on_delete=models.SET_NULL, null=True, related_name='created_institutions')
+    created_by = models.ForeignKey('Authentication.CustomUser', on_delete=models.SET_NULL, null=True, related_name='created_institutions')
     
     # Verification documents metadata
     documents_submitted = models.BooleanField(default=False)
     documents_verified = models.BooleanField(default=False)
     
     # Review
-    reviewed_by = models.ForeignKey(CustomUser, on_delete=models.SET_NULL, null=True, blank=True, related_name='reviewed_institutions')
+    reviewed_by = models.ForeignKey('Authentication.CustomUser', on_delete=models.SET_NULL, null=True, blank=True, related_name='inst_reviews')
     review_notes = models.TextField(blank=True)
     
     # Timestamps
@@ -137,7 +136,7 @@ class InstitutionVerificationDocument(models.Model):
     
     # Verification
     verified = models.BooleanField(default=False)
-    verified_by = models.ForeignKey(CustomUser, on_delete=models.SET_NULL, null=True, blank=True)
+    verified_by = models.ForeignKey('Authentication.CustomUser', on_delete=models.SET_NULL, null=True, blank=True)
     verified_at = models.DateTimeField(null=True, blank=True)
     verification_notes = models.TextField(blank=True)
     
@@ -149,7 +148,7 @@ class InstitutionVerificationDocument(models.Model):
     extracted_text = models.TextField(blank=True)
     
     uploaded_at = models.DateTimeField(default=datetime.now)
-    uploaded_by = models.ForeignKey(CustomUser, on_delete=models.SET_NULL, null=True, related_name='uploaded_docs')
+    uploaded_by = models.ForeignKey('Authentication.CustomUser', on_delete=models.SET_NULL, null=True, related_name='uploaded_docs')
     
     class Meta:
         indexes = [
@@ -165,7 +164,7 @@ class InstitutionMember(models.Model):
     """Members of an institution with roles and permissions"""
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     institution = models.ForeignKey(Institution, on_delete=models.CASCADE, related_name='members')
-    user = models.ForeignKey(CustomUser, on_delete=models.CASCADE)
+    user = models.ForeignKey('Authentication.CustomUser', on_delete=models.CASCADE)
     
     role = models.CharField(max_length=20, choices=MEMBER_ROLE, default='member')
     
@@ -174,7 +173,7 @@ class InstitutionMember(models.Model):
     # Example: {'create_announcement': True, 'manage_members': False, 'edit_institution': False}
     
     # Invitation
-    invited_by = models.ForeignKey(CustomUser, on_delete=models.SET_NULL, null=True, related_name='sent_institution_invitations')
+    invited_by = models.ForeignKey('Authentication.CustomUser', on_delete=models.SET_NULL, null=True, related_name='sent_institution_invitations')
     invitation_accepted = models.BooleanField(default=False)
     invitation_token = models.CharField(max_length=100, blank=True, null=True)
     invitation_expires_at = models.DateTimeField(null=True, blank=True)
@@ -226,7 +225,7 @@ class InstitutionVerificationLog(models.Model):
         ('reactivated', 'Reactivated'),
     ))
     
-    performed_by = models.ForeignKey(CustomUser, on_delete=models.SET_NULL, null=True)
+    performed_by = models.ForeignKey('Authentication.CustomUser', on_delete=models.SET_NULL, null=True)
     notes = models.TextField(blank=True)
     metadata = models.JSONField(default=dict, blank=True)
     
@@ -304,7 +303,7 @@ class Organization(models.Model):
     
     registration_number = models.CharField(max_length=100, blank=True, unique=True, null=True)
     status = models.CharField(max_length=20, choices=VERIFICATION_STATUS, default='pending')
-    created_by = models.ForeignKey(CustomUser, on_delete=models.SET_NULL, null=True, related_name='created_organizations')
+    created_by = models.ForeignKey('Authentication.CustomUser', on_delete=models.SET_NULL, null=True, related_name='created_organizations')
     
     created_at = models.DateTimeField(default=datetime.now)
     verified_at = models.DateTimeField(null=True, blank=True)
@@ -316,3 +315,623 @@ class Organization(models.Model):
     
     def __str__(self):
         return self.name
+
+
+
+# ============================================================================
+# HIERARCHICAL INSTITUTION STRUCTURE MODELS
+# These models enable building out the internal structure of verified institutions
+# Only accessible after an Institution has been verified
+# ============================================================================
+
+# University/Institution Structure:
+# ├── Institution Branches (Campuses)
+# ├── Office of the Vice Chancellor
+# ├── Faculties / Colleges / Schools
+# │   └── Departments
+# │       └── Programs / Courses
+# ├── Administrative Departments
+# │   ├── Registrar
+# │   ├── HR
+# │   ├── Finance
+# │   ├── ICT
+# │   ├── Marketing
+# │   └── Legal
+# ├── Student Affairs
+# │   ├── Admissions
+# │   ├── Career Office
+# │   └── Counseling
+# └── Support Services
+#     ├── Security
+#     ├── Transport
+#     ├── Library
+#     ├── Cafeteria
+#     ├── Hostel
+#     └── Health Services
+
+
+class InstBranch(models.Model):
+    """Institution branches/campuses - allows multi-campus institutions"""
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    institution = models.ForeignKey(Institution, on_delete=models.CASCADE, related_name='branches')
+    
+    name = models.CharField(max_length=200)
+    branch_code = models.CharField(max_length=200, unique=True)
+    origin = models.CharField(max_length=500, blank=True)
+    abbreviation = models.CharField(max_length=200, blank=True)
+    
+    # Address
+    address = models.TextField()
+    postal_code = models.CharField(max_length=200, blank=True)
+    town = models.CharField(max_length=100, blank=True)
+    city = models.CharField(max_length=500)
+    country = models.CharField(max_length=100)
+    
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    
+    class Meta:
+        verbose_name = 'Institution Branch'
+        verbose_name_plural = 'Institution Branches'
+        indexes = [
+            models.Index(fields=['institution', 'is_active']),
+            models.Index(fields=['branch_code']),
+        ]
+    
+    def __str__(self):
+        return f"{self.name} - {self.institution.name}"
+
+
+class VCOffice(models.Model):
+    """Vice Chancellor's Office / Executive Office"""
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    institution = models.ForeignKey(Institution, on_delete=models.CASCADE, related_name='vc_offices')
+    inst_branch = models.ForeignKey(InstBranch, on_delete=models.CASCADE, null=True, blank=True, related_name='vc_offices')
+    
+    name = models.CharField(max_length=500)
+    office_code = models.CharField(max_length=500, unique=True)
+    description = models.TextField(blank=True)
+    
+    staff = models.ManyToManyField('Authentication.CustomUser', blank=True, related_name='vc_office_memberships')
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    
+    class Meta:
+        verbose_name = 'Vice Chancellor Office'
+        verbose_name_plural = 'Vice Chancellor Offices'
+        indexes = [
+            models.Index(fields=['institution', 'is_active']),
+        ]
+    
+    def __str__(self):
+        return f"{self.name} - {self.institution.name}"
+
+
+class Faculty(models.Model):
+    """Academic Faculties/Schools/Colleges"""
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    institution = models.ForeignKey(Institution, on_delete=models.CASCADE, related_name='faculties')
+    inst_branch = models.ForeignKey(InstBranch, on_delete=models.CASCADE, null=True, blank=True, related_name='faculties')
+    
+    name = models.CharField(max_length=500)
+    faculty_code = models.CharField(max_length=500, unique=True)
+    description = models.TextField(blank=True)
+    
+    staff = models.ManyToManyField('Authentication.CustomUser', blank=True, related_name='faculty_memberships')
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    
+    class Meta:
+        verbose_name = 'Faculty'
+        verbose_name_plural = 'Faculties'
+        indexes = [
+            models.Index(fields=['institution', 'is_active']),
+        ]
+    
+    def __str__(self):
+        return f"{self.name} - {self.institution.name}"
+
+
+class InstDepartment(models.Model):
+    """Academic Departments within Faculties"""
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    faculty = models.ForeignKey(Faculty, on_delete=models.CASCADE, related_name='departments')
+    
+    name = models.CharField(max_length=500)
+    dep_code = models.CharField(max_length=500, unique=True)
+    description = models.TextField(blank=True)
+    
+    staff = models.ManyToManyField('Authentication.CustomUser', blank=True, related_name='inst_department_memberships')
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    
+    class Meta:
+        verbose_name = 'Institution Department'
+        verbose_name_plural = 'Institution Departments'
+        indexes = [
+            models.Index(fields=['faculty', 'is_active']),
+        ]
+    
+    def __str__(self):
+        return f"{self.name} - {self.faculty.name}"
+
+
+class Programme(models.Model):
+    """Academic Programs/Courses"""
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    department = models.ForeignKey(InstDepartment, on_delete=models.CASCADE, related_name='programmes')
+    
+    name = models.CharField(max_length=500)
+    programme_code = models.CharField(max_length=500, unique=True)
+    description = models.TextField(blank=True)
+    
+    staff = models.ManyToManyField('Authentication.CustomUser', blank=True, related_name='programme_memberships')
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    
+    class Meta:
+        verbose_name = 'Programme'
+        verbose_name_plural = 'Programmes'
+        indexes = [
+            models.Index(fields=['department', 'is_active']),
+        ]
+    
+    def __str__(self):
+        return f"{self.name} - {self.department.name}"
+
+
+# ============================================================================
+# ADMINISTRATIVE DEPARTMENTS
+# ============================================================================
+
+class AdminDep(models.Model):
+    """Administrative Department Parent"""
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    institution = models.ForeignKey(Institution, on_delete=models.CASCADE, related_name='admin_departments')
+    inst_branch = models.ForeignKey(InstBranch, on_delete=models.CASCADE, null=True, blank=True, related_name='admin_departments')
+    
+    name = models.CharField(max_length=500)
+    admin_code = models.CharField(max_length=500, unique=True)
+    description = models.TextField(blank=True)
+    
+    staff = models.ManyToManyField('Authentication.CustomUser', blank=True, related_name='admin_dep_memberships')
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    
+    class Meta:
+        verbose_name = 'Administrative Department'
+        verbose_name_plural = 'Administrative Departments'
+        indexes = [
+            models.Index(fields=['institution', 'is_active']),
+        ]
+    
+    def __str__(self):
+        return f"{self.name} - {self.institution.name}"
+
+
+class RegistrarOffice(models.Model):
+    """Registrar's Office"""
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    admin_dep = models.ForeignKey(AdminDep, on_delete=models.CASCADE, related_name='registrar_offices')
+    
+    name = models.CharField(max_length=500)
+    registrar_code = models.CharField(max_length=500, unique=True)
+    description = models.TextField(blank=True)
+    
+    staff = models.ManyToManyField('Authentication.CustomUser', blank=True, related_name='registrar_memberships')
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    
+    class Meta:
+        verbose_name = 'Registrar Office'
+        verbose_name_plural = 'Registrar Offices'
+    
+    def __str__(self):
+        return f"{self.name} - {self.admin_dep.name}"
+
+
+class HR(models.Model):
+    """Human Resources Department"""
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    admin_dep = models.ForeignKey(AdminDep, on_delete=models.CASCADE, related_name='hr_departments')
+    
+    name = models.CharField(max_length=500)
+    hr_code = models.CharField(max_length=500, unique=True)
+    description = models.TextField(blank=True)
+    
+    staff = models.ManyToManyField('Authentication.CustomUser', blank=True, related_name='hr_memberships')
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    
+    class Meta:
+        verbose_name = 'HR Department'
+        verbose_name_plural = 'HR Departments'
+    
+    def __str__(self):
+        return f"{self.name} - {self.admin_dep.name}"
+
+
+class ICT(models.Model):
+    """ICT/IT Department"""
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    admin_dep = models.ForeignKey(AdminDep, on_delete=models.CASCADE, related_name='ict_departments')
+    
+    name = models.CharField(max_length=500)
+    ict_code = models.CharField(max_length=500, unique=True)
+    description = models.TextField(blank=True)
+    
+    staff = models.ManyToManyField('Authentication.CustomUser', blank=True, related_name='ict_memberships')
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    
+    class Meta:
+        verbose_name = 'ICT Department'
+        verbose_name_plural = 'ICT Departments'
+    
+    def __str__(self):
+        return f"{self.name} - {self.admin_dep.name}"
+
+
+class Finance(models.Model):
+    """Finance Department"""
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    admin_dep = models.ForeignKey(AdminDep, on_delete=models.CASCADE, related_name='finance_departments')
+    
+    name = models.CharField(max_length=500)
+    finance_code = models.CharField(max_length=500, unique=True)
+    description = models.TextField(blank=True)
+    
+    staff = models.ManyToManyField('Authentication.CustomUser', blank=True, related_name='finance_memberships')
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    
+    class Meta:
+        verbose_name = 'Finance Department'
+        verbose_name_plural = 'Finance Departments'
+    
+    def __str__(self):
+        return f"{self.name} - {self.admin_dep.name}"
+
+
+class Marketing(models.Model):
+    """Marketing Department"""
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    admin_dep = models.ForeignKey(AdminDep, on_delete=models.CASCADE, related_name='marketing_departments')
+    
+    name = models.CharField(max_length=500)
+    marketing_code = models.CharField(max_length=500, unique=True)
+    description = models.TextField(blank=True)
+    
+    staff = models.ManyToManyField('Authentication.CustomUser', blank=True, related_name='marketing_memberships')
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    
+    class Meta:
+        verbose_name = 'Marketing Department'
+        verbose_name_plural = 'Marketing Departments'
+    
+    def __str__(self):
+        return f"{self.name} - {self.admin_dep.name}"
+
+
+class Legal(models.Model):
+    """Legal Department"""
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    admin_dep = models.ForeignKey(AdminDep, on_delete=models.CASCADE, related_name='legal_departments')
+    
+    name = models.CharField(max_length=500)
+    legal_code = models.CharField(max_length=500, unique=True)
+    description = models.TextField(blank=True)
+    
+    staff = models.ManyToManyField('Authentication.CustomUser', blank=True, related_name='legal_memberships')
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    
+    class Meta:
+        verbose_name = 'Legal Department'
+        verbose_name_plural = 'Legal Departments'
+    
+    def __str__(self):
+        return f"{self.name} - {self.admin_dep.name}"
+
+
+# ============================================================================
+# STUDENT AFFAIRS
+# ============================================================================
+
+class StudentAffairs(models.Model):
+    """Student Affairs Department Parent"""
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    institution = models.ForeignKey(Institution, on_delete=models.CASCADE, related_name='student_affairs')
+    inst_branch = models.ForeignKey(InstBranch, on_delete=models.CASCADE, null=True, blank=True, related_name='student_affairs')
+    
+    name = models.CharField(max_length=500)
+    stud_affairs_code = models.CharField(max_length=500, unique=True)
+    description = models.TextField(blank=True)
+    
+    staff = models.ManyToManyField('Authentication.CustomUser', blank=True, related_name='student_affairs_memberships')
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    
+    class Meta:
+        verbose_name = 'Student Affairs'
+        verbose_name_plural = 'Student Affairs'
+        indexes = [
+            models.Index(fields=['institution', 'is_active']),
+        ]
+    
+    def __str__(self):
+        return f"{self.name} - {self.institution.name}"
+
+
+class Admissions(models.Model):
+    """Admissions Office"""
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    stud_affairs = models.ForeignKey(StudentAffairs, on_delete=models.CASCADE, related_name='admissions_offices')
+    
+    name = models.CharField(max_length=500)
+    admissions_code = models.CharField(max_length=500, unique=True)
+    description = models.TextField(blank=True)
+    
+    staff = models.ManyToManyField('Authentication.CustomUser', blank=True, related_name='admissions_memberships')
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    
+    class Meta:
+        verbose_name = 'Admissions Office'
+        verbose_name_plural = 'Admissions Offices'
+    
+    def __str__(self):
+        return f"{self.name} - {self.stud_affairs.name}"
+
+
+class CareerOffice(models.Model):
+    """Career Services Office"""
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    stud_affairs = models.ForeignKey(StudentAffairs, on_delete=models.CASCADE, related_name='career_offices')
+    
+    name = models.CharField(max_length=500)
+    career_code = models.CharField(max_length=500, unique=True)
+    description = models.TextField(blank=True)
+    
+    staff = models.ManyToManyField('Authentication.CustomUser', blank=True, related_name='career_office_memberships')
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    
+    class Meta:
+        verbose_name = 'Career Office'
+        verbose_name_plural = 'Career Offices'
+    
+    def __str__(self):
+        return f"{self.name} - {self.stud_affairs.name}"
+
+
+class Counselling(models.Model):
+    """Counselling Services"""
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    stud_affairs = models.ForeignKey(StudentAffairs, on_delete=models.CASCADE, related_name='counselling_services')
+    
+    name = models.CharField(max_length=500)
+    counselling_code = models.CharField(max_length=500, unique=True)
+    description = models.TextField(blank=True)
+    
+    staff = models.ManyToManyField('Authentication.CustomUser', blank=True, related_name='counselling_memberships')
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    
+    class Meta:
+        verbose_name = 'Counselling Service'
+        verbose_name_plural = 'Counselling Services'
+    
+    def __str__(self):
+        return f"{self.name} - {self.stud_affairs.name}"
+
+
+# ============================================================================
+# SUPPORT SERVICES
+# ============================================================================
+
+class SupportServices(models.Model):
+    """Support Services Department Parent"""
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    institution = models.ForeignKey(Institution, on_delete=models.CASCADE, related_name='support_services')
+    inst_branch = models.ForeignKey(InstBranch, on_delete=models.CASCADE, null=True, blank=True, related_name='support_services')
+    
+    name = models.CharField(max_length=500)
+    support_services_code = models.CharField(max_length=500, unique=True)
+    description = models.TextField(blank=True)
+    
+    staff = models.ManyToManyField('Authentication.CustomUser', blank=True, related_name='support_services_memberships')
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    
+    class Meta:
+        verbose_name = 'Support Services'
+        verbose_name_plural = 'Support Services'
+        indexes = [
+            models.Index(fields=['institution', 'is_active']),
+        ]
+    
+    def __str__(self):
+        return f"{self.name} - {self.institution.name}"
+
+
+class Security(models.Model):
+    """Security Services"""
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    support_services = models.ForeignKey(SupportServices, on_delete=models.CASCADE, related_name='security_units')
+    
+    name = models.CharField(max_length=500)
+    security_code = models.CharField(max_length=500, unique=True)
+    description = models.TextField(blank=True)
+    
+    staff = models.ManyToManyField('Authentication.CustomUser', blank=True, related_name='security_memberships')
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    
+    class Meta:
+        verbose_name = 'Security Service'
+        verbose_name_plural = 'Security Services'
+    
+    def __str__(self):
+        return f"{self.name} - {self.support_services.name}"
+
+
+class Transport(models.Model):
+    """Transport Services"""
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    support_services = models.ForeignKey(SupportServices, on_delete=models.CASCADE, related_name='transport_units')
+    
+    name = models.CharField(max_length=500)
+    transport_code = models.CharField(max_length=500, unique=True)
+    description = models.TextField(blank=True)
+    
+    staff = models.ManyToManyField('Authentication.CustomUser', blank=True, related_name='transport_memberships')
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    
+    class Meta:
+        verbose_name = 'Transport Service'
+        verbose_name_plural = 'Transport Services'
+    
+    def __str__(self):
+        return f"{self.name} - {self.support_services.name}"
+
+
+class Library(models.Model):
+    """Library Services"""
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    support_services = models.ForeignKey(SupportServices, on_delete=models.CASCADE, related_name='libraries')
+    
+    name = models.CharField(max_length=500)
+    library_code = models.CharField(max_length=500, unique=True)
+    description = models.TextField(blank=True)
+    
+    staff = models.ManyToManyField('Authentication.CustomUser', blank=True, related_name='library_memberships')
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    
+    class Meta:
+        verbose_name = 'Library'
+        verbose_name_plural = 'Libraries'
+    
+    def __str__(self):
+        return f"{self.name} - {self.support_services.name}"
+
+
+class Cafeteria(models.Model):
+    """Cafeteria Services"""
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    support_services = models.ForeignKey(SupportServices, on_delete=models.CASCADE, related_name='cafeterias')
+    
+    name = models.CharField(max_length=500)
+    cafeteria_code = models.CharField(max_length=500, unique=True)
+    description = models.TextField(blank=True)
+    
+    staff = models.ManyToManyField('Authentication.CustomUser', blank=True, related_name='cafeteria_memberships')
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    
+    class Meta:
+        verbose_name = 'Cafeteria'
+        verbose_name_plural = 'Cafeterias'
+    
+    def __str__(self):
+        return f"{self.name} - {self.support_services.name}"
+
+
+class Hostel(models.Model):
+    """Hostel/Accommodation Services"""
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    support_services = models.ForeignKey(SupportServices, on_delete=models.CASCADE, related_name='hostels')
+    
+    name = models.CharField(max_length=500)
+    hostel_code = models.CharField(max_length=500, unique=True)
+    description = models.TextField(blank=True)
+    
+    staff = models.ManyToManyField('Authentication.CustomUser', blank=True, related_name='hostel_memberships')
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    
+    class Meta:
+        verbose_name = 'Hostel'
+        verbose_name_plural = 'Hostels'
+    
+    def __str__(self):
+        return f"{self.name} - {self.support_services.name}"
+
+
+class HealthServices(models.Model):
+    """Health/Medical Services"""
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    support_services = models.ForeignKey(SupportServices, on_delete=models.CASCADE, related_name='health_services')
+    
+    name = models.CharField(max_length=500)
+    health_services_code = models.CharField(max_length=500, unique=True)
+    description = models.TextField(blank=True)
+    
+    staff = models.ManyToManyField('Authentication.CustomUser', blank=True, related_name='health_services_memberships')
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    
+    class Meta:
+        verbose_name = 'Health Service'
+        verbose_name_plural = 'Health Services'
+    
+    def __str__(self):
+        return f"{self.name} - {self.support_services.name}"
+
+
+# ============================================================================
+# FLEXIBLE UNIT STRUCTURE
+# ============================================================================
+
+class OtherInstitutionUnit(models.Model):
+    """Generic unit for custom/flexible institutional structures"""
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    institution = models.ForeignKey(Institution, on_delete=models.CASCADE, related_name='other_units')
+    inst_branch = models.ForeignKey(InstBranch, on_delete=models.CASCADE, null=True, blank=True, related_name='other_units')
+    
+    parent_units = models.ManyToManyField('self', symmetrical=False, blank=True, related_name='child_units')
+    
+    name = models.CharField(max_length=500)
+    unit_code = models.CharField(max_length=200, unique=True)
+    description = models.TextField(blank=True)
+    
+    staff = models.ManyToManyField('Authentication.CustomUser', blank=True, related_name='other_unit_memberships')
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    
+    class Meta:
+        verbose_name = 'Other Institution Unit'
+        verbose_name_plural = 'Other Institution Units'
+        indexes = [
+            models.Index(fields=['institution', 'is_active']),
+        ]
+    
+    def __str__(self):
+        return f"{self.name} - {self.institution.name}"

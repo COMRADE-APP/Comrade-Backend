@@ -1,5 +1,5 @@
-from allauth.account.adapters import DefaultAccountAdapter
-from allauth.socialaccount.adapters import DefaultSocialAccountAdapter
+from allauth.account.adapter import DefaultAccountAdapter
+from allauth.socialaccount.adapter import DefaultSocialAccountAdapter
 from allauth.socialaccount.models import EmailAddress
 from django.conf import settings
 import logging
