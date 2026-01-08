@@ -48,6 +48,7 @@ class RegisterView(APIView):
     permission_classes = [AllowAny]
     
     def post(self, request):
+        print('-------------------', request.data, '-------------------')
         serializer = BaseUserSerializer(data=request.data)
         
         if serializer.is_valid():
@@ -77,6 +78,8 @@ class RegisterView(APIView):
             return Response({
                 "message": "User registered successfully. Check email to verify."
             }, status=status.HTTP_201_CREATED)
+
+        print('-------------------', serializer.errors, '-------------------')
         
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
@@ -127,6 +130,7 @@ class LoginView(APIView):
         otp_method = request.data.get('otp_method', 'email')  # 'email' or 'sms'
         
         user = authenticate(email=email, password=password)
+        print('------------------------', request.data, '---------------------------')
         
         if user is None:
             log_login_attempt(None, request, False, "Invalid credentials")

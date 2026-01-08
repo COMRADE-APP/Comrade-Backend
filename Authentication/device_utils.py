@@ -139,3 +139,24 @@ def require_device_verification(user, request):
     except UserDevice.DoesNotExist:
         # New device always requires verification
         return True
+
+
+def get_user_devices(user):
+    """Get all devices for a user"""
+    devices = UserDevice.objects.filter(user=user, is_active=True).order_by('-last_seen')
+    
+    return [
+        {
+            'id': d.id,
+            'browser': d.browser,
+            'os': d.os,
+            'device_type': d.device_type,
+            'last_ip': d.last_ip,
+            'last_seen': d.last_seen.isoformat() if d.last_seen else None,
+            'is_current': False,  # Can be determined by comparing fingerprints
+            'trust_level': d.trust_level,
+            'created_at': d.created_at.isoformat() if d.created_at else None,
+        }
+        for d in devices
+    ]
+

@@ -24,17 +24,28 @@ import rest_framework
 
 urlpatterns = [
     path('admin/', admin.site.urls),
+    
+    # Authentication (includes social auth callbacks, TOTP, login, register, etc.)
     path('auth/', include('Authentication.urls')),
+    
+    # Allauth social login initiation (Google, Facebook, etc.)
+    path('accounts/', include('allauth.urls')),
+    
+    # User Management
     path('users/', include('UserManagement.urls')),
-    path('rooms/', include('Rooms.urls')),
-    path('announcements/', include('Announcements.urls')),
-    path('resources/', include('Resources.urls')),
-    path('events/', include('Events.urls')),
-    path('specializations/', include('Specialization.urls')),
-    path('payments/', include('Payment.urls')),
+    
+    # API endpoints
+    path('api/rooms/', include('Rooms.urls')),
+    path('api/announcements/', include('Announcements.urls')),
+    path('api/resources/', include('Resources.urls')),
+    path('api/events/', include('Events.urls')),
+    path('api/specializations/', include('Specialization.urls')),
+    path('api/payments/', include('Payment.urls')),
+    path('api/institutions/', include('Institution.urls')),
+    path('api/organizations/', include('Organisation.urls')),
     path('api/devices/', include('DeviceManagement.urls')),
     path('api/activity/', include('ActivityLog.urls')),
     path('api/', include(rest_framework.urls)),
-    # path('docs/', include_docs_urls(title='Blog API')), # new
-    # path('schema/', schema_view),
 ]
+
+

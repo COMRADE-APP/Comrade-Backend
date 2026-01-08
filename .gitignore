@@ -3,6 +3,7 @@ venv/
 env/
 *.secret
 *.env
+.env.exit
 
 
 # ignore .md files

@@ -18,7 +18,16 @@ SECRET_KEY = os.getenv('SECRET_KEY', 'django-insecure-c+%9#v0&z&-av-84em1*d3aazv
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = os.getenv('DEBUG', 'True') == 'True'
 
-ALLOWED_HOSTS = os.getenv('ALLOWED_HOSTS', 'localhost,127.0.0.1').split(',')
+# ALLOWED_HOSTS = os.getenv('ALLOWED_HOSTS', 'localhost:3000,127.0.0.1:8000').split(',')
+ALLOWED_HOSTS = [
+    "localhost",
+    "127.0.0.1",
+    "[::1]",
+    "http://localhost:8000",
+    "http://localhost:3000",
+    "http://localhost:5173",
+    "http://localhost:8080",
+]
 
 # Application definition
 INSTALLED_APPS = [
@@ -28,6 +37,8 @@ INSTALLED_APPS = [
     'django.contrib.sessions',
     'django.contrib.messages',
     'django.contrib.staticfiles',
+    
+    # Custom Apps
     'Authentication',
     'rest_framework',
     'UserManagement',
@@ -65,9 +76,9 @@ INSTALLED_APPS = [
 ]
 
 MIDDLEWARE = [
+    'corsheaders.middleware.CorsMiddleware',
     'django.middleware.security.SecurityMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
-    'corsheaders.middleware.CorsMiddleware',
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
     'django.contrib.auth.middleware.AuthenticationMiddleware',
@@ -76,12 +87,84 @@ MIDDLEWARE = [
     "allauth.account.middleware.AccountMiddleware",
 ]
 
+# ALLOWED_HOSTS: Only hostnames, no protocols/ports
+ALLOWED_HOSTS = [
+    "localhost",
+    "127.0.0.1",
+    "[::1]",
+]
+
+# CORS settings - FIX THESE
 CORS_ALLOWED_ORIGINS = [
     "http://localhost:3000",
-    "http://localhost:8000",
-    "http://localhost:8080",
+    "http://127.0.0.1:3000",
     "http://localhost:5173",
+    "http://127.0.0.1:5173",
 ]
+
+# CRITICAL: This must be True for cookies/session auth
+CORS_ALLOW_CREDENTIALS = True
+
+
+# CSRF settings - CRITICAL for POST requests
+CSRF_TRUSTED_ORIGINS = [
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+]
+
+# Additional CORS headers needed
+CORS_ALLOW_HEADERS = [
+    'accept',
+    'accept-encoding',
+    'authorization',
+    'content-type',
+    'dnt',
+    'origin',
+    'user-agent',
+    'x-csrftoken',
+    'x-requested-with',
+    'access-control-allow-credentials',  # Add this
+]
+
+# Add these settings for better CORS handling
+CORS_EXPOSE_HEADERS = ['Content-Type', 'X-CSRFToken']
+CORS_ALLOW_METHODS = [
+    'DELETE',
+    'GET',
+    'OPTIONS',
+    'PATCH',
+    'POST',
+    'PUT',
+]
+
+CORS_ALLOWED_ORIGIN_REGEXES = [
+    r"^https?://localhost:8000$",
+    r"^https?://localhost:8080$",
+    r"^https?://localhost:5173$",
+]
+
+CSRF_COOKIE_SECURE = False
+SESSION_COOKIE_SECURE = False
+
+CORS_ALLOW_CREDENTIALS = True
+
+
+
+# If you want to disable CSRF for testing (not recommended for production)
+# CSRF_COOKIE_SECURE = False  # Set to True in production with HTTPS
+# SESSION_COOKIE_SECURE = False  # Set to True in production with HTTPS
+
+# ALLOWED_HOSTS = [
+#     "localhost",
+#     "127.0.0.1",
+#     "[::1]",
+#     "localhost:8000",
+#     "localhost:3000",
+#     "localhost:5173",
+#     "localhost:8080",
+# ]
 
 # Twilio configuration
 ACCOUNT_SID = os.getenv('TWILIO_ACCOUNT_SID', '')
@@ -263,10 +346,38 @@ SOCIALACCOUNT_LOGIN_ON_GET = True
 SOCIALACCOUNT_QUERY_EMAIL = True
 SOCIALACCOUNT_STORE_TOKENS = True
 
-# Redirect URLs - Point to frontend dashboard
-FRONTEND_DASHBOARD = f"{os.getenv('FRONTEND_URL', 'http://localhost:3000')}dashboard"
+# Redirect URLs - Point to frontend
+# NOTE: Frontend runs on port 5173 (Vite) by default, ensure FRONTEND_URL has trailing slash
+FRONTEND_URL = os.getenv('FRONTEND_URL', 'http://localhost:5173/')
+
+# Dashboard is at root '/' in frontend
+FRONTEND_DASHBOARD = FRONTEND_URL  # Frontend dashboard is at '/'
 LOGIN_REDIRECT_URL = FRONTEND_DASHBOARD
 ACCOUNT_LOGIN_REDIRECT_URL = FRONTEND_DASHBOARD
 ACCOUNT_SIGNUP_REDIRECT_URL = FRONTEND_DASHBOARD
 SOCIALACCOUNT_LOGIN_REDIRECT_URL = FRONTEND_DASHBOARD
-LOGOUT_REDIRECT_URL = f"{os.getenv('FRONTEND_URL', 'http://localhost:3000')}login"
+LOGOUT_REDIRECT_URL = f"{FRONTEND_URL}login"
+
+
+
+# Django AllAuth settings for development
+SITE_ID = 1
+
+# Allow HTTP for development (change to 'https' in production)
+ACCOUNT_DEFAULT_HTTP_PROTOCOL = "http"
+
+# These settings help with cross-origin requests
+ACCOUNT_EMAIL_VERIFICATION = 'optional'  # Set to 'mandatory' in production
+ACCOUNT_SESSION_REMEMBER = True
+
+# Cookie settings for development
+CSRF_COOKIE_SAMESITE = 'Lax'
+SESSION_COOKIE_SAMESITE = 'Lax'
+CSRF_COOKIE_HTTPONLY = False  # Allows JS to read CSRF token
+SESSION_COOKIE_HTTPONLY = True
+CSRF_COOKIE_SECURE = False  # Set to True in production with HTTPS
+SESSION_COOKIE_SECURE = False  # Set to True in production with HTTPS
+CSRF_COOKIE_DOMAIN = None  # Use None for localhost
+SESSION_COOKIE_DOMAIN = None  # Use None for localhost
+
+

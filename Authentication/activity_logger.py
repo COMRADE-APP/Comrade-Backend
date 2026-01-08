@@ -84,3 +84,20 @@ def log_device_activity(user, request, action, device_id=None):
         'action': action,
         'device_id': device_id
     }, request)
+
+
+def get_user_activity_logs(user, limit=50):
+    """Get activity logs for a user"""
+    activities = UserActivity.objects.filter(user=user).order_by('-created_at')[:limit]
+    
+    return [
+        {
+            'id': a.id,
+            'type': a.activity_type,
+            'description': a.description,
+            'ip_address': a.ip_address,
+            'created_at': a.created_at.isoformat() if a.created_at else None,
+        }
+        for a in activities
+    ]
+
