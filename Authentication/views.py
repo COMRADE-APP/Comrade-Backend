@@ -18,6 +18,8 @@ from django.conf import settings
 from django.urls import reverse
 from django.utils import timezone
 from django.shortcuts import redirect
+from django.views.decorators.csrf import csrf_exempt
+from django.utils.decorators import method_decorator
 import logging
 import secrets
 
@@ -44,6 +46,7 @@ from Authentication.activity_logger import (
 logger = logging.getLogger(__name__)
 
 
+@method_decorator(csrf_exempt, name='dispatch')
 class RegisterView(APIView):
     permission_classes = [AllowAny]
     
@@ -57,31 +60,96 @@ class RegisterView(APIView):
             # Log registration
             log_user_activity(user, 'register', request, "User registered")
             
-            # Generate verification link
-            uid = urlsafe_base64_encode(force_bytes(user.pk))
-            token = default_token_generator.make_token(user)
-            verify_path = reverse('verify')
-            verify_url = request.build_absolute_uri(f"{verify_path}?uid={uid}&token={token}")
+            # Generate OTP for registration verification
+            otp_code = str(secrets.SystemRandom().randint(100000, 999999))
+            user.registration_otp = otp_code
+            user.registration_otp_expires = timezone.now() + timezone.timedelta(minutes=OTP_EXPIRY_MINUTES)
+            user.save()
             
-            # Send email
+            print(f'Registration OTP: {otp_code}')
+            
+            # Send OTP via email
             try:
-                send_mail(
-                    'Verify your Comrade account', 
-                    f'Click to verify: {verify_url}', 
-                    settings.EMAIL_HOST_USER, 
-                    [user.email],
-                    fail_silently=False
-                )
+                email_sent = send_email_otp(user.email, otp_code, action='registration')
+                if not email_sent:
+                    logger.error(f"Failed to send registration OTP to {user.email}")
             except Exception as e:
-                logger.error(f"Failed to send verification email: {e}")
+                logger.error(f"Failed to send registration OTP: {e}")
             
             return Response({
-                "message": "User registered successfully. Check email to verify."
+                "message": "Registration successful. Please verify your email with the OTP sent.",
+                "email": user.email,
+                "next_step": "verify_registration_otp"
             }, status=status.HTTP_201_CREATED)
 
         print('-------------------', serializer.errors, '-------------------')
         
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+
+@method_decorator(csrf_exempt, name='dispatch')
+class RegisterVerifyView(APIView):
+    """Verify registration OTP and activate user account"""
+    permission_classes = [AllowAny]
+    
+    def post(self, request):
+        email = request.data.get('email')
+        otp = request.data.get('otp')
+        
+        if not email or not otp:
+            return Response({"detail": "Email and OTP are required."}, status=status.HTTP_400_BAD_REQUEST)
+        
+        try:
+            user = CustomUser.objects.get(email=email)
+        except CustomUser.DoesNotExist:
+            return Response({"detail": "User not found."}, status=status.HTTP_404_NOT_FOUND)
+        
+        # Check if already verified
+        if user.is_active:
+            return Response({"detail": "Account already verified."}, status=status.HTTP_400_BAD_REQUEST)
+        
+        # Check OTP
+        if not user.registration_otp or not user.registration_otp_expires:
+            return Response({"detail": "No pending verification found."}, status=status.HTTP_400_BAD_REQUEST)
+        
+        if timezone.now() > user.registration_otp_expires:
+            return Response({"detail": "Verification code expired."}, status=status.HTTP_400_BAD_REQUEST)
+        
+        if otp != user.registration_otp:
+            return Response({"detail": "Invalid verification code."}, status=status.HTTP_400_BAD_REQUEST)
+        
+        # Activate user and clear OTP
+        user.is_active = True
+        user.registration_otp = None
+        user.registration_otp_expires = None
+        
+        # Set user type boolean flags
+        flag_map = {
+            'student': 'is_student',
+            'lecturer': 'is_lecturer',
+            'org_staff': 'is_org_staff',
+            'org_admin': 'is_org_admin',
+            'inst_admin': 'is_inst_admin',
+            'inst_staff': 'is_inst_staff',
+        }
+        
+        flag = flag_map.get(user.user_type)
+        if flag:
+            setattr(user, flag, True)
+        
+        user.save()
+        
+        # Create Profile automatically
+        Profile.objects.get_or_create(user=user)
+        
+        log_user_activity(user, 'email_verified', request, "Email verified via OTP")
+        
+        return Response({
+            "message": "Email verified successfully!",
+            "email": user.email,
+            "user_type": user.user_type,
+            "next_step": "profile_setup"
+        })
 
 
 class VerifyView(APIView):
@@ -121,6 +189,7 @@ class VerifyView(APIView):
         return Response({'detail': 'Invalid or expired token.'}, status=status.HTTP_400_BAD_REQUEST)
 
 
+@method_decorator(csrf_exempt, name='dispatch')
 class LoginView(APIView):
     permission_classes = [AllowAny]
     
@@ -221,6 +290,7 @@ class LoginView(APIView):
             }, status=status.HTTP_200_OK)
 
 
+@method_decorator(csrf_exempt, name='dispatch')
 class LoginVerifyView(APIView):
     permission_classes = [AllowAny]
     
@@ -280,11 +350,13 @@ class LoginVerifyView(APIView):
         })
 
 
+@method_decorator(csrf_exempt, name='dispatch')
 class ResendOTPView(APIView):
     permission_classes = [AllowAny]
     
     def post(self, request):
         email = request.data.get('email')
+        action_type = request.data.get('action_type', 'login')  # 'login' or 'registration'
         otp_method = request.data.get('otp_method', 'email')
         
         if not email:

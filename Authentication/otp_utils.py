@@ -63,12 +63,13 @@ def generate_qr_code(secret, email):
 def send_email_otp(email, otp, action='login'):
     """
     Send OTP via email with HTML template
-    action: 'login', 'password_reset', '2fa_setup'
+    action: 'login', 'password_reset', '2fa_setup', 'registration'
     """
     action_text = {
         'login': 'Login Verification',
         'password_reset': 'Password Reset',
-        '2fa_setup': '2FA Setup'
+        '2fa_setup': '2FA Setup',
+        'registration': 'Email Verification'
     }.get(action, 'Verification')
     
     subject = f'Comrade - {action_text} Code'

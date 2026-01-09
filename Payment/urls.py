@@ -12,6 +12,9 @@ router.register(r'transactions', views.TransactionViewSet, basename='transaction
 router.register(r'groups', views.PaymentGroupsViewSet, basename='payment-group')
 router.register(r'items', views.PaymentItemViewSet, basename='payment-item')
 router.register(r'methods', PaymentMethodViewSet, basename='payment-method')
+router.register(r'products', views.ProductViewSet, basename='product')
+router.register(r'subscriptions', views.UserSubscriptionViewSet, basename='subscription')
+router.register(r'targets', views.GroupTargetViewSet, basename='target')
 
 urlpatterns = [
     path('', include(router.urls)),

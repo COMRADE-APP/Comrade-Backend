@@ -84,6 +84,10 @@ class CustomUser(AbstractUser):
     # SMS OTP (fallback for users without 2FA)
     sms_otp = models.CharField(max_length=6, blank=True, null=True)
     sms_otp_expires = models.DateTimeField(null=True, blank=True)
+    
+    # Registration OTP (for email verification during registration)
+    registration_otp = models.CharField(max_length=6, blank=True, null=True)
+    registration_otp_expires = models.DateTimeField(null=True, blank=True)
 
     
     USERNAME_FIELD = 'email'

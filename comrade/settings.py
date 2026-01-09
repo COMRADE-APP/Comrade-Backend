@@ -103,7 +103,7 @@ CORS_ALLOWED_ORIGINS = [
 ]
 
 # CRITICAL: This must be True for cookies/session auth
-CORS_ALLOW_CREDENTIALS = True
+# CORS_ALLOW_CREDENTIALS = True
 
 
 # CSRF settings - CRITICAL for POST requests
@@ -145,10 +145,10 @@ CORS_ALLOWED_ORIGIN_REGEXES = [
     r"^https?://localhost:5173$",
 ]
 
-CSRF_COOKIE_SECURE = False
-SESSION_COOKIE_SECURE = False
+# CSRF_COOKIE_SECURE = False
+# SESSION_COOKIE_SECURE = False
 
-CORS_ALLOW_CREDENTIALS = True
+# CORS_ALLOW_CREDENTIALS = True
 
 
 
@@ -328,11 +328,10 @@ SOCIALACCOUNT_PROVIDERS = {
 ACCOUNT_ADAPTER = 'Authentication.adapters.MyAccountAdapter'
 SOCIALACCOUNT_ADAPTER = 'Authentication.adapters.MySocialAccountAdapter'
 
-# Email-only authentication (NO USERNAME)
+# Email-only authentication (NO USERNAME) - Updated for allauth v0.50+
 ACCOUNT_USER_MODEL_USERNAME_FIELD = None
-ACCOUNT_EMAIL_REQUIRED = True
-ACCOUNT_USERNAME_REQUIRED = False
-ACCOUNT_AUTHENTICATION_METHOD = 'email'
+ACCOUNT_LOGIN_METHODS = {'email'}  # New v0.50+ syntax
+ACCOUNT_SIGNUP_FIELDS = ['email*', 'password1*', 'password2*']  # New v0.50+ syntax
 ACCOUNT_EMAIL_VERIFICATION = 'optional'  # Can be 'mandatory' for production
 ACCOUNT_UNIQUE_EMAIL = True
 ACCOUNT_EMAIL_SUBJECT_PREFIX = '[Comrade] '
@@ -371,13 +370,13 @@ ACCOUNT_EMAIL_VERIFICATION = 'optional'  # Set to 'mandatory' in production
 ACCOUNT_SESSION_REMEMBER = True
 
 # Cookie settings for development
-CSRF_COOKIE_SAMESITE = 'Lax'
-SESSION_COOKIE_SAMESITE = 'Lax'
-CSRF_COOKIE_HTTPONLY = False  # Allows JS to read CSRF token
-SESSION_COOKIE_HTTPONLY = True
-CSRF_COOKIE_SECURE = False  # Set to True in production with HTTPS
-SESSION_COOKIE_SECURE = False  # Set to True in production with HTTPS
-CSRF_COOKIE_DOMAIN = None  # Use None for localhost
-SESSION_COOKIE_DOMAIN = None  # Use None for localhost
+# CSRF_COOKIE_SAMESITE = 'Lax'
+# SESSION_COOKIE_SAMESITE = 'Lax'
+# CSRF_COOKIE_HTTPONLY = False  # Allows JS to read CSRF token
+# SESSION_COOKIE_HTTPONLY = True
+# CSRF_COOKIE_SECURE = False  # Set to True in production with HTTPS
+# SESSION_COOKIE_SECURE = False  # Set to True in production with HTTPS
+# CSRF_COOKIE_DOMAIN = None  # Use None for localhost
+# SESSION_COOKIE_DOMAIN = None  # Use None for localhost
 
 

@@ -22,6 +22,7 @@ def get_client_ip(request):
 def log_user_activity(user, activity_type, request, description=''):
     """Log high-level user activity"""
     try:
+        print("-------------------", get_client_ip(request), "-------------------")
         UserActivity.objects.create(
             user=user,
             activity_type=activity_type,

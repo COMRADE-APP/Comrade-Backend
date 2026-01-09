@@ -10,6 +10,7 @@ from Authentication.views_totp import (
 )
 from Authentication.views import (
     RegisterView, VerifyView, LoginView, LogoutView, LoginVerifyView,
+    RegisterVerifyView,
     PasswordResetRequestView, PasswordResetConfirmView,
     Setup2FAView, Confirm2FASetupView,
     ResendOTPView, VerifySMSOTPView, Verify2FAView,
@@ -46,6 +47,7 @@ urlpatterns = [
     
     # Core Authentication
     path('register/', RegisterView.as_view(), name='register'),
+    path('register-verify/', RegisterVerifyView.as_view(), name='register-verify'),
     path('verify/', VerifyView.as_view(), name='verify'),
     path('login/', LoginView.as_view(), name='login'),
     path('login-verify/', LoginVerifyView.as_view(), name='login-verify'),
