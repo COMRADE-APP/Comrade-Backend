@@ -46,6 +46,7 @@ urlpatterns = [
     path('api/organizations/', include('Organisation.urls')),
     path('api/devices/', include('DeviceManagement.urls')),
     path('api/activity/', include('ActivityLog.urls')),
+    path('api/opinions/', include('Opinions.urls')),  # Opinions & Social
     path('api/', include(rest_framework.urls)),
 ]
 
