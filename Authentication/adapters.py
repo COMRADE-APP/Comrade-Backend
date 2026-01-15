@@ -14,12 +14,16 @@ class MyAccountAdapter(DefaultAccountAdapter):
     """
     
     def get_login_redirect_url(self, request):
-        """Redirect to frontend dashboard after login"""
-        return f"{settings.FRONTEND_URL}dashboard"
+        """Redirect to backend JWT callback which generates tokens and redirects to frontend"""
+        # Redirect to our JWT callback endpoint which will generate tokens
+        # and redirect to frontend with tokens in URL
+        provider = getattr(request, 'socialaccount_provider', 'google')
+        return f"/auth/{provider}/callback/"
     
     def get_signup_redirect_url(self, request):
-        """Redirect to frontend dashboard after signup"""
-        return f"{settings.FRONTEND_URL}dashboard"
+        """Redirect to backend JWT callback which generates tokens and redirects to frontend"""
+        provider = getattr(request, 'socialaccount_provider', 'google')
+        return f"/auth/{provider}/callback/"
     
     def save_user(self, request, user, form, commit=True):
         """
@@ -52,12 +56,21 @@ class MySocialAccountAdapter(DefaultSocialAccountAdapter):
     """
     
     def get_login_redirect_url(self, request):
-        """Redirect to frontend dashboard after social login"""
-        return f"{settings.FRONTEND_URL}dashboard"
+        """Redirect to backend JWT callback which generates tokens and redirects to frontend"""
+        # Try to get the provider from the request or sociallogin
+        provider = 'google'  # Default fallback
+        if hasattr(request, 'session') and 'socialaccount_sociallogin' in request.session:
+            try:
+                sociallogin = request.session.get('socialaccount_sociallogin')
+                if sociallogin:
+                    provider = sociallogin.get('account', {}).get('provider', 'google')
+            except:
+                pass
+        return f"/auth/{provider}/callback/"
     
     def get_signup_redirect_url(self, request):
-        """Redirect to frontend dashboard after social signup"""
-        return f"{settings.FRONTEND_URL}dashboard"
+        """Redirect to backend JWT callback which generates tokens and redirects to frontend"""
+        return self.get_login_redirect_url(request)
     
     def populate_user(self, request, sociallogin, data):
         """Populate user from social data without username"""

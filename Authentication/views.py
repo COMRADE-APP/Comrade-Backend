@@ -49,6 +49,7 @@ logger = logging.getLogger(__name__)
 @method_decorator(csrf_exempt, name='dispatch')
 class RegisterView(APIView):
     permission_classes = [AllowAny]
+    authentication_classes = []  # Disable authentication (prevents SessionAuth CSRF check)
     
     def post(self, request):
         print('-------------------', request.data, '-------------------')
@@ -91,6 +92,7 @@ class RegisterView(APIView):
 class RegisterVerifyView(APIView):
     """Verify registration OTP and activate user account"""
     permission_classes = [AllowAny]
+    authentication_classes = []  # Disable authentication (prevents SessionAuth CSRF check)
     
     def post(self, request):
         email = request.data.get('email')
@@ -192,6 +194,7 @@ class VerifyView(APIView):
 @method_decorator(csrf_exempt, name='dispatch')
 class LoginView(APIView):
     permission_classes = [AllowAny]
+    authentication_classes = []  # Disable authentication (prevents SessionAuth CSRF check)
     
     def post(self, request):
         email = request.data.get('email')
@@ -293,6 +296,7 @@ class LoginView(APIView):
 @method_decorator(csrf_exempt, name='dispatch')
 class LoginVerifyView(APIView):
     permission_classes = [AllowAny]
+    authentication_classes = []  # Disable authentication (prevents SessionAuth CSRF check)
     
     def post(self, request):
         print(request.data, '--------------------------')
@@ -353,6 +357,7 @@ class LoginVerifyView(APIView):
 @method_decorator(csrf_exempt, name='dispatch')
 class ResendOTPView(APIView):
     permission_classes = [AllowAny]
+    authentication_classes = []  # Disable authentication (prevents SessionAuth CSRF check)
     
     def post(self, request):
         email = request.data.get('email')

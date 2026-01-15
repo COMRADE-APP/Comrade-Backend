@@ -4,7 +4,7 @@ from rest_framework import serializers
 from Authentication.models import (
     Student, CustomUser, Lecturer, OrgStaff, StudentAdmin, 
     OrgAdmin, InstAdmin, InstStaff, Profile, Author, Editor, 
-    Moderator, ComradeAdmin
+    Moderator, ComradeAdmin, RoleChangeRequest
 )
 
 
@@ -20,7 +20,7 @@ class BaseUserSerializer(serializers.ModelSerializer):
         if len(password) < 8:
             raise serializers.ValidationError({"password": "Password too short. Use 8 characters or more."})
         if (not re.search(r'[A-Z]', password) or not re.search(r'[a-z]', password) or 
-            not re.search(r'[0-9]', password) or not re.search(r'[!@#$%^&*(),.?":{}|<>]', password)):
+            not re.search(r'[0-9]', password) or not re.search(r'[!@#$%^&*(),.?\":{}|<>]', password)):
             raise serializers.ValidationError({"password": "Password must contain at least one uppercase, lowercase, numeric, and special character."})
         if not data.get('confirm_password'):
             raise serializers.ValidationError({'confirm_password': 'The password should be confirmed'})
@@ -164,3 +164,22 @@ class ComradeAdminSerializer(serializers.ModelSerializer):
         model = ComradeAdmin
         fields = '__all__'
         # read_only_fields = ['user']
+
+
+class RoleChangeRequestSerializer(serializers.ModelSerializer):
+    user_email = serializers.CharField(source='user.email', read_only=True)
+    user_name = serializers.SerializerMethodField()
+    reviewed_by_name = serializers.CharField(source='reviewed_by.email', read_only=True)
+    
+    class Meta:
+        model = RoleChangeRequest
+        fields = [
+            'id', 'user', 'user_email', 'user_name', 'current_role', 
+            'requested_role', 'reason', 'supporting_documents',
+            'status', 'admin_notes', 'reviewed_by', 'reviewed_by_name',
+            'created_at', 'updated_at'
+        ]
+        read_only_fields = ['id', 'user', 'created_at', 'updated_at', 'reviewed_by']
+    
+    def get_user_name(self, obj):
+        return f"{obj.user.first_name} {obj.user.last_name}".strip() or obj.user.email
