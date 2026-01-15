@@ -66,12 +66,8 @@ INSTALLED_APPS = [
     'allauth.account',
     'allauth.socialaccount',
     'allauth.socialaccount.providers.google',
-    'allauth.socialaccount.providers.facebook',
     'allauth.socialaccount.providers.twitter_oauth2',
-    'allauth.socialaccount.providers.github',
     'allauth.socialaccount.providers.apple',
-    'allauth.socialaccount.providers.linkedin_oauth2',
-    'allauth.socialaccount.providers.microsoft',
 
 ]
 
@@ -268,41 +264,21 @@ SOCIALACCOUNT_PROVIDERS = {
         'SCOPE': ['profile', 'email'],
         'AUTH_PARAMS': {'access_type': 'online', 'prompt': 'consent'},
     },
-    'facebook': {
-        'APP': {
-            'client_id': os.getenv('FACEBOOK_CLIENT_ID', ''),
-            'secret': os.getenv('FACEBOOK_CLIENT_SECRET', ''),
-            'key': ''
-        },
-        'SCOPE': ['email', 'public_profile'],
-        'AUTH_PARAMS': {'auth_type': 'reauthenticate'},
-    },
-    'twitter': {
+    "twitter_oauth2": {
         'APP': {
             'client_id': os.getenv('TWITTER_CLIENT_ID', ''),
             'secret': os.getenv('TWITTER_CLIENT_SECRET', ''),
             'key': ''
         },
-        'SCOPE': ['email', 'public_profile'],
-        'AUTH_PARAMS': {'auth_type': 'reauthenticate'},
-    },
-    'linkedin': {
-        'APP': {
-            'client_id': os.getenv('LINKEDIN_CLIENT_ID', ''),
-            'secret': os.getenv('LINKEDIN_CLIENT_SECRET', ''),
-            'key': ''
+        "SCOPE": [
+            "tweet.read",
+            "users.read",
+            "offline.access",
+        ],
+        "AUTH_PARAMS": {
+            "access_type": "offline",
         },
-        'SCOPE': ['email', 'public_profile'],
-        'AUTH_PARAMS': {'auth_type': 'reauthenticate'},
-    },
-    'github': {
-        'APP': {
-            'client_id': os.getenv('GITHUB_CLIENT_ID', ''),
-            'secret': os.getenv('GITHUB_CLIENT_SECRET', ''),
-            'key': ''
-        },
-        'SCOPE': ['email', 'public_profile'],
-        'AUTH_PARAMS': {'auth_type': 'reauthenticate'},
+        "OAUTH_PKCE_ENABLED": True,
     },
     'apple': {
         'APP': {
@@ -310,17 +286,8 @@ SOCIALACCOUNT_PROVIDERS = {
             'secret': os.getenv('APPLE_CLIENT_SECRET', ''),
             'key': ''
         },
-        'SCOPE': ['email', 'public_profile'],
-        'AUTH_PARAMS': {'auth_type': 'reauthenticate'},
-    },
-    'microsoft': {
-        'APP': {
-            'client_id': os.getenv('MICROSOFT_CLIENT_ID', ''),
-            'secret': os.getenv('MICROSOFT_CLIENT_SECRET', ''),
-            'key': ''
-        },
-        'SCOPE': ['email', 'public_profile'],
-        'AUTH_PARAMS': {'auth_type': 'reauthenticate'},
+        'SCOPE': ['email', 'name'],
+        'AUTH_PARAMS': {'response_mode': 'form_post'},
     },
 }
 

@@ -11,6 +11,7 @@ USER_TYPE = (
     ('staff', 'Staff'),
     ('lecturer', 'Lecturer'),
     ('student', 'Student'),
+    ('normal_user', 'Normal User'),  # Non-student general users
     ('moderator', 'Moderator'),
     ('student_admin', 'Student Admin'),
     ('institutional_admin', 'Institutional Admin'),
@@ -66,6 +67,10 @@ class CustomUser(AbstractUser):
     is_staff = models.BooleanField(default=False)
     is_author = models.BooleanField(default=False)
     is_editor = models.BooleanField(default=False)
+    is_normal_user = models.BooleanField(default=False)  # Non-student general users
+    
+    # Profile completion tracking
+    profile_completed = models.BooleanField(default=False)
     
     # TOTP/2FA Authentication
     totp_enabled = models.BooleanField(default=False)
@@ -352,3 +357,58 @@ class ComradeAdmin(models.Model):
 
     def __str__(self):
         return f"{self.user.first_name} {self.user.last_name} (ComradeAdmin)"
+
+
+class NormalUser(models.Model):
+    """
+    Profile extension for non-student general users.
+    Allows platform access without student-specific requirements.
+    """
+    user = models.OneToOneField(CustomUser, on_delete=models.CASCADE)
+    occupation = models.CharField(max_length=300, blank=True)
+    interests = models.TextField(blank=True)
+    created_on = models.DateTimeField(default=datetime.now)
+
+    def save(self, *args, **kwargs):
+        self.user.is_normal_user = True
+        self.user.is_student = False
+        self.user.user_type = 'normal_user'
+        self.user.save()
+        super().save(*args, **kwargs)
+
+    def __str__(self):
+        return f"{self.user.first_name} {self.user.last_name} (Normal User)"
+
+
+ROLE_CHANGE_STATUS = (
+    ('pending', 'Pending Review'),
+    ('approved', 'Approved'),
+    ('rejected', 'Rejected'),
+    ('cancelled', 'Cancelled'),
+)
+
+class RoleChangeRequest(models.Model):
+    """
+    Model for users to request a change in their user type/role.
+    Requires admin review and approval.
+    """
+    user = models.ForeignKey(CustomUser, on_delete=models.CASCADE, related_name='role_change_requests')
+    current_role = models.CharField(max_length=100)
+    requested_role = models.CharField(max_length=100, choices=USER_TYPE)
+    reason = models.TextField(help_text="Explain why you need this role change")
+    supporting_documents = models.FileField(upload_to='role_requests/', blank=True, null=True)
+    status = models.CharField(max_length=50, choices=ROLE_CHANGE_STATUS, default='pending')
+    reviewed_by = models.ForeignKey(
+        CustomUser, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='reviewed_role_requests'
+    )
+    review_notes = models.TextField(blank=True, null=True)
+    created_on = models.DateTimeField(default=datetime.now)
+    reviewed_on = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ['-created_on']
+
+    def __str__(self):
+        return f"{self.user.email}: {self.current_role} -> {self.requested_role} ({self.status})"
+
