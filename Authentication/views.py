@@ -33,9 +33,8 @@ from Authentication.serializers import (
     InstStaffSerializer, ProfileSerializer, BaseUserSerializer
 )
 from Authentication.otp_utils import (
-    generate_totp_secret, generate_totp_otp, verify_totp_otp, 
-    generate_qr_code, send_email_otp, send_sms_otp, send_2fa_qr_code,
-    check_otp_rate_limit, increment_otp_count, OTP_EXPIRY_MINUTES
+    send_email_otp, check_otp_rate_limit, increment_otp_count, 
+    OTP_EXPIRY_MINUTES
 )
 from Authentication.device_utils import register_device, revoke_device, is_trusted_device
 from Authentication.activity_logger import (
@@ -49,125 +48,13 @@ logger = logging.getLogger(__name__)
 @method_decorator(csrf_exempt, name='dispatch')
 class RegisterView(APIView):
     permission_classes = [AllowAny]
-    authentication_classes = []  # Disable authentication (prevents SessionAuth CSRF check)
+    authentication_classes = []
     
     def post(self, request):
-        print('-------------------', request.data, '-------------------')
         serializer = BaseUserSerializer(data=request.data)
         
         if serializer.is_valid():
             user = serializer.save()
-            
-            # Log registration
-            log_user_activity(user, 'register', request, "User registered")
-            
-            # Generate OTP for registration verification
-            otp_code = str(secrets.SystemRandom().randint(100000, 999999))
-            user.registration_otp = otp_code
-            user.registration_otp_expires = timezone.now() + timezone.timedelta(minutes=OTP_EXPIRY_MINUTES)
-            user.save()
-            
-            print(f'Registration OTP: {otp_code}')
-            
-            # Send OTP via email
-            try:
-                email_sent = send_email_otp(user.email, otp_code, action='registration')
-                if not email_sent:
-                    logger.error(f"Failed to send registration OTP to {user.email}")
-            except Exception as e:
-                logger.error(f"Failed to send registration OTP: {e}")
-            
-            return Response({
-                "message": "Registration successful. Please verify your email with the OTP sent.",
-                "email": user.email,
-                "next_step": "verify_registration_otp"
-            }, status=status.HTTP_201_CREATED)
-
-        print('-------------------', serializer.errors, '-------------------')
-        
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
-
-
-@method_decorator(csrf_exempt, name='dispatch')
-class RegisterVerifyView(APIView):
-    """Verify registration OTP and activate user account"""
-    permission_classes = [AllowAny]
-    authentication_classes = []  # Disable authentication (prevents SessionAuth CSRF check)
-    
-    def post(self, request):
-        email = request.data.get('email')
-        otp = request.data.get('otp')
-        
-        if not email or not otp:
-            return Response({"detail": "Email and OTP are required."}, status=status.HTTP_400_BAD_REQUEST)
-        
-        try:
-            user = CustomUser.objects.get(email=email)
-        except CustomUser.DoesNotExist:
-            return Response({"detail": "User not found."}, status=status.HTTP_404_NOT_FOUND)
-        
-        # Check if already verified
-        if user.is_active:
-            return Response({"detail": "Account already verified."}, status=status.HTTP_400_BAD_REQUEST)
-        
-        # Check OTP
-        if not user.registration_otp or not user.registration_otp_expires:
-            return Response({"detail": "No pending verification found."}, status=status.HTTP_400_BAD_REQUEST)
-        
-        if timezone.now() > user.registration_otp_expires:
-            return Response({"detail": "Verification code expired."}, status=status.HTTP_400_BAD_REQUEST)
-        
-        if otp != user.registration_otp:
-            return Response({"detail": "Invalid verification code."}, status=status.HTTP_400_BAD_REQUEST)
-        
-        # Activate user and clear OTP
-        user.is_active = True
-        user.registration_otp = None
-        user.registration_otp_expires = None
-        
-        # Set user type boolean flags
-        flag_map = {
-            'student': 'is_student',
-            'lecturer': 'is_lecturer',
-            'org_staff': 'is_org_staff',
-            'org_admin': 'is_org_admin',
-            'inst_admin': 'is_inst_admin',
-            'inst_staff': 'is_inst_staff',
-        }
-        
-        flag = flag_map.get(user.user_type)
-        if flag:
-            setattr(user, flag, True)
-        
-        user.save()
-        
-        # Create Profile automatically
-        Profile.objects.get_or_create(user=user)
-        
-        log_user_activity(user, 'email_verified', request, "Email verified via OTP")
-        
-        return Response({
-            "message": "Email verified successfully!",
-            "email": user.email,
-            "user_type": user.user_type,
-            "next_step": "profile_setup"
-        })
-
-
-class VerifyView(APIView):
-    permission_classes = [AllowAny]
-    
-    def get(self, request):
-        uid = request.GET.get('uid')
-        token = request.GET.get('token')
-        
-        try:
-            uid = force_str(urlsafe_base64_decode(uid))
-            user = CustomUser.objects.get(pk=uid)
-        except Exception:
-            return Response({'detail': 'Invalid verification link.'}, status=status.HTTP_400_BAD_REQUEST)
-        
-        if default_token_generator.check_token(user, token):
             user.is_active = True
             
             # Set user type boolean flags
@@ -186,7 +73,41 @@ class VerifyView(APIView):
             
             user.save()
             
-            return Response({'detail': 'Email verified successfully. You can now login.'})
+            # Create Profile automatically
+            Profile.objects.get_or_create(user=user)
+            
+            log_user_activity(user, 'register', request, "User registered and activated")
+            
+            return Response({
+                "message": "Registration successful. Please log in to continue.",
+                "user_id": user.id,
+                "email": user.email,
+                "first_name": user.first_name,
+                "user_type": user.user_type,
+                "next_step": "login"
+            }, status=status.HTTP_201_CREATED)
+
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+
+class VerifyView(APIView):
+    """Email verification via link (optional)"""
+    permission_classes = [AllowAny]
+    
+    def get(self, request):
+        uid = request.GET.get('uid')
+        token = request.GET.get('token')
+        
+        try:
+            uid = force_str(urlsafe_base64_decode(uid))
+            user = CustomUser.objects.get(pk=uid)
+        except Exception:
+            return Response({'detail': 'Invalid verification link.'}, status=status.HTTP_400_BAD_REQUEST)
+        
+        if default_token_generator.check_token(user, token):
+            user.is_active = True
+            user.save()
+            return Response({'detail': 'Email verified successfully.'})
         
         return Response({'detail': 'Invalid or expired token.'}, status=status.HTTP_400_BAD_REQUEST)
 
@@ -194,15 +115,13 @@ class VerifyView(APIView):
 @method_decorator(csrf_exempt, name='dispatch')
 class LoginView(APIView):
     permission_classes = [AllowAny]
-    authentication_classes = []  # Disable authentication (prevents SessionAuth CSRF check)
+    authentication_classes = []
     
     def post(self, request):
         email = request.data.get('email')
         password = request.data.get('password')
-        otp_method = request.data.get('otp_method', 'email')  # 'email' or 'sms'
         
         user = authenticate(email=email, password=password)
-        print('------------------------', request.data, '---------------------------')
         
         if user is None:
             log_login_attempt(None, request, False, "Invalid credentials")
@@ -210,96 +129,37 @@ class LoginView(APIView):
         
         if not user.is_active:
             return Response({
-                "detail": "Account is not active. Please verify your email."
+                "detail": "Account is not active."
             }, status=status.HTTP_401_UNAUTHORIZED)
         
-        # Check if user has phone number for SMS option
-        has_phone = bool(user.phone_number and user.phone_number != '0123456789')
+        # Generate and send Email OTP
+        otp_code = str(secrets.SystemRandom().randint(100000, 999999))
+        user.login_otp = otp_code
+        user.login_otp_expires = timezone.now() + timezone.timedelta(minutes=OTP_EXPIRY_MINUTES)
+        user.save()
         
-        # If user chose SMS but doesn't have phone, default to email
-        if otp_method == 'sms' and not has_phone:
+        email_sent = send_email_otp(user.email, otp_code, action='login')
+        
+        if not email_sent:
             return Response({
-                "detail": "No phone number registered. Please add a phone number or choose email verification.",
-                "has_phone": False
-            }, status=status.HTTP_400_BAD_REQUEST)
+                "detail": "Failed to send verification code."
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
         
-        # Generate OTP secret
-        otp_secret = generate_totp_secret()
-        otp_code = generate_totp_otp(otp_secret)
-        
-        if otp_method == 'sms' and has_phone:
-            # Send via SMS
-            can_send, remaining = check_otp_rate_limit(user.id, 'sms_login')
-            if not can_send:
-                return Response({
-                    "detail": "Daily SMS limit reached. Please try email instead."
-                }, status=status.HTTP_429_TOO_MANY_REQUESTS)
-            
-            user.sms_otp = otp_code
-            user.sms_otp_expires = timezone.now() + timezone.timedelta(minutes=OTP_EXPIRY_MINUTES)
-            user.save()
-
-            print(user.login_otp, '--------------------------')
-            
-            sms_sent = send_sms_otp(user.phone_number, otp_code, action='login')
-            increment_otp_count(user.id, 'sms_login')
-            
-            if not sms_sent:
-                return Response({
-                    "detail": "Failed to send SMS code. Please try email instead."
-                }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-            
-            return Response({
-                "message": "Verification code sent to your phone.",
-                "email": user.email,
-                "phone_last_4": user.phone_number[-4:],
-                "verification_required": True,
-                "next_step": "verify_sms_otp",
-                "otp_method": "sms"
-            }, status=status.HTTP_200_OK)
-        
-        else:
-            # Send via Email (default)
-            can_send, remaining = check_otp_rate_limit(user.id, 'login')
-            if not can_send:
-                return Response({
-                    "detail": "Daily OTP limit reached. Please try again tomorrow."
-                }, status=status.HTTP_429_TOO_MANY_REQUESTS)
-            
-            # Use static numeric OTP for email too (better UX than TOTP)
-            otp_code = str(secrets.SystemRandom().randint(100000, 999999))
-            
-            user.login_otp = otp_code
-            user.login_otp_expires = timezone.now() + timezone.timedelta(minutes=OTP_EXPIRY_MINUTES)
-            user.save()
-
-            print(user.login_otp, '--------------------------')
-            
-            email_sent = send_email_otp(user.email, otp_code, action='login')
-            increment_otp_count(user.id, 'login')
-            
-            if not email_sent:
-                return Response({
-                    "detail": "Failed to send verification code."
-                }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-            
-            return Response({
-                "message": "Verification code sent to your email.",
-                "email": user.email,
-                "verification_required": True,
-                "next_step": "verify_email_otp",
-                "otp_method": "email",
-                "has_phone": has_phone
-            }, status=status.HTTP_200_OK)
+        return Response({
+            "message": "Verification code sent to your email.",
+            "email": user.email,
+            "verification_required": True,
+            "next_step": "verify_email_otp",
+            "otp_method": "email"
+        })
 
 
 @method_decorator(csrf_exempt, name='dispatch')
 class LoginVerifyView(APIView):
     permission_classes = [AllowAny]
-    authentication_classes = []  # Disable authentication (prevents SessionAuth CSRF check)
+    authentication_classes = []
     
     def post(self, request):
-        print(request.data, '--------------------------')
         email = request.data.get('email')
         otp = request.data.get('otp')
         
@@ -308,7 +168,6 @@ class LoginVerifyView(APIView):
         except CustomUser.DoesNotExist:
             return Response({"detail": "User not found."}, status=status.HTTP_404_NOT_FOUND)
         
-        # Verify Email OTP (this endpoint is for email OTP only)
         if not user.login_otp or not user.login_otp_expires:
             return Response({"detail": "No pending verification found."}, status=status.HTTP_400_BAD_REQUEST)
         
@@ -316,28 +175,14 @@ class LoginVerifyView(APIView):
             return Response({"detail": "Verification code expired."}, status=status.HTTP_400_BAD_REQUEST)
         
         if otp != user.login_otp:
-            print("Invalid verification code.")
             return Response({"detail": "Invalid verification code."}, status=status.HTTP_400_BAD_REQUEST)
         
-        # Clear OTP after successful verification
+        # Clear OTP
         user.login_otp = None
         user.login_otp_expires = None
         user.save()
         
-        # Check if 2FA is enabled
-        if user.totp_enabled:
-            return Response({
-                "message": "2FA verification required.",
-                "verification_required": True,
-                "next_step": "verify_2fa_totp",
-                "email": user.email
-            })
-        
-        # Complete login (no 2FA required)
-        return self._complete_login(user, request)
-    
-    def _complete_login(self, user, request):
-        """Complete login process with token generation"""
+        # Complete login
         register_device(user, request)
         log_login_attempt(user, request, True, method='email_otp')
         
@@ -357,12 +202,10 @@ class LoginVerifyView(APIView):
 @method_decorator(csrf_exempt, name='dispatch')
 class ResendOTPView(APIView):
     permission_classes = [AllowAny]
-    authentication_classes = []  # Disable authentication (prevents SessionAuth CSRF check)
+    authentication_classes = []
     
     def post(self, request):
         email = request.data.get('email')
-        action_type = request.data.get('action_type', 'login')  # 'login' or 'registration'
-        otp_method = request.data.get('otp_method', 'email')
         
         if not email:
             return Response({'detail': 'Email is required'}, status=status.HTTP_400_BAD_REQUEST)
@@ -370,119 +213,21 @@ class ResendOTPView(APIView):
         try:
             user = CustomUser.objects.get(email=email)
         except CustomUser.DoesNotExist:
-             return Response({'message': 'Code sent if account exists.'}, status=status.HTTP_200_OK)
+            return Response({'message': 'Code sent if account exists.'}, status=status.HTTP_200_OK)
              
         if not user.is_active:
              return Response({'detail': 'Account inactive.'}, status=status.HTTP_400_BAD_REQUEST)
 
         # Generate OTP
         otp_code = str(secrets.SystemRandom().randint(100000, 999999))
-        
-        if otp_method == 'sms':
-            if not user.phone_number:
-                return Response({'detail': 'No phone number.'}, status=status.HTTP_400_BAD_REQUEST)
-                
-            can_send, _ = check_otp_rate_limit(user.id, 'sms_login')
-            if not can_send:
-                return Response({'detail': 'Limit reached.'}, status=status.HTTP_429_TOO_MANY_REQUESTS)
-                
-            user.sms_otp = otp_code
-            user.sms_otp_expires = timezone.now() + timezone.timedelta(minutes=OTP_EXPIRY_MINUTES)
-            user.save()
-            
-            if send_sms_otp(user.phone_number, otp_code, action='login'):
-                increment_otp_count(user.id, 'sms_login')
-                return Response({'message': 'SMS sent.'}, status=status.HTTP_200_OK)
-                
-        else:
-            can_send, _ = check_otp_rate_limit(user.id, 'login')
-            if not can_send:
-                return Response({'detail': 'Limit reached.'}, status=status.HTTP_429_TOO_MANY_REQUESTS)
-                
-            user.login_otp = otp_code
-            user.login_otp_expires = timezone.now() + timezone.timedelta(minutes=OTP_EXPIRY_MINUTES)
-            user.save()
-            
-            if send_email_otp(user.email, otp_code, action='login'):
-                increment_otp_count(user.id, 'login')
-                return Response({'message': 'Email sent.'}, status=status.HTTP_200_OK)
-                
-        return Response({'detail': 'Failed to send.'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-
-
-class Verify2FAView(APIView):
-    permission_classes = [AllowAny]
-    
-    def post(self, request):
-        email = request.data.get('email')
-        otp = request.data.get('otp')
-        
-        try:
-            user = CustomUser.objects.get(email=email)
-        except CustomUser.DoesNotExist:
-            return Response({"detail": "User not found."}, status=status.HTTP_404_NOT_FOUND)
-        
-        if not user.totp_enabled:
-            return Response({"detail": "2FA not enabled for this user."}, status=status.HTTP_400_BAD_REQUEST)
-        
-        if verify_totp_otp(user.totp_secret, otp):
-            log_2fa_activity(user, request, 'verify')
-            register_device(user, request)
-            
-            refresh = RefreshToken.for_user(user)
-            return Response({
-                "user_id": user.id,
-                "email": user.email,
-                "first_name": user.first_name,
-                "user_type": user.user_type,
-                "access_token": str(refresh.access_token),
-                "refresh_token": str(refresh),
-                "next_step": "complete"
-            })
-        
-        return Response({"detail": "Invalid 2FA code."}, status=status.HTTP_400_BAD_REQUEST)
-
-
-class VerifySMSOTPView(APIView):
-    permission_classes = [AllowAny]
-    
-    def post(self, request):
-        email = request.data.get('email')
-        otp = request.data.get('otp')
-        
-        try:
-            user = CustomUser.objects.get(email=email)
-        except CustomUser.DoesNotExist:
-            return Response({"detail": "User not found."}, status=status.HTTP_404_NOT_FOUND)
-        
-        if not user.sms_otp or not user.sms_otp_expires:
-            return Response({"detail": "No pending SMS verification."}, status=status.HTTP_400_BAD_REQUEST)
-        
-        if timezone.now() > user.sms_otp_expires:
-            return Response({"detail": "SMS code expired."}, status=status.HTTP_400_BAD_REQUEST)
-        
-        if user.sms_otp != otp:
-            return Response({"detail": "Invalid SMS code."}, status=status.HTTP_400_BAD_REQUEST)
-        
-        # Clear OTP
-        user.sms_otp = None
-        user.sms_otp_expires = None
+        user.login_otp = otp_code
+        user.login_otp_expires = timezone.now() + timezone.timedelta(minutes=OTP_EXPIRY_MINUTES)
         user.save()
         
-        # Complete login
-        register_device(user, request)
-        log_login_attempt(user, request, True, method='sms_otp')
-        
-        refresh = RefreshToken.for_user(user)
-        return Response({
-            "user_id": user.id,
-            "email": user.email,
-            "first_name": user.first_name,
-            "user_type": user.user_type,
-            "access_token": str(refresh.access_token),
-            "refresh_token": str(refresh),
-            "next_step": "complete"
-        })
+        if send_email_otp(user.email, otp_code, action='login'):
+            return Response({'message': 'Verification code resent to your email.'}, status=status.HTTP_200_OK)
+                
+        return Response({'detail': 'Failed to send.'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
 class PasswordResetRequestView(APIView):
@@ -494,27 +239,16 @@ class PasswordResetRequestView(APIView):
         try:
             user = CustomUser.objects.get(email=email)
         except CustomUser.DoesNotExist:
-            # Return success to prevent email enumeration
             return Response({
                 "message": "If an account exists, a reset code has been sent."
             }, status=status.HTTP_200_OK)
         
-        # Check rate limit
-        can_send, remaining = check_otp_rate_limit(user.id, 'password_reset')
-        if not can_send:
-            return Response({
-                "detail": "Daily limit reached."
-            }, status=status.HTTP_429_TOO_MANY_REQUESTS)
-        
-        otp_secret = generate_totp_secret()
-        user.password_reset_otp_secret = otp_secret
-        user.password_reset_otp_expires = timezone.now() + timezone.timedelta(minutes=OTP_EXPIRY_MINUTES)
+        otp_code = str(secrets.SystemRandom().randint(100000, 999999))
+        user.login_otp = otp_code # Using login_otp for simplicity or restore password_reset_otp
+        user.login_otp_expires = timezone.now() + timezone.timedelta(minutes=OTP_EXPIRY_MINUTES)
         user.save()
         
-        code = generate_totp_otp(otp_secret)
-        send_email_otp(user.email, code, action='password_reset')
-        increment_otp_count(user.id, 'password_reset')
-        
+        send_email_otp(user.email, otp_code, action='password_reset')
         log_password_reset(user, request, 'request')
         
         return Response({
@@ -535,19 +269,19 @@ class PasswordResetConfirmView(APIView):
         except CustomUser.DoesNotExist:
             return Response({"detail": "Invalid request."}, status=status.HTTP_400_BAD_REQUEST)
         
-        if not user.password_reset_otp_secret or not user.password_reset_otp_expires:
+        if not user.login_otp or not user.login_otp_expires:
             return Response({"detail": "No pending reset request."}, status=status.HTTP_400_BAD_REQUEST)
         
-        if timezone.now() > user.password_reset_otp_expires:
+        if timezone.now() > user.login_otp_expires:
             return Response({"detail": "Code expired."}, status=status.HTTP_400_BAD_REQUEST)
         
-        if not verify_totp_otp(user.password_reset_otp_secret, otp):
+        if user.login_otp != otp:
             return Response({"detail": "Invalid code."}, status=status.HTTP_400_BAD_REQUEST)
         
         # Reset password
         user.set_password(new_password)
-        user.password_reset_otp_secret = None
-        user.password_reset_otp_expires = None
+        user.login_otp = None
+        user.login_otp_expires = None
         user.save()
         
         log_password_reset(user, request, 'confirm')
@@ -555,53 +289,6 @@ class PasswordResetConfirmView(APIView):
         return Response({
             "message": "Password reset successfully."
         }, status=status.HTTP_200_OK)
-
-
-class Setup2FAView(APIView):
-    permission_classes = [IsAuthenticated]
-    
-    def post(self, request):
-        user = request.user
-        
-        # Generate secret
-        secret = generate_totp_secret()
-        user.totp_secret = secret
-        user.save()
-        
-        # Generate QR code
-        qr_code = generate_qr_code(secret, user.email)
-        
-        # Send QR via email as backup
-        send_2fa_qr_code(user.email, secret, qr_code)
-        
-        log_2fa_activity(user, request, 'setup_init')
-        
-        return Response({
-            "secret": secret,
-            "qr_code": qr_code,
-            "message": "Scan QR code or enter secret in authenticator app."
-        })
-
-
-class Confirm2FASetupView(APIView):
-    permission_classes = [IsAuthenticated]
-    
-    def post(self, request):
-        user = request.user
-        otp = request.data.get('otp')
-        
-        if not user.totp_secret:
-            return Response({"detail": "2FA setup not initiated."}, status=status.HTTP_400_BAD_REQUEST)
-        
-        if verify_totp_otp(user.totp_secret, otp):
-            user.totp_enabled = True
-            user.totp_verified = True
-            user.save()
-            
-            log_2fa_activity(user, request, 'setup_complete')
-            return Response({"message": "2FA enabled successfully."})
-        
-        return Response({"detail": "Invalid code."}, status=status.HTTP_400_BAD_REQUEST)
 
 
 class LogoutView(APIView):

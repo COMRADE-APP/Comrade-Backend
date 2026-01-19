@@ -1,21 +1,20 @@
 """
 OTP Utilities for Authentication
-Handles TOTP generation, QR codes, email/SMS sending, and rate limiting
+Handles TOTP generation, QR codes, email sending, and rate limiting
 """
 import pyotp
 import qrcode
 import io
 import base64
+import logging
 from django.core.mail import send_mail
 from django.template.loader import render_to_string
 from django.conf import settings
 from django.core.cache import cache
-from twilio.rest import Client
-import logging
 
 logger = logging.getLogger(__name__)
 
-OTP_EXPIRY_MINUTES = 10
+OTP_EXPIRY_MINUTES = 2
 DAILY_OTP_LIMIT = 10
 
 
@@ -121,70 +120,6 @@ def send_email_otp(email, otp, action='login'):
         return True
     except Exception as e:
         logger.error(f"Failed to send OTP email to {email}: {str(e)}")
-        return False
-
-
-def send_sms_otp(phone_number, otp, action='login'):
-    """Send OTP via Twilio SMS"""
-    try:
-        client = Client(settings.TWILIO_ACCOUNT_SID, settings.TWILIO_AUTH_TOKEN)
-        
-        message_body = f"Your Comrade verification code is: {otp}. Valid for {OTP_EXPIRY_MINUTES} minutes."
-        
-        message = client.messages.create(
-            body=message_body,
-            from_=settings.TWILIO_PHONE_NUMBER,
-            to=phone_number
-        )
-        
-        logger.info(f"SMS OTP sent to {phone_number} for {action}. SID: {message.sid}")
-        return True
-    except Exception as e:
-        logger.error(f"Failed to send SMS OTP to {phone_number}: {str(e)}")
-        return False
-
-
-def send_2fa_qr_code(email, secret, qr_code_data):
-    """Send 2FA QR code via email"""
-    subject = 'Comrade - 2FA Setup QR Code'
-    
-    html_message = f"""
-    <!DOCTYPE html>
-    <html>
-    <head>
-        <style>
-            body {{ font-family: Arial, sans-serif; }}
-            .container {{ max-width: 600px; margin: 0 auto; padding: 20px; }}
-            .qr-container {{ text-align: center; margin: 20px 0; }}
-            img {{ max-width: 300px; }}
-        </style>
-    </head>
-    <body>
-        <div class="container">
-            <h2>2FA Setup for Comrade</h2>
-            <p>Scan this QR code with your authenticator app:</p>
-            <div class="qr-container">
-                <img src="{qr_code_data}" alt="QR Code" />
-            </div>
-            <p>Or manually enter this secret key:</p>
-            <p><strong>{secret}</strong></p>
-        </div>
-    </body>
-    </html>
-    """
-    
-    try:
-        send_mail(
-            subject,
-            f'Your 2FA secret: {secret}',
-            settings.EMAIL_HOST_USER,
-            [email],
-            html_message=html_message,
-            fail_silently=False,
-        )
-        return True
-    except Exception as e:
-        logger.error(f"Failed to send 2FA QR email: {str(e)}")
         return False
 
 

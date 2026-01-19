@@ -190,33 +190,3 @@ class BaseSocialCallbackView(APIView):
 class GoogleLoginCallbackView(BaseSocialCallbackView):
     """Handle Google OAuth callback"""
     provider = 'google'
-
-
-class FacebookLoginCallbackView(BaseSocialCallbackView):
-    """Handle Facebook OAuth callback"""
-    provider = 'facebook'
-
-
-class GitHubLoginCallbackView(BaseSocialCallbackView):
-    """Handle GitHub OAuth callback"""
-    provider = 'github'
-
-
-class AppleLoginCallbackView(BaseSocialCallbackView):
-    """Handle Apple OAuth callback"""
-    provider = 'apple'
-
-
-class TwitterLoginCallbackView(BaseSocialCallbackView):
-    """Handle Twitter/X OAuth callback"""
-    provider = 'twitter'
-
-
-class LinkedInLoginCallbackView(BaseSocialCallbackView):
-    """Handle LinkedIn OAuth callback"""
-    provider = 'linkedin'
-
-
-class MicrosoftLoginCallbackView(BaseSocialCallbackView):
-    """Handle Microsoft OAuth callback"""
-    provider = 'microsoft'

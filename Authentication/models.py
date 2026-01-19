@@ -67,12 +67,6 @@ class CustomUser(AbstractUser):
     is_author = models.BooleanField(default=False)
     is_editor = models.BooleanField(default=False)
     
-    # TOTP/2FA Authentication
-    totp_enabled = models.BooleanField(default=False)
-    totp_secret = models.CharField(max_length=32, blank=True, null=True)
-    totp_verified = models.BooleanField(default=False)
-    totp_backup_codes = models.TextField(blank=True, null=True)  #Comma-separated backup codes
-    
     # Login OTP (email verification on login)
     login_otp = models.CharField(max_length=6, blank=True, null=True)
     login_otp_expires = models.DateTimeField(null=True, blank=True)
@@ -80,15 +74,6 @@ class CustomUser(AbstractUser):
     # Password Reset OTP
     password_reset_otp_secret = models.CharField(max_length=32, blank=True, null=True)
     password_reset_otp_expires = models.DateTimeField(null=True, blank=True)
-    
-    # SMS OTP (fallback for users without 2FA)
-    sms_otp = models.CharField(max_length=6, blank=True, null=True)
-    sms_otp_expires = models.DateTimeField(null=True, blank=True)
-    
-    # Registration OTP (for email verification during registration)
-    registration_otp = models.CharField(max_length=6, blank=True, null=True)
-    registration_otp_expires = models.DateTimeField(null=True, blank=True)
-
     
     USERNAME_FIELD = 'email'
     REQUIRED_FIELDS = ['first_name', 'last_name']
