@@ -28,6 +28,7 @@ ALLOWED_HOSTS = [
     "http://localhost:3000",
     "http://localhost:5173",
     "http://localhost:8080",
+    "https://qomrade.onrender.com",
 ]
 
 # Application definition
@@ -90,6 +91,7 @@ ALLOWED_HOSTS = [
     "localhost",
     "127.0.0.1",
     "[::1]",
+    "qomrade.onrender.com",
 ]
 
 # CORS settings - FIX THESE
@@ -98,6 +100,7 @@ CORS_ALLOWED_ORIGINS = [
     "http://127.0.0.1:3000",
     "http://localhost:5173",
     "http://127.0.0.1:5173",
+    "https://qomrade.onrender.com",
 ]
 
 # CRITICAL: This must be True for cookies/session auth
@@ -110,6 +113,7 @@ CSRF_TRUSTED_ORIGINS = [
     "http://127.0.0.1:3000",
     "http://localhost:5173",
     "http://127.0.0.1:5173",
+    "https://qomrade.onrender.com",
 ]
 
 # Additional CORS headers needed
@@ -141,6 +145,7 @@ CORS_ALLOWED_ORIGIN_REGEXES = [
     r"^https?://localhost:8000$",
     r"^https?://localhost:8080$",
     r"^https?://localhost:5173$",
+    r"^https?://qomrade.onrender.com$",
 ]
 
 # CSRF_COOKIE_SECURE = False
@@ -332,7 +337,7 @@ LOGOUT_REDIRECT_URL = f"{FRONTEND_URL}login"
 SITE_ID = 1
 
 # Allow HTTP for development (change to 'https' in production)
-ACCOUNT_DEFAULT_HTTP_PROTOCOL = "http"
+ACCOUNT_DEFAULT_HTTP_PROTOCOL = "https"
 
 # These settings help with cross-origin requests
 ACCOUNT_EMAIL_VERIFICATION = 'optional'  # Set to 'mandatory' in production
