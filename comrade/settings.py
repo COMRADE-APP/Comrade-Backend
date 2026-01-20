@@ -23,6 +23,7 @@ ALLOWED_HOSTS = [
     "localhost",
     "127.0.0.1",
     "[::1]",
+    "qomrade.onrender.com",
     "http://localhost:8000",
     "http://localhost:3000",
     "http://localhost:5173",
