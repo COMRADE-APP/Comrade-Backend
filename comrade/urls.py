@@ -37,6 +37,7 @@ urlpatterns = [
     # API endpoints
     path('api/rooms/', include('Rooms.urls')),
     path('api/announcements/', include('Announcements.urls')),
+    path('api/tasks/', include('Task.urls')),  # Task management
     path('api/resources/', include('Resources.urls')),
     path('api/events/', include('Events.urls')),
     path('api/specializations/', include('Specialization.urls')),
@@ -45,6 +46,7 @@ urlpatterns = [
     path('api/organizations/', include('Organisation.urls')),
     path('api/devices/', include('DeviceManagement.urls')),
     path('api/activity/', include('ActivityLog.urls')),
+    path('api/opinions/', include('Opinions.urls')),  # Opinions & Social
     path('api/', include(rest_framework.urls)),
 ]
 

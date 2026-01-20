@@ -51,6 +51,7 @@ INSTALLED_APPS = [
     'Task',
     'Payment',
     'Research',
+    'Opinions',  # Social opinions feature
     'Verification',  # New verification system
     
     # Authentication Support Apps

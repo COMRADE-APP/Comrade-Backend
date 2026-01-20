@@ -12,8 +12,8 @@ from django.conf import settings
 from django.shortcuts import redirect
 import logging
 
-from Authentication.models import CustomUser, Profile
-from Authentication.serializers import CustomUserSerializer, ProfileSerializer
+from Authentication.models import CustomUser, Profile, RoleChangeRequest
+from Authentication.serializers import CustomUserSerializer, ProfileSerializer, RoleChangeRequestSerializer
 from Authentication.device_utils import get_user_devices, revoke_device
 from Authentication.activity_logger import log_user_activity, get_user_activity_logs
 
@@ -26,7 +26,8 @@ class ChangePasswordView(APIView):
     
     def post(self, request):
         user = request.user
-        old_password = request.data.get('old_password')
+        # Accept both 'old_password' and 'current_password' field names
+        old_password = request.data.get('old_password') or request.data.get('current_password')
         new_password = request.data.get('new_password')
         
         if not old_password or not new_password:
@@ -149,6 +150,111 @@ class UserListView(APIView):
         return Response({'users': serializer.data})
 
 
+class RoleChangeRequestView(APIView):
+    """Submit or view role change requests"""
+    permission_classes = [IsAuthenticated]
+    
+    def get(self, request):
+        """Get user's own role change requests"""
+        requests = RoleChangeRequest.objects.filter(user=request.user).order_by('-created_at')
+        serializer = RoleChangeRequestSerializer(requests, many=True)
+        return Response(serializer.data)
+    
+    def post(self, request):
+        """Submit a new role change request"""
+        requested_role = request.data.get('requested_role')
+        reason = request.data.get('reason')
+        supporting_documents = request.data.get('supporting_documents', '')
+        
+        if not requested_role or not reason:
+            return Response(
+                {'detail': 'Requested role and reason are required.'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # Check if user already has a pending request
+        existing_request = RoleChangeRequest.objects.filter(
+            user=request.user,
+            status='pending'
+        ).first()
+        
+        if existing_request:
+            return Response(
+                {'detail': 'You already have a pending role change request.'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        role_request = RoleChangeRequest.objects.create(
+            user=request.user,
+            current_role=request.user.user_type,
+            requested_role=requested_role,
+            reason=reason,
+            supporting_documents=supporting_documents
+        )
+        
+        log_user_activity(request.user, 'role_change_request', request, f"Requested: {requested_role}")
+        
+        return Response(
+            RoleChangeRequestSerializer(role_request).data,
+            status=status.HTTP_201_CREATED
+        )
+
+
+class RoleChangeRequestListView(APIView):
+    """Admin view to manage role change requests"""
+    permission_classes = [IsAdminUser]
+    
+    def get(self, request):
+        """List all role change requests (Admin only)"""
+        status_filter = request.query_params.get('status', None)
+        requests = RoleChangeRequest.objects.all().order_by('-created_at')
+        
+        if status_filter:
+            requests = requests.filter(status=status_filter)
+        
+        serializer = RoleChangeRequestSerializer(requests, many=True)
+        return Response(serializer.data)
+    
+    def patch(self, request, pk=None):
+        """Approve or reject a role change request (Admin only)"""
+        if not pk:
+            return Response(
+                {'detail': 'Request ID is required.'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        try:
+            role_request = RoleChangeRequest.objects.get(pk=pk)
+        except RoleChangeRequest.DoesNotExist:
+            return Response(
+                {'detail': 'Role change request not found.'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+        
+        new_status = request.data.get('status')
+        admin_notes = request.data.get('admin_notes', '')
+        
+        if new_status not in ['approved', 'rejected']:
+            return Response(
+                {'detail': 'Invalid status. Must be "approved" or "rejected".'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        role_request.status = new_status
+        role_request.admin_notes = admin_notes
+        role_request.reviewed_by = request.user
+        role_request.save()
+        
+        # If approved, update user's role
+        if new_status == 'approved':
+            user = role_request.user
+            user.user_type = role_request.requested_role
+            user.save()
+            log_user_activity(user, 'role_changed', request, f"New role: {role_request.requested_role}")
+        
+        return Response(RoleChangeRequestSerializer(role_request).data)
+
+
 # ============================================
 # Social Auth Callback Views
 # These convert allauth sessions to JWT tokens
@@ -172,9 +278,20 @@ class BaseSocialCallbackView(APIView):
             if not frontend_url.endswith('/'):
                 frontend_url += '/'
             
-            # Redirect to frontend root with tokens in query params
-            # Frontend will handle storing tokens and navigating to dashboard
-            redirect_url = f"{frontend_url}auth/callback?access_token={str(refresh.access_token)}&refresh_token={str(refresh)}&user_id={user.id}"
+            # Check profile completion status
+            profile_completed = getattr(user, 'profile_completed', True)
+            
+            # Build redirect URL with tokens and user info
+            redirect_url = (
+                f"{frontend_url}auth/callback?"
+                f"access_token={str(refresh.access_token)}"
+                f"&refresh_token={str(refresh)}"
+                f"&user_id={user.id}"
+                f"&email={user.email or ''}"
+                f"&first_name={user.first_name or ''}"
+                f"&user_type={user.user_type or ''}"
+                f"&profile_completed={'true' if profile_completed else 'false'}"
+            )
             
             log_user_activity(user, 'social_login', request, f"Provider: {self.provider}")
             

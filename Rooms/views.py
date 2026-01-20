@@ -2,13 +2,18 @@ from rest_framework import generics, permissions
 from rest_framework.views import APIView
 from rest_framework.viewsets import ModelViewSet
 from django.shortcuts import get_object_or_404
+from django.db.models import Q, Count
 from rest_framework import status
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from Resources.models import Resource, ResourceVisibility 
 from Resources.serializers import ResourceSerializer, ResourceVisibilitySerializer
 from Rooms.models import Room, DefaultRoom, DirectMessage, DirectMessageRoom, ForwadingLog
-from Rooms.serializers import RoomSerializer, DefaultRoomSerializer, DirectMessageSerializer, DirectMessageRoomSerializer, ForwadingLogSerializer
+from Rooms.serializers import (
+    RoomSerializer, RoomListSerializer, RoomRecommendationSerializer,
+    DefaultRoomSerializer, DirectMessageSerializer, DirectMessageCreateSerializer,
+    DirectMessageRoomSerializer, DirectMessageRoomListSerializer, ForwadingLogSerializer
+)
 from Announcements.models import AnnouncementsRequest, Announcements, Task, Text, CompletedTask, Pin, Reposts, Reply, QuestionResponse, Question, SubQuestion, Choice, FileResponse, TaskResponse, Reaction, Comment
 from Announcements.serializers import AnnouncementsRequestSerializer, AnnouncementsSerializer, TaskSerializer, TextSerializer, CompletedTaskSerializer, PinSerializer, RepostsSerializer, ReplySerializer, QuestionResponseSerializer, QuestionSerializer, SubQuestionSerializer, ChoiceSerializer, FileResponseSerializer, TaskResponseSerializer, ReactionSerializer, CommentSerializer
 from Organisation.models import Organisation, OrgBranch, Division, Department, Section, Team, Project, Centre, Committee, Board, Unit, Institute, Program
@@ -20,6 +25,7 @@ from Events.serializers import EventSerializer
 from Events.models import Event
 from rest_framework.permissions import IsAuthenticated
 from Resources.views import VISIBILITY_MAP
+from datetime import datetime
 
 
 
@@ -60,9 +66,105 @@ class JoinRoomView(APIView):
     
 class RoomViewSet(ModelViewSet):
     queryset = Room.objects.all()
-    # permission_classes = [permissions.IsAuthenticated]
+    permission_classes = [permissions.IsAuthenticated]
     serializer_class = RoomSerializer
-
+    
+    def get_serializer_class(self):
+        if self.action == 'list':
+            return RoomListSerializer
+        if self.action == 'recommendations':
+            return RoomRecommendationSerializer
+        return RoomSerializer
+    
+    def get_serializer_context(self):
+        context = super().get_serializer_context()
+        context['request'] = self.request
+        return context
+    
+    def get_queryset(self):
+        """Filter rooms based on query parameters"""
+        queryset = Room.objects.filter(operation_state='active')
+        
+        # Filter by name search
+        search = self.request.query_params.get('search')
+        if search:
+            queryset = queryset.filter(name__icontains=search)
+        
+        # Filter by institution
+        institution = self.request.query_params.get('institution')
+        if institution:
+            queryset = queryset.filter(institutions__id=institution)
+        
+        return queryset.order_by('-created_on')
+    
+    def perform_create(self, serializer):
+        room = serializer.save(created_by=self.request.user)
+        # Add creator as admin and member
+        room.admins.add(self.request.user)
+        room.members.add(self.request.user)
+    
+    @action(detail=False, methods=['get'])
+    def my_rooms(self, request):
+        """Get rooms the user is a member of"""
+        rooms = Room.objects.filter(
+            members=request.user,
+            operation_state='active'
+        ).order_by('-created_on')
+        serializer = RoomListSerializer(rooms, many=True, context={'request': request})
+        return Response(serializer.data)
+    
+    @action(detail=False, methods=['get'])
+    def recommendations(self, request):
+        """Get recommended rooms for the user based on institution and activity"""
+        user = request.user
+        
+        # Get rooms user is NOT already a member of
+        user_room_ids = Room.objects.filter(members=user).values_list('id', flat=True)
+        
+        # Start with active rooms
+        queryset = Room.objects.filter(
+            operation_state='active'
+        ).exclude(id__in=user_room_ids)
+        
+        # Try to find institution-based recommendations
+        institution_rooms = queryset.none()
+        if hasattr(user, 'student'):
+            try:
+                student = user.student
+                # Find rooms associated with same institution
+                institution_rooms = queryset.filter(
+                    institutions__name__icontains=student.institution
+                )
+                for room in institution_rooms:
+                    room.match_reason = 'From your institution'
+            except:
+                pass
+        
+        # Get popular rooms (by member count)
+        popular_rooms = queryset.annotate(
+            member_count_val=Count('members')
+        ).order_by('-member_count_val')[:10]
+        for room in popular_rooms:
+            if not hasattr(room, 'match_reason'):
+                room.match_reason = 'Popular room'
+        
+        # Combine recommendations (institution first, then popular)
+        recommendations = list(institution_rooms[:5]) + list(popular_rooms[:5])
+        
+        # Remove duplicates while preserving order
+        seen = set()
+        unique_recommendations = []
+        for room in recommendations:
+            if room.id not in seen:
+                seen.add(room.id)
+                unique_recommendations.append(room)
+        
+        serializer = RoomRecommendationSerializer(
+            unique_recommendations[:10], 
+            many=True, 
+            context={'request': request}
+        )
+        return Response(serializer.data)
     @action(detail=True, methods=['post'])
     def join(self, request, pk=None):
         room = self.get_object()
@@ -520,16 +622,168 @@ class DefaultRoomViewSet(ModelViewSet):
 class DirectMessageViewSet(ModelViewSet):
     queryset = DirectMessage.objects.all()
     serializer_class = DirectMessageSerializer
-    # permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated]
+    
+    def get_queryset(self):
+        """Filter messages for the current user"""
+        user = self.request.user
+        dm_room_id = self.request.query_params.get('dm_room')
+        
+        queryset = DirectMessage.objects.filter(
+            Q(sender=user) | Q(receiver=user)
+        ).order_by('-time_stamp')
+        
+        if dm_room_id:
+            queryset = queryset.filter(dm_room_id=dm_room_id)
+        
+        return queryset
+    
+    def get_serializer_class(self):
+        if self.action == 'create':
+            return DirectMessageCreateSerializer
+        return DirectMessageSerializer
+    
+    def perform_create(self, serializer):
+        serializer.save(sender=self.request.user, status='sent')
+    
+    @action(detail=False, methods=['post'])
+    def send(self, request):
+        """Send a new direct message"""
+        receiver_id = request.data.get('receiver')
+        content = request.data.get('content')
+        dm_room_id = request.data.get('dm_room')
+        file = request.data.get('file')
+        
+        if not receiver_id or not content:
+            return Response(
+                {'error': 'receiver and content are required'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        receiver = get_object_or_404(User, id=receiver_id)
+        
+        # Get or create DM room
+        if not dm_room_id:
+            dm_room = DirectMessageRoom.objects.filter(
+                participants=request.user
+            ).filter(
+                participants=receiver
+            ).first()
+            
+            if not dm_room:
+                dm_room = DirectMessageRoom.objects.create()
+                dm_room.participants.add(request.user, receiver)
+        else:
+            dm_room = get_object_or_404(DirectMessageRoom, id=dm_room_id)
+        
+        message = DirectMessage.objects.create(
+            sender=request.user,
+            receiver=receiver,
+            content=content,
+            dm_room=dm_room,
+            file=file,
+            status='sent',
+            message_type='text' if not file else 'file'
+        )
+        
+        serializer = DirectMessageSerializer(message, context={'request': request})
+        return Response(serializer.data, status=status.HTTP_201_CREATED)
+    
+    @action(detail=True, methods=['post'])
+    def mark_read(self, request, pk=None):
+        """Mark a message as read"""
+        message = self.get_object()
+        if message.receiver == request.user:
+            message.is_read = True
+            message.status = 'read'
+            message.read_on = datetime.now()
+            message.save()
+            return Response({'message': 'Message marked as read'})
+        return Response(
+            {'error': 'You can only mark messages sent to you as read'},
+            status=status.HTTP_403_FORBIDDEN
+        )
+
 
 class DirectMessageRoomViewSet(ModelViewSet):
     queryset = DirectMessageRoom.objects.all()
     serializer_class = DirectMessageRoomSerializer
-    # permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated]
+    
+    def get_queryset(self):
+        """Get only DM rooms the user is part of"""
+        return DirectMessageRoom.objects.filter(
+            participants=self.request.user
+        ).order_by('-created_on')
+    
+    def get_serializer_class(self):
+        if self.action == 'list':
+            return DirectMessageRoomListSerializer
+        return DirectMessageRoomSerializer
+    
+    def get_serializer_context(self):
+        context = super().get_serializer_context()
+        context['request'] = self.request
+        return context
+    
+    @action(detail=False, methods=['post'])
+    def get_or_create(self, request):
+        """Get existing DM room with user or create new one"""
+        other_user_id = request.data.get('user_id')
+        
+        if not other_user_id:
+            return Response(
+                {'error': 'user_id is required'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        other_user = get_object_or_404(User, id=other_user_id)
+        
+        # Check if DM room already exists
+        dm_room = DirectMessageRoom.objects.filter(
+            participants=request.user
+        ).filter(
+            participants=other_user
+        ).first()
+        
+        if not dm_room:
+            dm_room = DirectMessageRoom.objects.create()
+            dm_room.participants.add(request.user, other_user)
+        
+        serializer = DirectMessageRoomSerializer(dm_room, context={'request': request})
+        return Response(serializer.data)
+    
+    @action(detail=True, methods=['get'])
+    def messages(self, request, pk=None):
+        """Get all messages for a DM room"""
+        dm_room = self.get_object()
+        messages = dm_room.messages.all().order_by('time_stamp')
+        
+        # Paginate
+        page = self.paginate_queryset(messages)
+        if page is not None:
+            serializer = DirectMessageSerializer(page, many=True, context={'request': request})
+            return self.get_paginated_response(serializer.data)
+        
+        serializer = DirectMessageSerializer(messages, many=True, context={'request': request})
+        return Response(serializer.data)
+    
+    @action(detail=True, methods=['post'])
+    def mark_all_read(self, request, pk=None):
+        """Mark all messages in room as read"""
+        dm_room = self.get_object()
+        updated = dm_room.messages.filter(
+            receiver=request.user,
+            is_read=False
+        ).update(is_read=True, status='read')
+        
+        return Response({'messages_marked_read': updated})
+
 
 class ForwadingLogViewSet(ModelViewSet):
     queryset = ForwadingLog.objects.all()
     serializer_class = ForwadingLogSerializer
-    # permission_classes = [IsAdmin]
-
+    permission_classes = [IsAuthenticated]
     
+    def get_queryset(self):
+        return ForwadingLog.objects.filter(user=self.request.user)

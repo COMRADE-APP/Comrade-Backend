@@ -59,6 +59,11 @@ urlpatterns = [
     # User List (Admin)
     path('user-list/', UserListView.as_view(), name='user-list'),
     
+    # Role Change Requests
+    path('role-change-request/', RoleChangeRequestView.as_view(), name='role-change-request'),
+    path('role-change-requests/', RoleChangeRequestListView.as_view(), name='role-change-requests'),
+    path('role-change-requests/<int:pk>/', RoleChangeRequestListView.as_view(), name='role-change-request-detail'),
+    
     # Social Auth Callbacks (JWT token conversion)
     path('google/callback/', GoogleLoginCallbackView.as_view(), name='google-callback'),
 ]
