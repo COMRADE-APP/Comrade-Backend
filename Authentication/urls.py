@@ -16,6 +16,7 @@ from Authentication.views_extra import (
     ChangePasswordView, UpdateProfileView,
     DeviceListView, DeviceRevokeView,
     ActivityLogView, UserListView,
+    RoleChangeRequestView, RoleChangeRequestListView,
     GoogleLoginCallbackView
 )
 

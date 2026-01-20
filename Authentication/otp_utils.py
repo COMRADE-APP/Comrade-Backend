@@ -111,7 +111,7 @@ def send_email_otp(email, otp, action='login'):
         send_mail(
             subject,
             f'Your {action_text} code is: {otp}',
-            settings.EMAIL_HOST_USER,
+            settings.DEFAULT_FROM_EMAIL,
             [email],
             html_message=html_message,
             fail_silently=False,
