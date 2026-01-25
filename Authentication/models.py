@@ -93,6 +93,18 @@ class CustomUser(AbstractUser):
     # Registration OTP (for email verification during registration)
     registration_otp = models.CharField(max_length=6, blank=True, null=True)
     registration_otp_expires = models.DateTimeField(null=True, blank=True)
+    
+    # Account Status
+    ACCOUNT_STATUS_CHOICES = (
+        ('active', 'Active'),
+        ('deactivated', 'Deactivated'),
+        ('pending_deletion', 'Pending Deletion'),
+        ('deleted', 'Deleted'),
+    )
+    account_status = models.CharField(max_length=20, choices=ACCOUNT_STATUS_CHOICES, default='active')
+    deletion_requested_at = models.DateTimeField(null=True, blank=True)
+    deletion_reason = models.TextField(blank=True)
+    deactivated_at = models.DateTimeField(null=True, blank=True)
 
     
     USERNAME_FIELD = 'email'
@@ -411,4 +423,123 @@ class RoleChangeRequest(models.Model):
 
     def __str__(self):
         return f"{self.user.email}: {self.current_role} -> {self.requested_role} ({self.status})"
+
+
+PRIVACY_CHOICES = (
+    ('public', 'Public'),
+    ('followers', 'Followers Only'),
+    ('private', 'Private'),
+)
+
+MESSAGE_PERMISSION_CHOICES = (
+    ('anyone', 'Anyone'),
+    ('followers', 'Followers Only'),
+    ('none', 'No One'),
+)
+
+
+class UserProfile(models.Model):
+    """
+    Extended user profile with images, bio, and privacy settings.
+    Created automatically when user registers.
+    """
+    user = models.OneToOneField(CustomUser, on_delete=models.CASCADE, related_name='user_profile')
+    
+    # Images
+    avatar = models.ImageField(upload_to='avatars/', null=True, blank=True)
+    cover_image = models.ImageField(upload_to='covers/', null=True, blank=True)
+    
+    # Profile Info
+    bio = models.TextField(max_length=500, blank=True)
+    location = models.CharField(max_length=200, blank=True)
+    occupation = models.CharField(max_length=200, blank=True)
+    website = models.URLField(blank=True)
+    interests = models.JSONField(default=list, blank=True)  # Array of interest strings
+    
+    # Privacy Settings
+    show_email = models.CharField(max_length=20, choices=PRIVACY_CHOICES, default='followers')
+    show_phone = models.CharField(max_length=20, choices=PRIVACY_CHOICES, default='private')
+    allow_messages = models.CharField(max_length=20, choices=MESSAGE_PERMISSION_CHOICES, default='followers')
+    show_activity_status = models.BooleanField(default=True)
+    show_read_receipts = models.BooleanField(default=True)
+    
+    # Timestamps
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    
+    def __str__(self):
+        return f"Profile: {self.user.email}"
+
+
+DELETION_REQUEST_STATUS = (
+    ('pending', 'Pending Review'),
+    ('approved', 'Approved'),
+    ('rejected', 'Rejected'),
+    ('cancelled', 'Cancelled by User'),
+)
+
+
+class AccountDeletionRequest(models.Model):
+    """
+    Track account deletion requests for admin review.
+    Deletion has a 60-day review period.
+    """
+    user = models.ForeignKey(CustomUser, on_delete=models.SET_NULL, null=True, related_name='deletion_requests')
+    email = models.EmailField()  # Store email in case user record is modified
+    user_type = models.CharField(max_length=100)
+    reason = models.TextField()
+    
+    status = models.CharField(max_length=20, choices=DELETION_REQUEST_STATUS, default='pending')
+    
+    # Review info
+    reviewed_by = models.ForeignKey(
+        CustomUser, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='reviewed_deletions'
+    )
+    review_notes = models.TextField(blank=True)
+    reviewed_at = models.DateTimeField(null=True, blank=True)
+    
+    # Timestamps
+    requested_at = models.DateTimeField(auto_now_add=True)
+    scheduled_deletion_date = models.DateField(null=True, blank=True)  # 60 days from request
+    
+    class Meta:
+        ordering = ['-requested_at']
+    
+    def __str__(self):
+        return f"Deletion request: {self.email} ({self.status})"
+
+
+class ArchivedUserData(models.Model):
+    """
+    Archive of deleted user data for compliance and records.
+    Stores serialized user data after account deletion is approved.
+    """
+    original_user_id = models.IntegerField()
+    email = models.EmailField()
+    first_name = models.CharField(max_length=200)
+    last_name = models.CharField(max_length=200)
+    user_type = models.CharField(max_length=100)
+    
+    # Serialized data
+    user_data = models.JSONField()  # Full user profile snapshot
+    activity_summary = models.JSONField(default=dict)  # Activity logs summary
+    
+    # Deletion info
+    deletion_reason = models.TextField()
+    deletion_request_id = models.IntegerField(null=True)
+    
+    # Timestamps
+    archived_at = models.DateTimeField(auto_now_add=True)
+    archived_by = models.ForeignKey(
+        CustomUser, on_delete=models.SET_NULL, null=True,
+        related_name='archived_users'
+    )
+    
+    class Meta:
+        ordering = ['-archived_at']
+        verbose_name_plural = 'Archived User Data'
+    
+    def __str__(self):
+        return f"Archived: {self.email} ({self.archived_at.strftime('%Y-%m-%d')})"
 
