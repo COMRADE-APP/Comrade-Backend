@@ -142,23 +142,12 @@ class RegisterVerifyView(APIView):
         # Create Profile automatically
         Profile.objects.get_or_create(user=user)
         
-        # Create UserProfile for extended profile data
-        from Authentication.models import UserProfile
-        UserProfile.objects.get_or_create(user=user)
-        
         log_user_activity(user, 'email_verified', request, "Email verified via OTP")
-        
-        # Generate JWT tokens so user is auto-logged in
-        refresh = RefreshToken.for_user(user)
         
         return Response({
             "message": "Email verified successfully!",
             "email": user.email,
-            "user_id": user.id,
-            "first_name": user.first_name,
             "user_type": user.user_type,
-            "access_token": str(refresh.access_token),
-            "refresh_token": str(refresh),
             "next_step": "profile_setup"
         })
 

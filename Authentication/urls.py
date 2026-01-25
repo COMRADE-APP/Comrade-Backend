@@ -19,13 +19,6 @@ from Authentication.views_extra import (
     RoleChangeRequestView, RoleChangeRequestListView,
     GoogleLoginCallbackView
 )
-from Authentication.profile_views import (
-    CheckEmailView, UserProfileView, UserProfileDetailView,
-    UploadAvatarView, UploadCoverView, ProfileSetupView,
-    DeactivateAccountView, ReactivateAccountView,
-    RequestDeletionView, CancelDeletionView,
-    DeletionRequestViewSet, ArchivedUserViewSet, UserSearchView
-)
 
 router = DefaultRouter()
 router.register(r'users', CustomUserViewSet)
@@ -36,10 +29,6 @@ router.register(r'org-admins', OrgAdminViewSet)
 router.register(r'inst-admins', InstAdminViewSet)
 router.register(r'inst-staff', InstStaffViewSet)
 router.register(r'profiles', ProfileViewSet)
-
-# Admin routers
-router.register(r'admin/deletion-requests', DeletionRequestViewSet, basename='deletion-requests')
-router.register(r'admin/archived-users', ArchivedUserViewSet, basename='archived-users')
 
 urlpatterns = [
     # Router URLs
@@ -52,7 +41,6 @@ urlpatterns = [
     path('login-verify/', LoginVerifyView.as_view(), name='login-verify'),
     path('logout/', LogoutView.as_view(), name='logout'),
     path('resend-otp/', ResendOTPView.as_view(), name='resend-otp'),
-    path('check-email/', CheckEmailView.as_view(), name='check-email'),
     
     # Password Reset
     path('password-reset-request/', PasswordResetRequestView.as_view(), name='password-reset-request'),
@@ -61,17 +49,6 @@ urlpatterns = [
     # Profile & Account Management
     path('change-password/', ChangePasswordView.as_view(), name='change-password'),
     path('update-profile/', UpdateProfileView.as_view(), name='update-profile'),
-    path('profile/', UserProfileView.as_view(), name='user-profile'),
-    path('profile/<int:user_id>/', UserProfileDetailView.as_view(), name='user-profile-detail'),
-    path('profile/avatar/', UploadAvatarView.as_view(), name='upload-avatar'),
-    path('profile/cover/', UploadCoverView.as_view(), name='upload-cover'),
-    path('profile-setup/', ProfileSetupView.as_view(), name='profile-setup'),
-    
-    # Account Management
-    path('account/deactivate/', DeactivateAccountView.as_view(), name='deactivate-account'),
-    path('account/reactivate/', ReactivateAccountView.as_view(), name='reactivate-account'),
-    path('account/request-deletion/', RequestDeletionView.as_view(), name='request-deletion'),
-    path('account/cancel-deletion/', CancelDeletionView.as_view(), name='cancel-deletion'),
     
     # Device Management
     path('devices/', DeviceListView.as_view(), name='device-list'),
@@ -83,9 +60,6 @@ urlpatterns = [
     # User List (Admin)
     path('user-list/', UserListView.as_view(), name='user-list'),
     
-    # User Search
-    path('users/search/', UserSearchView.as_view(), name='user-search'),
-    
     # Role Change Requests
     path('role-change-request/', RoleChangeRequestView.as_view(), name='role-change-request'),
     path('role-change-requests/', RoleChangeRequestListView.as_view(), name='role-change-requests'),
@@ -94,4 +68,3 @@ urlpatterns = [
     # Social Auth Callbacks (JWT token conversion)
     path('google/callback/', GoogleLoginCallbackView.as_view(), name='google-callback'),
 ]
-

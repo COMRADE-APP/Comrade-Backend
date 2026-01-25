@@ -9,57 +9,35 @@ VISIBILITY_CHOICES = (
     ('only_me', 'Only Me'),
 )
 
-MEDIA_TYPE_CHOICES = (
-    ('image', 'Image'),
-    ('video', 'Video'),
-    ('gif', 'GIF'),
-    ('file', 'File'),
-)
-
-REPORT_REASON_CHOICES = (
-    ('spam', 'Spam'),
-    ('harassment', 'Harassment'),
-    ('hate_speech', 'Hate Speech'),
-    ('violence', 'Violence'),
-    ('misinformation', 'Misinformation'),
-    ('inappropriate', 'Inappropriate Content'),
-    ('other', 'Other'),
-)
-
 
 class Opinion(models.Model):
     """
     Opinion model - similar to tweets on X/Twitter.
-    Users can post opinions with visibility settings and media.
-    Character limit: 500 for free users, 5000 for premium.
+    Users can post short opinions with visibility settings.
     """
     user = models.ForeignKey(
         CustomUser, 
         on_delete=models.CASCADE, 
         related_name='opinions'
     )
-    content = models.TextField(max_length=5000)  # Increased for premium users
+    content = models.CharField(max_length=500)
     visibility = models.CharField(
         max_length=20, 
         choices=VISIBILITY_CHOICES, 
         default='public'
     )
-    
-    # Legacy single media field (keep for backward compatibility)
     media_url = models.URLField(blank=True, null=True)
     media_type = models.CharField(
         max_length=20, 
         blank=True, 
         null=True,
-        choices=MEDIA_TYPE_CHOICES
+        choices=[('image', 'Image'), ('video', 'Video'), ('gif', 'GIF')]
     )
     
     # Engagement counts (denormalized for performance)
     likes_count = models.PositiveIntegerField(default=0)
     comments_count = models.PositiveIntegerField(default=0)
     reposts_count = models.PositiveIntegerField(default=0)
-    shares_count = models.PositiveIntegerField(default=0)
-    views_count = models.PositiveIntegerField(default=0)
     
     # For quote reposts
     quoted_opinion = models.ForeignKey(
@@ -68,23 +46,6 @@ class Opinion(models.Model):
         null=True, 
         blank=True,
         related_name='quotes'
-    )
-    
-    # Repost tracking
-    is_repost = models.BooleanField(default=False)
-    original_opinion = models.ForeignKey(
-        'self',
-        on_delete=models.SET_NULL,
-        null=True,
-        blank=True,
-        related_name='direct_reposts'
-    )
-    reposted_by = models.ForeignKey(
-        CustomUser,
-        on_delete=models.SET_NULL,
-        null=True,
-        blank=True,
-        related_name='reposted_opinions'
     )
     
     is_pinned = models.BooleanField(default=False)
@@ -98,44 +59,10 @@ class Opinion(models.Model):
         indexes = [
             models.Index(fields=['-created_at']),
             models.Index(fields=['user', '-created_at']),
-            models.Index(fields=['is_repost']),
         ]
     
     def __str__(self):
         return f"{self.user.email}: {self.content[:50]}..."
-
-
-class OpinionMedia(models.Model):
-    """
-    Media attachments for opinions (images, videos, files)
-    Allows multiple media per opinion
-    """
-    opinion = models.ForeignKey(
-        Opinion,
-        on_delete=models.CASCADE,
-        related_name='media_files'
-    )
-    file = models.FileField(upload_to='opinions/media/%Y/%m/')
-    media_type = models.CharField(max_length=20, choices=MEDIA_TYPE_CHOICES)
-    caption = models.CharField(max_length=500, blank=True)
-    order = models.PositiveSmallIntegerField(default=0)
-    
-    # File metadata
-    file_name = models.CharField(max_length=255, blank=True)
-    file_size = models.PositiveIntegerField(default=0)  # in bytes
-    mime_type = models.CharField(max_length=100, blank=True)
-    
-    # For videos
-    duration = models.PositiveIntegerField(null=True, blank=True)  # in seconds
-    thumbnail = models.ImageField(upload_to='opinions/thumbnails/', blank=True, null=True)
-    
-    created_at = models.DateTimeField(default=timezone.now)
-    
-    class Meta:
-        ordering = ['order', 'created_at']
-    
-    def __str__(self):
-        return f"Media for opinion {self.opinion.id} - {self.media_type}"
 
 
 class OpinionLike(models.Model):
@@ -178,7 +105,7 @@ class OpinionComment(models.Model):
         blank=True,
         related_name='replies'
     )
-    content = models.TextField(max_length=1000)
+    content = models.CharField(max_length=500)
     
     likes_count = models.PositiveIntegerField(default=0)
     
@@ -255,101 +182,3 @@ class Bookmark(models.Model):
         
     def __str__(self):
         return f"{self.user.email} bookmarked opinion {self.opinion.id}"
-
-
-class ContentBlock(models.Model):
-    """Block content from specific users"""
-    user = models.ForeignKey(
-        CustomUser,
-        on_delete=models.CASCADE,
-        related_name='blocked_users'
-    )
-    blocked_user = models.ForeignKey(
-        CustomUser,
-        on_delete=models.CASCADE,
-        related_name='opinion_blocked_by'
-    )
-    reason = models.CharField(max_length=255, blank=True)
-    created_at = models.DateTimeField(default=timezone.now)
-    
-    class Meta:
-        unique_together = ('user', 'blocked_user')
-    
-    def __str__(self):
-        return f"{self.user.email} blocked {self.blocked_user.email}"
-
-
-class ContentReport(models.Model):
-    """Report content for review"""
-    reporter = models.ForeignKey(
-        CustomUser,
-        on_delete=models.CASCADE,
-        related_name='reports_made'
-    )
-    opinion = models.ForeignKey(
-        Opinion,
-        on_delete=models.CASCADE,
-        related_name='reports',
-        null=True,
-        blank=True
-    )
-    reported_user = models.ForeignKey(
-        CustomUser,
-        on_delete=models.CASCADE,
-        related_name='reports_received',
-        null=True,
-        blank=True
-    )
-    reason = models.CharField(max_length=50, choices=REPORT_REASON_CHOICES)
-    description = models.TextField(blank=True)
-    status = models.CharField(
-        max_length=20,
-        choices=[
-            ('pending', 'Pending'),
-            ('reviewed', 'Reviewed'),
-            ('action_taken', 'Action Taken'),
-            ('dismissed', 'Dismissed'),
-        ],
-        default='pending'
-    )
-    reviewed_by = models.ForeignKey(
-        CustomUser,
-        on_delete=models.SET_NULL,
-        null=True,
-        blank=True,
-        related_name='reviews_made'
-    )
-    reviewed_at = models.DateTimeField(null=True, blank=True)
-    review_notes = models.TextField(blank=True)
-    created_at = models.DateTimeField(default=timezone.now)
-    
-    class Meta:
-        ordering = ['-created_at']
-    
-    def __str__(self):
-        return f"Report by {self.reporter.email} - {self.reason}"
-
-
-class HiddenContent(models.Model):
-    """Track content hidden by users (don't recommend)"""
-    user = models.ForeignKey(
-        CustomUser,
-        on_delete=models.CASCADE,
-        related_name='hidden_content'
-    )
-    opinion = models.ForeignKey(
-        Opinion,
-        on_delete=models.CASCADE,
-        related_name='hidden_by',
-        null=True,
-        blank=True
-    )
-    reason = models.CharField(max_length=100, blank=True)  # "not interested", etc.
-    created_at = models.DateTimeField(default=timezone.now)
-    
-    class Meta:
-        unique_together = ('user', 'opinion')
-    
-    def __str__(self):
-        return f"{self.user.email} hid opinion {self.opinion.id}"
-

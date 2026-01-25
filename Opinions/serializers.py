@@ -1,5 +1,5 @@
 from rest_framework import serializers
-from .models import Opinion, OpinionLike, OpinionComment, OpinionRepost, Follow, Bookmark, OpinionMedia
+from .models import Opinion, OpinionLike, OpinionComment, OpinionRepost, Follow, Bookmark
 from Authentication.models import CustomUser
 
 
@@ -18,11 +18,8 @@ class UserMiniSerializer(serializers.ModelSerializer):
     
     def get_avatar_url(self, obj):
         try:
-            if hasattr(obj, 'user_profile') and obj.user_profile.avatar:
-                request = self.context.get('request')
-                if request:
-                    return request.build_absolute_uri(obj.user_profile.avatar.url)
-                return obj.user_profile.avatar.url
+            if hasattr(obj, 'profile') and obj.profile.avatar:
+                return obj.profile.avatar.url
         except:
             pass
         return None
@@ -34,23 +31,6 @@ class UserMiniSerializer(serializers.ModelSerializer):
         return False
 
 
-class OpinionMediaSerializer(serializers.ModelSerializer):
-    """Serializer for opinion media attachments"""
-    url = serializers.SerializerMethodField()
-    
-    class Meta:
-        model = OpinionMedia
-        fields = ['id', 'url', 'media_type', 'caption', 'file_name', 'order']
-    
-    def get_url(self, obj):
-        request = self.context.get('request')
-        if obj.file:
-            if request:
-                return request.build_absolute_uri(obj.file.url)
-            return obj.file.url
-        return None
-
-
 class OpinionSerializer(serializers.ModelSerializer):
     """Full opinion serializer with engagement data"""
     user = UserMiniSerializer(read_only=True)
@@ -59,18 +39,14 @@ class OpinionSerializer(serializers.ModelSerializer):
     is_bookmarked = serializers.SerializerMethodField()
     quoted_opinion = serializers.SerializerMethodField()
     time_ago = serializers.SerializerMethodField()
-    media_files = OpinionMediaSerializer(many=True, read_only=True)
-    reposted_by_user = serializers.SerializerMethodField()
-    original_content = serializers.SerializerMethodField()
     
     class Meta:
         model = Opinion
         fields = [
             'id', 'user', 'content', 'visibility', 'media_url', 'media_type',
-            'likes_count', 'comments_count', 'reposts_count', 'shares_count', 'views_count',
+            'likes_count', 'comments_count', 'reposts_count',
             'is_liked', 'is_reposted', 'is_bookmarked',
-            'quoted_opinion', 'is_pinned', 'is_repost', 'reposted_by_user', 'original_content',
-            'media_files', 'created_at', 'time_ago'
+            'quoted_opinion', 'is_pinned', 'created_at', 'time_ago'
         ]
         read_only_fields = ['id', 'user', 'likes_count', 'comments_count', 'reposts_count', 'created_at']
     
@@ -91,22 +67,6 @@ class OpinionSerializer(serializers.ModelSerializer):
         if request and request.user.is_authenticated:
             return Bookmark.objects.filter(user=request.user, opinion=obj).exists()
         return False
-    
-    def get_reposted_by_user(self, obj):
-        if obj.is_repost and obj.reposted_by:
-            return {
-                'id': obj.reposted_by.id,
-                'name': f'{obj.reposted_by.first_name} {obj.reposted_by.last_name}'.strip(),
-            }
-        return None
-    
-    def get_original_content(self, obj):
-        if obj.is_repost and obj.original_opinion:
-            return {
-                'id': obj.original_opinion.id,
-                'user': UserMiniSerializer(obj.original_opinion.user, context=self.context).data
-            }
-        return None
     
     def get_quoted_opinion(self, obj):
         if obj.quoted_opinion:

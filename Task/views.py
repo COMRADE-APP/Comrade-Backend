@@ -47,10 +47,9 @@ class TaskViewSet(viewsets.ModelViewSet):
     """
     ViewSet for managing Tasks.
     Provides list, create, retrieve, update, delete operations.
-    All authenticated users can create tasks.
     """
     queryset = Task.objects.all().order_by('-time_stamp')
-    permission_classes = [permissions.IsAuthenticated]
+    permission_classes = [permissions.IsAuthenticated, IsStaffOrReadOnly]
     
     def get_serializer_class(self):
         if self.action in ['create', 'update', 'partial_update']:

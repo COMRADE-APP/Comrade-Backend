@@ -17,7 +17,7 @@ from Payment.models import (
     TransactionToken, PaymentAuthorization, PaymentVerification,
     TransactionHistory, TransactionTracker, PaymentGroupMember,
     Contribution, StandingOrder, GroupInvitation, GroupTarget,
-    Product, UserSubscription, IndividualShare, Partner, PartnerApplication
+    Product, UserSubscription, IndividualShare
 )
 from Payment.serializers import (
     PaymentProfileSerializer, PaymentItemSerializer, PaymentLogSerializer,
@@ -27,8 +27,7 @@ from Payment.serializers import (
     PaymentGroupMemberSerializer, ContributionSerializer,
     StandingOrderSerializer, GroupInvitationSerializer, GroupTargetSerializer,
     PaymentGroupsCreateSerializer, CreateTransactionSerializer,
-    ProductSerializer, UserSubscriptionSerializer, PartnerSerializer, PartnerApplicationSerializer, PartnerApplicationCreateSerializer, 
-    
+    ProductSerializer, UserSubscriptionSerializer
 )
 from Authentication.models import Profile, CustomUser
 
@@ -160,130 +159,7 @@ class TransactionViewSet(ModelViewSet):
         transactions = self.get_queryset()
         serializer = self.get_serializer(transactions, many=True)
         return Response(serializer.data)
-    
-    @action(detail=False, methods=['post'])
-    @db_transaction.atomic
-    def deposit(self, request):
-        """Deposit funds to Comrade Balance"""
-        amount = request.data.get('amount')
-        payment_method = request.data.get('payment_method', 'bank_transfer')
-        
-        if not amount:
-            return Response({'error': 'Amount is required'}, status=status.HTTP_400_BAD_REQUEST)
-        
-        try:
-            amount = float(amount)
-            if amount <= 0:
-                return Response({'error': 'Amount must be positive'}, status=status.HTTP_400_BAD_REQUEST)
-        except ValueError:
-            return Response({'error': 'Invalid amount'}, status=status.HTTP_400_BAD_REQUEST)
-        
-        user = request.user
-        profile = Profile.objects.get(user=user)
-        payment_profile = PaymentProfile.objects.get(user=profile)
-        
-        # Create transaction record
-        transaction = TransactionToken.objects.create(
-            payment_profile=payment_profile,
-            transaction_type='deposit',
-            amount=amount,
-            payment_option=payment_method,
-            pay_from='external'
-        )
-        
-        # Update balance
-        payment_profile.comrade_balance += amount
-        payment_profile.save()
-        
-        # Create history record
-        TransactionHistory.objects.create(
-            payment_profile=payment_profile,
-            transaction_token=transaction,
-            authorization_token=PaymentAuthorization.objects.create(
-                payment_profile=payment_profile,
-                authorization_code=secrets.token_hex(16)
-            ),
-            verification_token=PaymentVerification.objects.create(
-                payment_profile=payment_profile,
-                verification_code=secrets.token_hex(16)
-            ),
-            amount=amount,
-            status='completed'
-        )
-        
-        return Response({
-            'status': 'success',
-            'message': f'Successfully deposited ${amount:.2f}',
-            'new_balance': float(payment_profile.comrade_balance),
-            'transaction_id': str(transaction.transaction_code)
-        }, status=status.HTTP_201_CREATED)
-    
-    @action(detail=False, methods=['post'])
-    @db_transaction.atomic
-    def withdraw(self, request):
-        """Withdraw funds from Comrade Balance"""
-        amount = request.data.get('amount')
-        account_number = request.data.get('account_number', '')
-        payment_method = request.data.get('payment_method', 'bank_transfer')
-        
-        if not amount:
-            return Response({'error': 'Amount is required'}, status=status.HTTP_400_BAD_REQUEST)
-        
-        try:
-            amount = float(amount)
-            if amount <= 0:
-                return Response({'error': 'Amount must be positive'}, status=status.HTTP_400_BAD_REQUEST)
-        except ValueError:
-            return Response({'error': 'Invalid amount'}, status=status.HTTP_400_BAD_REQUEST)
-        
-        user = request.user
-        profile = Profile.objects.get(user=user)
-        payment_profile = PaymentProfile.objects.get(user=profile)
-        
-        # Check balance
-        if payment_profile.comrade_balance < amount:
-            return Response({
-                'error': 'Insufficient balance',
-                'current_balance': float(payment_profile.comrade_balance),
-                'requested_amount': amount
-            }, status=status.HTTP_400_BAD_REQUEST)
-        
-        # Create transaction record
-        transaction = TransactionToken.objects.create(
-            payment_profile=payment_profile,
-            transaction_type='withdrawal',
-            amount=amount,
-            payment_option=payment_method,
-            pay_from='internal'
-        )
-        
-        # Deduct balance
-        payment_profile.comrade_balance -= amount
-        payment_profile.save()
-        
-        # Create history record
-        TransactionHistory.objects.create(
-            payment_profile=payment_profile,
-            transaction_token=transaction,
-            authorization_token=PaymentAuthorization.objects.create(
-                payment_profile=payment_profile,
-                authorization_code=secrets.token_hex(16)
-            ),
-            verification_token=PaymentVerification.objects.create(
-                payment_profile=payment_profile,
-                verification_code=secrets.token_hex(16)
-            ),
-            amount=amount,
-            status='completed'
-        )
-        
-        return Response({
-            'status': 'success',
-            'message': f'Successfully withdrew ${amount:.2f}',
-            'new_balance': float(payment_profile.comrade_balance),
-            'transaction_id': str(transaction.transaction_code),
-            'destination': account_number or 'Primary account'
-        }, status=status.HTTP_201_CREATED)
+
 
 
     
@@ -544,99 +420,3 @@ class UserSubscriptionViewSet(ModelViewSet):
             return UserSubscription.objects.filter(user=payment_profile)
         except:
             return UserSubscription.objects.none()
-
-
-# Partner Views
-class PartnerViewSet(ModelViewSet):
-    queryset = Partner.objects.all()
-    serializer_class = PartnerSerializer
-    permission_classes = [IsAuthenticated]
-    
-    def get_queryset(self):
-        """Show only approved partners by default"""
-        if self.request.user.is_staff or self.request.user.is_superuser:
-            return Partner.objects.all()
-        return Partner.objects.filter(status='approved', verified=True)
-    
-    @action(detail=False, methods=['get'])
-    def my_partnership(self, request):
-        """Get current user's partnership"""
-        try:
-            profile = Profile.objects.get(user=request.user)
-            partner = Partner.objects.get(user=profile)
-            serializer = self.get_serializer(partner)
-            return Response(serializer.data)
-        except Partner.DoesNotExist:
-            return Response({'error': 'No partnership found'}, status=status.HTTP_404_NOT_FOUND)
-
-
-class PartnerApplicationViewSet(ModelViewSet):
-    queryset = PartnerApplication.objects.all()
-    permission_classes = [IsAuthenticated]
-    
-    def get_serializer_class(self):
-        if self.action == 'create':
-            return PartnerApplicationCreateSerializer
-        return PartnerApplicationSerializer
-    
-    def get_queryset(self):
-        """Users can only see their own applications, staff can see all"""
-        user = self.request.user
-        if user.is_staff or user.is_superuser:
-            return PartnerApplication.objects.all()
-        try:
-            profile = Profile.objects.get(user=user)
-            return PartnerApplication.objects.filter(applicant=profile)
-        except:
-            return PartnerApplication.objects.none()
-    
-    @action(detail=True, methods=['post'])
-    def approve(self, request, pk=None):
-        """Approve a partner application (admin only)"""
-        if not (request.user.is_staff or request.user.is_superuser):
-            return Response({'error': 'Permission denied'}, status=status.HTTP_403_FORBIDDEN)
-        
-        application = self.get_object()
-        if application.status != 'pending':
-            return Response({'error': 'Application already processed'}, status=status.HTTP_400_BAD_REQUEST)
-        
-        # Create Partner from application
-        partner = Partner.objects.create(
-            user=application.applicant,
-            partner_type=application.partner_type,
-            business_name=application.business_name,
-            business_registration=application.business_registration,
-            contact_email=application.contact_email,
-            contact_phone=application.contact_phone,
-            website=application.website,
-            address=application.address,
-            city=application.city,
-            country=application.country,
-            description=application.description,
-            status='approved',
-            verified=True,
-            verified_at=timezone.now(),
-        )
-        
-        application.status = 'approved'
-        application.reviewed_by = Profile.objects.get(user=request.user)
-        application.reviewed_at = timezone.now()
-        application.partner = partner
-        application.save()
-        
-        return Response({'message': 'Application approved', 'partner_id': partner.id})
-    
-    @action(detail=True, methods=['post'])
-    def reject(self, request, pk=None):
-        """Reject a partner application (admin only)"""
-        if not (request.user.is_staff or request.user.is_superuser):
-            return Response({'error': 'Permission denied'}, status=status.HTTP_403_FORBIDDEN)
-        
-        application = self.get_object()
-        application.status = 'rejected'
-        application.reviewed_by = Profile.objects.get(user=request.user)
-        application.reviewed_at = timezone.now()
-        application.review_notes = request.data.get('notes', '')
-        application.save()
-        
-        return Response({'message': 'Application rejected'})

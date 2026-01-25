@@ -4,7 +4,7 @@ from Payment.models import (
     TransactionToken, PaymentAuthorization, PaymentVerification,
     TransactionHistory, TransactionTracker, PaymentGroupMember,
     Contribution, StandingOrder, GroupInvitation, GroupTarget,
-    Product, UserSubscription, IndividualShare, Partner, PartnerApplication
+    Product, UserSubscription, IndividualShare
 )
 
 admin.site.register(PaymentProfile)
@@ -25,18 +25,3 @@ admin.site.register(Product)
 admin.site.register(UserSubscription)
 admin.site.register(IndividualShare)
 
-
-@admin.register(Partner)
-class PartnerAdmin(admin.ModelAdmin):
-    list_display = ['business_name', 'partner_type', 'status', 'verified', 'commission_rate', 'created_at']
-    list_filter = ['partner_type', 'status', 'verified']
-    search_fields = ['business_name', 'contact_email', 'user__user__email']
-    readonly_fields = ['id', 'created_at', 'updated_at']
-
-
-@admin.register(PartnerApplication)
-class PartnerApplicationAdmin(admin.ModelAdmin):
-    list_display = ['business_name', 'partner_type', 'status', 'applicant', 'created_at']
-    list_filter = ['partner_type', 'status']
-    search_fields = ['business_name', 'contact_email', 'applicant__user__email']
-    readonly_fields = ['id', 'created_at', 'updated_at']

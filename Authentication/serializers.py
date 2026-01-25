@@ -4,10 +4,8 @@ from rest_framework import serializers
 from Authentication.models import (
     Student, CustomUser, Lecturer, OrgStaff, StudentAdmin, 
     OrgAdmin, InstAdmin, InstStaff, Profile, Author, Editor, 
-    Moderator, ComradeAdmin, RoleChangeRequest, UserProfile,
-    AccountDeletionRequest, ArchivedUserData
+    Moderator, ComradeAdmin, RoleChangeRequest
 )
-from Opinions.models import Follow
 
 
 class BaseUserSerializer(serializers.ModelSerializer):
@@ -37,14 +35,11 @@ class BaseUserSerializer(serializers.ModelSerializer):
     def create(self, validated_data):
         validated_data.pop('confirm_password', None)
         password = validated_data.pop('password', None)
+        # Use the model manager so any custom create_user logic runs
         if password is not None:
             user = CustomUser.objects.create_user(password=password, is_active=False, **validated_data)
         else:
             user = CustomUser.objects.create_user(is_active=False, **validated_data)
-        
-        # Create UserProfile for the new user
-        UserProfile.objects.create(user=user)
-        
         return user
     
 
@@ -69,20 +64,6 @@ class LoginSerializer(serializers.Serializer):
         if not user:
             raise serializers.ValidationError({"error": "User not found."})
         
-        # Check account status
-        if user.account_status == 'deactivated':
-            raise serializers.ValidationError({
-                "error": "Account is deactivated.",
-                "account_deactivated": True,
-                "email": user.email
-            })
-        
-        if user.account_status == 'pending_deletion':
-            raise serializers.ValidationError({
-                "error": "Account is pending deletion. Contact support to cancel.",
-                "pending_deletion": True
-            })
-        
         authenticated = authenticate(username=user.email, password=password)
 
         if not authenticated:
@@ -99,6 +80,7 @@ class StudentSerializer(serializers.ModelSerializer):
     class Meta:
         model = Student
         fields = '__all__'
+        # read_only_fields = ['user'] 
 
     def validate(self, data):
         if data.get('expecte_year_of_graduation') and data.get('year_of_admission'):
@@ -111,66 +93,77 @@ class LecturerSerializer(serializers.ModelSerializer):
     class Meta:
         model = Lecturer
         fields = '__all__'
+        # read_only_fields = ['user'] 
 
 
 class OrgStaffSerializer(serializers.ModelSerializer):
     class Meta:
         model = OrgStaff
         fields = '__all__'
+        # read_only_fields = ['user'] 
 
 
 class StudentAdminSerializer(serializers.ModelSerializer):
     class Meta:
         model = StudentAdmin
         fields = '__all__'
+        # read_only_fields = ['student']  # FIX: StudentAdmin links to Student, not user
 
 
 class OrgAdminSerializer(serializers.ModelSerializer):
     class Meta:
         model = OrgAdmin
         fields = '__all__'
+        # read_only_fields = ['staff']  # FIX: OrgAdmin links to OrgStaff, not user
 
 
 class InstAdminSerializer(serializers.ModelSerializer):
     class Meta:
         model = InstAdmin
         fields = '__all__'
+        # read_only_fields = ['staff']  # FIX: InstAdmin links to InstStaff, not user
 
 
 class InstStaffSerializer(serializers.ModelSerializer):
     class Meta:
         model = InstStaff
         fields = '__all__'
+        # read_only_fields = ['user'] 
 
 
 class ProfileSerializer(serializers.ModelSerializer):
     class Meta:
         model = Profile
         fields = '__all__'
+        # read_only_fields = ['user'] 
 
 
 class AuthorSerializer(serializers.ModelSerializer):
     class Meta:
         model = Author
         fields = '__all__'
+        # read_only_fields = ['user']
 
 
 class EditorSerializer(serializers.ModelSerializer):
     class Meta:
         model = Editor
         fields = '__all__'
+        # read_only_fields = ['user']
 
 
 class ModeratorSerializer(serializers.ModelSerializer):
     class Meta:
         model = Moderator
         fields = '__all__'
+        # read_only_fields = ['user']
 
 
 class ComradeAdminSerializer(serializers.ModelSerializer):
     class Meta:
         model = ComradeAdmin
         fields = '__all__'
+        # read_only_fields = ['user']
 
 
 class RoleChangeRequestSerializer(serializers.ModelSerializer):
@@ -183,193 +176,10 @@ class RoleChangeRequestSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'user', 'user_email', 'user_name', 'current_role', 
             'requested_role', 'reason', 'supporting_documents',
-            'status', 'review_notes', 'reviewed_by', 'reviewed_by_name',
-            'created_on', 'reviewed_on'
+            'status', 'admin_notes', 'reviewed_by', 'reviewed_by_name',
+            'created_at', 'updated_at'
         ]
-        read_only_fields = ['id', 'user', 'created_on', 'reviewed_on', 'reviewed_by']
+        read_only_fields = ['id', 'user', 'created_at', 'updated_at', 'reviewed_by']
     
     def get_user_name(self, obj):
         return f"{obj.user.first_name} {obj.user.last_name}".strip() or obj.user.email
-
-
-class UserProfileSerializer(serializers.ModelSerializer):
-    """Full user profile with privacy-aware data"""
-    user_id = serializers.IntegerField(source='user.id', read_only=True)
-    email = serializers.SerializerMethodField()
-    phone_number = serializers.SerializerMethodField()
-    first_name = serializers.CharField(source='user.first_name', read_only=True)
-    last_name = serializers.CharField(source='user.last_name', read_only=True)
-    other_names = serializers.CharField(source='user.other_names', read_only=True)
-    user_type = serializers.CharField(source='user.user_type', read_only=True)
-    full_name = serializers.SerializerMethodField()
-    is_owner = serializers.SerializerMethodField()
-    is_following = serializers.SerializerMethodField()
-    followers_count = serializers.SerializerMethodField()
-    following_count = serializers.SerializerMethodField()
-    avatar_url = serializers.SerializerMethodField()
-    cover_url = serializers.SerializerMethodField()
-    
-    class Meta:
-        model = UserProfile
-        fields = [
-            'user_id', 'email', 'phone_number', 'first_name', 'last_name', 
-            'other_names', 'user_type', 'full_name', 'is_owner',
-            'avatar', 'avatar_url', 'cover_image', 'cover_url',
-            'bio', 'location', 'occupation', 'website', 'interests',
-            'show_email', 'show_phone', 'allow_messages', 
-            'show_activity_status', 'show_read_receipts',
-            'is_following', 'followers_count', 'following_count',
-            'created_at', 'updated_at'
-        ]
-        read_only_fields = ['user_id', 'created_at', 'updated_at']
-    
-    def get_full_name(self, obj):
-        return f"{obj.user.first_name} {obj.user.last_name}".strip()
-    
-    def get_is_owner(self, obj):
-        request = self.context.get('request')
-        if request and request.user.is_authenticated:
-            return request.user.id == obj.user.id
-        return False
-    
-    def get_email(self, obj):
-        """Return email based on privacy settings"""
-        request = self.context.get('request')
-        if not request or not request.user.is_authenticated:
-            return None if obj.show_email != 'public' else obj.user.email
-        
-        if request.user.id == obj.user.id:
-            return obj.user.email
-        
-        if obj.show_email == 'public':
-            return obj.user.email
-        elif obj.show_email == 'followers':
-            if Follow.objects.filter(follower=request.user, following=obj.user).exists():
-                return obj.user.email
-        return None
-    
-    def get_phone_number(self, obj):
-        """Return phone based on privacy settings"""
-        request = self.context.get('request')
-        if not request or not request.user.is_authenticated:
-            return None if obj.show_phone != 'public' else obj.user.phone_number
-        
-        if request.user.id == obj.user.id:
-            return obj.user.phone_number
-        
-        if obj.show_phone == 'public':
-            return obj.user.phone_number
-        elif obj.show_phone == 'followers':
-            if Follow.objects.filter(follower=request.user, following=obj.user).exists():
-                return obj.user.phone_number
-        return None
-    
-    def get_is_following(self, obj):
-        request = self.context.get('request')
-        if request and request.user.is_authenticated and request.user.id != obj.user.id:
-            return Follow.objects.filter(follower=request.user, following=obj.user).exists()
-        return False
-    
-    def get_followers_count(self, obj):
-        return obj.user.followers.count()
-    
-    def get_following_count(self, obj):
-        return obj.user.following.count()
-    
-    def get_avatar_url(self, obj):
-        if obj.avatar:
-            request = self.context.get('request')
-            if request:
-                return request.build_absolute_uri(obj.avatar.url)
-            return obj.avatar.url
-        return None
-    
-    def get_cover_url(self, obj):
-        if obj.cover_image:
-            request = self.context.get('request')
-            if request:
-                return request.build_absolute_uri(obj.cover_image.url)
-            return obj.cover_image.url
-        return None
-
-
-class UserProfileUpdateSerializer(serializers.ModelSerializer):
-    """Serializer for updating profile data"""
-    first_name = serializers.CharField(write_only=True, required=False)
-    last_name = serializers.CharField(write_only=True, required=False)
-    other_names = serializers.CharField(write_only=True, required=False, allow_blank=True)
-    
-    class Meta:
-        model = UserProfile
-        fields = [
-            'first_name', 'last_name', 'other_names',
-            'bio', 'location', 'occupation', 'website', 'interests',
-            'show_email', 'show_phone', 'allow_messages',
-            'show_activity_status', 'show_read_receipts'
-        ]
-    
-    def update(self, instance, validated_data):
-        # Update user fields if provided
-        user = instance.user
-        if 'first_name' in validated_data:
-            user.first_name = validated_data.pop('first_name')
-        if 'last_name' in validated_data:
-            user.last_name = validated_data.pop('last_name')
-        if 'other_names' in validated_data:
-            user.other_names = validated_data.pop('other_names')
-        user.save()
-        
-        # Update profile fields
-        return super().update(instance, validated_data)
-
-
-class AccountDeletionRequestSerializer(serializers.ModelSerializer):
-    user_email = serializers.CharField(source='email', read_only=True)
-    user_name = serializers.SerializerMethodField()
-    reviewed_by_name = serializers.SerializerMethodField()
-    days_until_deletion = serializers.SerializerMethodField()
-    
-    class Meta:
-        model = AccountDeletionRequest
-        fields = [
-            'id', 'user', 'email', 'user_email', 'user_name', 'user_type',
-            'reason', 'status', 'review_notes', 'reviewed_by', 'reviewed_by_name',
-            'requested_at', 'reviewed_at', 'scheduled_deletion_date', 'days_until_deletion'
-        ]
-        read_only_fields = ['id', 'user', 'email', 'requested_at', 'reviewed_at', 'reviewed_by']
-    
-    def get_user_name(self, obj):
-        if obj.user:
-            return f"{obj.user.first_name} {obj.user.last_name}".strip()
-        return "Deleted User"
-    
-    def get_reviewed_by_name(self, obj):
-        if obj.reviewed_by:
-            return obj.reviewed_by.email
-        return None
-    
-    def get_days_until_deletion(self, obj):
-        if obj.scheduled_deletion_date:
-            from datetime import date
-            delta = obj.scheduled_deletion_date - date.today()
-            return max(0, delta.days)
-        return None
-
-
-class ArchivedUserDataSerializer(serializers.ModelSerializer):
-    archived_by_name = serializers.SerializerMethodField()
-    
-    class Meta:
-        model = ArchivedUserData
-        fields = [
-            'id', 'original_user_id', 'email', 'first_name', 'last_name',
-            'user_type', 'user_data', 'activity_summary', 'deletion_reason',
-            'archived_at', 'archived_by', 'archived_by_name'
-        ]
-        read_only_fields = ['id', 'archived_at']
-    
-    def get_archived_by_name(self, obj):
-        if obj.archived_by:
-            return obj.archived_by.email
-        return None
-
