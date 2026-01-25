@@ -36,6 +36,8 @@ class Room(models.Model):
     room_code = models.CharField(max_length=200, unique=True, editable=False, default=uuid.uuid4().hex[:10].upper())
     invitation_code = models.CharField(max_length=10, unique=True, editable=False)
     description = models.TextField(max_length=255, null=True)
+    avatar = models.ImageField(upload_to='room_avatars/', null=True, blank=True)
+    cover_image = models.ImageField(upload_to='room_covers/', null=True, blank=True)
     institutions = models.ManyToManyField(Institution, blank=True, related_name='institution_related_to_room')
     organisation = models.ManyToManyField(Institution, blank=True, related_name='organisation_related_to_room')
     created_by = models.ForeignKey(CustomUser, on_delete=models.CASCADE, null=True)
@@ -163,3 +165,130 @@ class ForwadingLog(models.Model):
 
 
 
+
+# WhatsApp-like Room Settings
+CHAT_PERMISSION_CHOICES = (
+    ('admins_only', 'Admins Only'),
+    ('admins_moderators', 'Admins and Moderators'),
+    ('all_members', 'All Members'),
+)
+
+MEMBER_PERMISSION_CHOICES = (
+    ('admins_only', 'Admins Only'),
+    ('admins_moderators', 'Admins and Moderators'),
+    ('all_members', 'All Members'),
+)
+
+
+class RoomSettings(models.Model):
+    """WhatsApp-like settings for rooms"""
+    room = models.OneToOneField(Room, on_delete=models.CASCADE, related_name='settings')
+    
+    # Chat settings
+    chat_enabled = models.BooleanField(default=True)
+    chat_permission = models.CharField(max_length=50, choices=CHAT_PERMISSION_CHOICES, default='all_members')
+    
+    # Member permissions
+    who_can_add_members = models.CharField(max_length=50, choices=MEMBER_PERMISSION_CHOICES, default='admins_only')
+    who_can_edit_info = models.CharField(max_length=50, choices=MEMBER_PERMISSION_CHOICES, default='admins_only')
+    who_can_send_media = models.CharField(max_length=50, choices=CHAT_PERMISSION_CHOICES, default='all_members')
+    
+    # Tagging & Forwarding
+    allow_opinion_tagging = models.BooleanField(default=True)
+    allow_message_forwarding = models.BooleanField(default=True)
+    show_forward_source = models.BooleanField(default=True)
+    
+    # Visibility
+    is_discoverable = models.BooleanField(default=True)
+    require_approval_to_join = models.BooleanField(default=False)
+    
+    created_at = models.DateTimeField(default=datetime.now)
+    updated_at = models.DateTimeField(auto_now=True)
+    
+    def __str__(self):
+        return f"Settings for {self.room.name}"
+
+
+class RoomChatFile(models.Model):
+    """File attachments for room chat messages"""
+    file = models.FileField(upload_to='room_chat_files/%Y/%m/')
+    file_name = models.CharField(max_length=255)
+    file_type = models.CharField(max_length=50)
+    file_size = models.PositiveIntegerField(default=0)
+    uploaded_at = models.DateTimeField(default=datetime.now)
+    uploaded_by = models.ForeignKey(CustomUser, on_delete=models.CASCADE)
+    
+    def __str__(self):
+        return self.file_name
+
+
+MESSAGE_STATUS_CHOICES = (
+    ('pending', 'Pending'),
+    ('sent', 'Sent'),
+    ('delivered', 'Delivered'),
+    ('read', 'Read'),
+    ('failed', 'Failed'),
+)
+
+MESSAGE_TYPE_CHOICES = (
+    ('text', 'Text'),
+    ('file', 'File'),
+    ('image', 'Image'),
+    ('video', 'Video'),
+    ('audio', 'Audio'),
+    ('event', 'Event'),
+    ('task', 'Task'),
+    ('resource', 'Resource'),
+    ('announcement', 'Announcement'),
+)
+
+
+class RoomChat(models.Model):
+    """Chat messages for rooms - WhatsApp-like functionality"""
+    room = models.ForeignKey(Room, on_delete=models.CASCADE, related_name='chats')
+    sender = models.ForeignKey(CustomUser, on_delete=models.CASCADE, related_name='room_chats')
+    
+    content = models.TextField(max_length=5000, blank=True)
+    message_type = models.CharField(max_length=20, choices=MESSAGE_TYPE_CHOICES, default='text')
+    status = models.CharField(max_length=20, choices=MESSAGE_STATUS_CHOICES, default='sent')
+    
+    # Files (supports multiple)
+    files = models.ManyToManyField(RoomChatFile, blank=True, related_name='chat_messages')
+    
+    # Entity references for sharing
+    event = models.ForeignKey('Events.Event', null=True, blank=True, on_delete=models.SET_NULL, related_name='shared_in_chats')
+    task = models.ForeignKey('Announcements.Task', null=True, blank=True, on_delete=models.SET_NULL, related_name='shared_in_chats')
+    resource = models.ForeignKey('Resources.Resource', null=True, blank=True, on_delete=models.SET_NULL, related_name='shared_in_chats')
+    announcement = models.ForeignKey('Announcements.Announcements', null=True, blank=True, on_delete=models.SET_NULL, related_name='shared_in_chats')
+    
+    # Forwarding info
+    is_forwarded = models.BooleanField(default=False)
+    forwarded_from_room = models.ForeignKey(Room, null=True, blank=True, on_delete=models.SET_NULL, related_name='forwarded_chats')
+    forwarded_from_user = models.ForeignKey(CustomUser, null=True, blank=True, on_delete=models.SET_NULL, related_name='forwarded_by_user')
+    original_chat = models.ForeignKey('self', null=True, blank=True, on_delete=models.SET_NULL, related_name='forwards')
+    
+    # Reply to another message
+    reply_to = models.ForeignKey('self', null=True, blank=True, on_delete=models.SET_NULL, related_name='replies')
+    
+    # Timestamps
+    created_at = models.DateTimeField(default=datetime.now)
+    updated_at = models.DateTimeField(auto_now=True)
+    
+    # Read tracking - for delivery/read receipts
+    read_by = models.ManyToManyField(CustomUser, blank=True, related_name='read_room_chats')
+    delivered_to = models.ManyToManyField(CustomUser, blank=True, related_name='delivered_room_chats')
+    
+    # Soft delete
+    is_deleted = models.BooleanField(default=False)
+    deleted_at = models.DateTimeField(null=True, blank=True)
+    
+    class Meta:
+        ordering = ['created_at']
+        indexes = [
+            models.Index(fields=['room', 'created_at']),
+            models.Index(fields=['sender', 'created_at']),
+            models.Index(fields=['room', 'is_deleted']),
+        ]
+    
+    def __str__(self):
+        return f"{self.sender.first_name} in {self.room.name}: {self.content[:50]}..."

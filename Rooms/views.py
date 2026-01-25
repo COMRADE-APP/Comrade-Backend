@@ -8,12 +8,15 @@ from rest_framework.decorators import action
 from rest_framework.response import Response
 from Resources.models import Resource, ResourceVisibility 
 from Resources.serializers import ResourceSerializer, ResourceVisibilitySerializer
-from Rooms.models import Room, DefaultRoom, DirectMessage, DirectMessageRoom, ForwadingLog
+from Rooms.models import Room, DefaultRoom, DirectMessage, DirectMessageRoom, ForwadingLog, RoomSettings, RoomChat, RoomChatFile
 from Rooms.serializers import (
     RoomSerializer, RoomListSerializer, RoomRecommendationSerializer,
     DefaultRoomSerializer, DirectMessageSerializer, DirectMessageCreateSerializer,
-    DirectMessageRoomSerializer, DirectMessageRoomListSerializer, ForwadingLogSerializer
+    DirectMessageRoomSerializer, DirectMessageRoomListSerializer, ForwadingLogSerializer,
+    RoomChatSerializer, RoomChatCreateSerializer, RoomSettingsSerializer, 
+    RoomDetailSerializer, MemberDetailSerializer, RoomChatFileSerializer
 )
+from Opinions.models import Follow
 from Announcements.models import AnnouncementsRequest, Announcements, Task, Text, CompletedTask, Pin, Reposts, Reply, QuestionResponse, Question, SubQuestion, Choice, FileResponse, TaskResponse, Reaction, Comment
 from Announcements.serializers import AnnouncementsRequestSerializer, AnnouncementsSerializer, TaskSerializer, TextSerializer, CompletedTaskSerializer, PinSerializer, RepostsSerializer, ReplySerializer, QuestionResponseSerializer, QuestionSerializer, SubQuestionSerializer, ChoiceSerializer, FileResponseSerializer, TaskResponseSerializer, ReactionSerializer, CommentSerializer
 from Organisation.models import Organisation, OrgBranch, Division, Department, Section, Team, Project, Centre, Committee, Board, Unit, Institute, Program
@@ -548,6 +551,256 @@ class RoomViewSet(ModelViewSet):
         room.save()
 
         return Response({'message':'Room has been deleted successfully. You have until 60 days to reverse the action. When 60 days are reached, the room will be deleted parmanently.'}, status=status.HTTP_200_OK)
+    
+    # ==================== CHAT ENDPOINTS ====================
+    
+    @action(detail=True, methods=['get', 'post'])
+    def chats(self, request, pk=None):
+        """Get or send room chat messages"""
+        room = self.get_object()
+        
+        # Check if user is member
+        if request.user not in room.members.all():
+            return Response({'error': 'You are not a member of this room'}, 
+                            status=status.HTTP_403_FORBIDDEN)
+        
+        if request.method == 'GET':
+            # Get chats with optional filters
+            chats = RoomChat.objects.filter(room=room, is_deleted=False).select_related('sender')
+            
+            # Filter by message type
+            msg_type = request.query_params.get('type')
+            if msg_type:
+                chats = chats.filter(message_type=msg_type)
+            
+            # Pagination
+            page = self.paginate_queryset(chats)
+            if page is not None:
+                serializer = RoomChatSerializer(page, many=True, context={'request': request})
+                return self.get_paginated_response(serializer.data)
+            
+            serializer = RoomChatSerializer(chats, many=True, context={'request': request})
+            return Response(serializer.data)
+        
+        elif request.method == 'POST':
+            # Check chat permission
+            settings, created = RoomSettings.objects.get_or_create(room=room)
+            
+            if not settings.chat_enabled:
+                return Response({'error': 'Chat is disabled in this room'}, 
+                                status=status.HTTP_403_FORBIDDEN)
+            
+            permission = settings.chat_permission
+            if permission == 'admins_only' and request.user not in room.admins.all():
+                return Response({'error': 'Only admins can send messages'}, 
+                                status=status.HTTP_403_FORBIDDEN)
+            if permission == 'admins_moderators':
+                if request.user not in room.admins.all() and request.user not in room.moderators.all():
+                    return Response({'error': 'Only admins and moderators can send messages'}, 
+                                    status=status.HTTP_403_FORBIDDEN)
+            
+            # Create chat message
+            serializer = RoomChatCreateSerializer(data=request.data, context={'request': request})
+            if serializer.is_valid():
+                chat = serializer.save(room=room, sender=request.user, status='sent')
+                
+                # Handle file uploads
+                files = request.FILES.getlist('files')
+                for file in files:
+                    file_type = 'document'
+                    if file.content_type.startswith('image/'):
+                        file_type = 'image'
+                    elif file.content_type.startswith('video/'):
+                        file_type = 'video'
+                    elif file.content_type.startswith('audio/'):
+                        file_type = 'audio'
+                    
+                    chat_file = RoomChatFile.objects.create(
+                        file=file,
+                        file_name=file.name,
+                        file_type=file_type,
+                        file_size=file.size,
+                        uploaded_by=request.user
+                    )
+                    chat.files.add(chat_file)
+                
+                # Update message type if files attached
+                if files:
+                    chat.message_type = 'file'
+                    chat.save()
+                
+                return Response(RoomChatSerializer(chat, context={'request': request}).data, 
+                                status=status.HTTP_201_CREATED)
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+    
+    @action(detail=True, methods=['post'], url_path='chats/(?P<chat_id>[^/.]+)/forward')
+    def forward_chat(self, request, pk=None, chat_id=None):
+        """Forward a chat message to another room"""
+        room = self.get_object()
+        chat = get_object_or_404(RoomChat, id=chat_id, room=room)
+        target_room_id = request.data.get('target_room')
+        
+        if not target_room_id:
+            return Response({'error': 'target_room is required'}, 
+                            status=status.HTTP_400_BAD_REQUEST)
+        
+        target_room = get_object_or_404(Room, id=target_room_id)
+        
+        # Check if user is member of target room
+        if request.user not in target_room.members.all():
+            return Response({'error': 'You are not a member of the target room'}, 
+                            status=status.HTTP_403_FORBIDDEN)
+        
+        # Check if forwarding is allowed
+        settings = getattr(room, 'settings', None)
+        if settings and not settings.allow_message_forwarding:
+            return Response({'error': 'Message forwarding is disabled in this room'}, 
+                            status=status.HTTP_403_FORBIDDEN)
+        
+        # Create forwarded message
+        new_chat = RoomChat.objects.create(
+            room=target_room,
+            sender=request.user,
+            content=chat.content,
+            message_type=chat.message_type,
+            is_forwarded=True,
+            forwarded_from_room=room if settings and settings.show_forward_source else None,
+            forwarded_from_user=request.user,
+            original_chat=chat,
+            status='sent'
+        )
+        
+        # Copy files
+        for file in chat.files.all():
+            new_chat.files.add(file)
+        
+        return Response(RoomChatSerializer(new_chat, context={'request': request}).data, 
+                        status=status.HTTP_201_CREATED)
+    
+    @action(detail=True, methods=['post'], url_path='chats/(?P<chat_id>[^/.]+)/read')
+    def mark_chat_read(self, request, pk=None, chat_id=None):
+        """Mark a chat message as read"""
+        room = self.get_object()
+        chat = get_object_or_404(RoomChat, id=chat_id, room=room)
+        
+        if request.user not in room.members.all():
+            return Response({'error': 'You are not a member of this room'}, 
+                            status=status.HTTP_403_FORBIDDEN)
+        
+        chat.read_by.add(request.user)
+        
+        # Update status if all members have read
+        if chat.read_by.count() >= room.members.count() - 1:  # Exclude sender
+            chat.status = 'read'
+            chat.save()
+        
+        return Response({'message': 'Message marked as read'})
+    
+    @action(detail=True, methods=['delete'], url_path='chats/(?P<chat_id>[^/.]+)')
+    def delete_chat(self, request, pk=None, chat_id=None):
+        """Delete a chat message (soft delete)"""
+        room = self.get_object()
+        chat = get_object_or_404(RoomChat, id=chat_id, room=room)
+        
+        # Only sender or admins can delete
+        if chat.sender != request.user and request.user not in room.admins.all():
+            return Response({'error': 'You can only delete your own messages'}, 
+                            status=status.HTTP_403_FORBIDDEN)
+        
+        chat.is_deleted = True
+        chat.deleted_at = datetime.now()
+        chat.save()
+        
+        return Response({'message': 'Message deleted'})
+    
+    # ==================== SETTINGS ENDPOINTS ====================
+    
+    @action(detail=True, methods=['get', 'put', 'patch'])
+    def room_settings(self, request, pk=None):
+        """Get or update room settings"""
+        room = self.get_object()
+        
+        # Only admins can update settings
+        if request.method in ['PUT', 'PATCH']:
+            if request.user not in room.admins.all():
+                return Response({'error': 'Only admins can update settings'}, 
+                                status=status.HTTP_403_FORBIDDEN)
+        
+        settings, created = RoomSettings.objects.get_or_create(room=room)
+        
+        if request.method == 'GET':
+            serializer = RoomSettingsSerializer(settings)
+            return Response(serializer.data)
+        
+        serializer = RoomSettingsSerializer(settings, data=request.data, 
+                                             partial=(request.method == 'PATCH'))
+        if serializer.is_valid():
+            serializer.save()
+            return Response(serializer.data)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+    
+    # ==================== MEMBER DETAIL ENDPOINTS ====================
+    
+    @action(detail=True, methods=['get'])
+    def members_detail(self, request, pk=None):
+        """Get detailed member list with roles and follow status"""
+        room = self.get_object()
+        members = room.members.all()
+        
+        result = []
+        for member in members:
+            role = 'member'
+            if member in room.admins.all():
+                role = 'admin'
+            elif member in room.moderators.all():
+                role = 'moderator'
+            
+            # Check if current user is following this member
+            is_following = Follow.objects.filter(
+                follower=request.user, following=member
+            ).exists() if request.user.is_authenticated else False
+            
+            avatar_url = None
+            if hasattr(member, 'user_profile') and member.user_profile and member.user_profile.avatar:
+                avatar_url = request.build_absolute_uri(member.user_profile.avatar.url)
+            
+            result.append({
+                'id': member.id,
+                'email': member.email,
+                'first_name': member.first_name,
+                'last_name': member.last_name,
+                'full_name': f"{member.first_name} {member.last_name}",
+                'avatar_url': avatar_url,
+                'role': role,
+                'is_following': is_following,
+                'user_type': member.user_type,
+            })
+        
+        return Response(result)
+    
+    @action(detail=True, methods=['post'], url_path='members/(?P<user_id>[^/.]+)/follow')
+    def follow_member(self, request, pk=None, user_id=None):
+        """Follow/unfollow a room member"""
+        room = self.get_object()
+        target_user = get_object_or_404(User, id=user_id)
+        
+        if target_user not in room.members.all():
+            return Response({'error': 'User is not a member of this room'}, 
+                            status=status.HTTP_400_BAD_REQUEST)
+        
+        if target_user == request.user:
+            return Response({'error': 'Cannot follow yourself'}, 
+                            status=status.HTTP_400_BAD_REQUEST)
+        
+        follow, created = Follow.objects.get_or_create(
+            follower=request.user, following=target_user
+        )
+        
+        if not created:
+            follow.delete()
+            return Response({'message': 'Unfollowed user', 'is_following': False})
+        
+        return Response({'message': 'Now following user', 'is_following': True})
     
 
 class DefaultRoomViewSet(ModelViewSet):

@@ -15,6 +15,8 @@ router.register(r'methods', PaymentMethodViewSet, basename='payment-method')
 router.register(r'products', views.ProductViewSet, basename='product')
 router.register(r'subscriptions', views.UserSubscriptionViewSet, basename='subscription')
 router.register(r'targets', views.GroupTargetViewSet, basename='target')
+router.register(r'partners', views.PartnerViewSet, basename='partner')
+router.register(r'partner-applications', views.PartnerApplicationViewSet, basename='partner-application')
 
 urlpatterns = [
     path('', include(router.urls)),
