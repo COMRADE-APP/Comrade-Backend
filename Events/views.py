@@ -40,6 +40,39 @@ class EventViewSet(ModelViewSet):
     search_fields = ['id', 'name', 'description', 'location']
     filterset_fields = ['date', 'location', 'created_by']
 
+    # @action(detail=False, methods=['get'])
+    # def create_event(self, request):
+    #     event = Event.objects.create(
+    #         name=request.data['name'],
+    #         description=request.data['description'],
+    #         location=request.data['location'],
+    #         date=request.data['date'],
+    #         end_date=request.data['end_date'],
+    #         start_time=request.data['start_time'],
+    #         end_time=request.data['end_time'],
+    #         url=request.data['url'],
+    #         visibility=request.data['visibility'],
+    #         event_type=request.data['event_type'],
+    #         max_attendees=request.data['max_attendees'],
+    #         is_ticketed=request.data['is_ticketed'],
+    #         ticket_price=request.data['ticket_price'],
+    #         status=request.data['status'],
+    #         created_by=request.user,
+    #         event_url=request.data['event_url'],
+    #         event_location=request.data['event_location'],
+    #         event_type=request.data['event_type'],
+    #         booking_deadline=request.data['event_booking_deadline'],
+    #         max_attendees=request.data['event_max_attendees'],
+    #         is_ticketed=request.data['event_is_ticketed'],
+    #         ticket_price=request.data['event_ticket_price'],
+    #         status=request.data['event_status'],
+    #         created_by=request.user,
+    #         end_time=request.data['end_time'],
+    #         end_date=request.data['end_date'],
+    #     )
+    #     serializer = self.get_serializer(event)
+    #     return Response(serializer.data, status=status.HTTP_200_OK)
+
     # Custom user actions
     '''Actions for normal users to interact with events such as RSVP, comment, like, etc.'''
     @action(detail=False, methods=['get'])

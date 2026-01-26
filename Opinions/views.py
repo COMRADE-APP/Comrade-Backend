@@ -301,6 +301,7 @@ class OpinionViewSet(viewsets.ModelViewSet):
         if not request.user.is_authenticated:
             return Response({'detail': 'Authentication required'}, status=status.HTTP_401_UNAUTHORIZED)
         
+        print(request.data)
         content = request.data.get('content', '').strip()
         parent_id = request.data.get('parent_comment')
         
