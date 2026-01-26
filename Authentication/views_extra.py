@@ -269,6 +269,7 @@ class BaseSocialCallbackView(APIView):
         # Check if user is authenticated via allauth session
         if request.user.is_authenticated:
             user = request.user
+            print('--------------------PPPPPPPPPPPPPPPPPPP_______________')
             
             # Generate JWT tokens
             refresh = RefreshToken.for_user(user)
@@ -281,6 +282,7 @@ class BaseSocialCallbackView(APIView):
             # Check profile completion status
             profile_completed = getattr(user, 'profile_completed', True)
             
+            print('--------------------PPPPPPPPPPPPPPPPPPP_______________')
             # Build redirect URL with tokens and user info
             redirect_url = (
                 f"{frontend_url}auth/callback?"
@@ -292,6 +294,7 @@ class BaseSocialCallbackView(APIView):
                 f"&user_type={user.user_type or ''}"
                 f"&profile_completed={'true' if profile_completed else 'false'}"
             )
+            print('--------------------PPPPPPPPPPPPPPPPPPP_______________')
             
             log_user_activity(user, 'social_login', request, f"Provider: {self.provider}")
             
