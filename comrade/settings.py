@@ -53,6 +53,8 @@ INSTALLED_APPS = [
     'Payment',
     'Research',
     'Opinions',  # Social opinions feature
+    'Notifications',  # Notification system
+    'Messages',  # Direct messaging system
     'Verification',  # New verification system
     
     # Authentication Support Apps
@@ -248,6 +250,11 @@ USE_TZ = True
 
 AUTH_USER_MODEL = 'Authentication.CustomUser'
 STATIC_URL = 'static/'
+
+# Media files (Uploads)
+MEDIA_URL = '/media/'
+MEDIA_ROOT = BASE_DIR / 'media'
+
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
 AUTHENTICATION_BACKENDS = [
