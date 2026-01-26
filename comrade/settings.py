@@ -18,15 +18,16 @@ SECRET_KEY = os.getenv('SECRET_KEY', 'django-insecure-c+%9#v0&z&-av-84em1*d3aazv
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = os.getenv('DEBUG', 'True') == 'True'
 
-# ALLOWED_HOSTS should only contain hostnames, not protocols or ports
-ALLOWED_HOSTS = os.getenv('ALLOWED_HOSTS', 'localhost,127.0.0.1').split(',')
-if '*' in ALLOWED_HOSTS:
-    ALLOWED_HOSTS = ['*']
-else:
-    # Clean up any protocols/ports that might be in the env var
-    ALLOWED_HOSTS = [h.replace('http://', '').replace('https://', '').split(':')[0] for h in ALLOWED_HOSTS]
-    ALLOWED_HOSTS.extend(['localhost', '127.0.0.1', '[::1]'])
-    ALLOWED_HOSTS = list(set(ALLOWED_HOSTS))
+# ALLOWED_HOSTS = os.getenv('ALLOWED_HOSTS', 'localhost:3000,127.0.0.1:8000').split(',')
+ALLOWED_HOSTS = [
+    "localhost",
+    "127.0.0.1",
+    "[::1]",
+    "http://localhost:8000",
+    "http://localhost:3000",
+    "http://localhost:5173",
+    "http://localhost:8080",
+]
 
 # Application definition
 INSTALLED_APPS = [
@@ -66,6 +67,9 @@ INSTALLED_APPS = [
     'allauth.account',
     'allauth.socialaccount',
     'allauth.socialaccount.providers.google',
+    'allauth.socialaccount.providers.twitter_oauth2',
+    'allauth.socialaccount.providers.apple',
+
 ]
 
 MIDDLEWARE = [
@@ -80,8 +84,12 @@ MIDDLEWARE = [
     "allauth.account.middleware.AccountMiddleware",
 ]
 
-# CORS settings
-CORS_ALLOW_CREDENTIALS = True
+# ALLOWED_HOSTS: Only hostnames, no protocols/ports
+ALLOWED_HOSTS = [
+    "localhost",
+    "127.0.0.1",
+    "[::1]",
+]
 
 # CORS settings - FIX THESE
 CORS_ALLOWED_ORIGINS = [
@@ -96,9 +104,7 @@ CORS_ALLOWED_ORIGINS = [
 
 
 # CSRF settings - CRITICAL for POST requests
-FRONTEND_URL = os.getenv('FRONTEND_URL', 'http://localhost:3000/')
 CSRF_TRUSTED_ORIGINS = [
-    FRONTEND_URL.rstrip('/'),
     "http://localhost:3000",
     "http://127.0.0.1:3000",
     "http://localhost:5173",
@@ -166,7 +172,7 @@ TWILIO_PHONE_NUMBER = os.getenv('TWILIO_PHONE_NUMBER', '')
 
 # Email configuration
 EMAIL_HOST = os.getenv('EMAIL_HOST', '')
-EMAIL_PORT = int(os.getenv('EMAIL_PORT', '587'))
+EMAIL_PORT = int(os.getenv('EMAIL_PORT', ''))
 EMAIL_USE_TLS = os.getenv('EMAIL_USE_TLS', 'True') == 'True'
 EMAIL_HOST_USER = os.getenv('EMAIL_HOST_USER', '')
 EMAIL_HOST_PASSWORD = os.getenv('EMAIL_HOST_PASSWORD', '')
@@ -211,6 +217,7 @@ AUTH_PASSWORD_VALIDATORS = [
 REST_FRAMEWORK = {
     'DEFAULT_AUTHENTICATION_CLASSES': [
         'rest_framework_simplejwt.authentication.JWTAuthentication',
+        'rest_framework.authentication.SessionAuthentication',
     ],
     'DEFAULT_THROTTLE_CLASSES': [
         'rest_framework.throttling.AnonRateThrottle',
@@ -257,6 +264,31 @@ SOCIALACCOUNT_PROVIDERS = {
         },
         'SCOPE': ['profile', 'email'],
         'AUTH_PARAMS': {'access_type': 'online', 'prompt': 'consent'},
+    },
+    "twitter_oauth2": {
+        'APP': {
+            'client_id': os.getenv('TWITTER_CLIENT_ID', ''),
+            'secret': os.getenv('TWITTER_CLIENT_SECRET', ''),
+            'key': ''
+        },
+        "SCOPE": [
+            "tweet.read",
+            "users.read",
+            "offline.access",
+        ],
+        "AUTH_PARAMS": {
+            "access_type": "offline",
+        },
+        "OAUTH_PKCE_ENABLED": True,
+    },
+    'apple': {
+        'APP': {
+            'client_id': os.getenv('APPLE_CLIENT_ID', ''),
+            'secret': os.getenv('APPLE_CLIENT_SECRET', ''),
+            'key': ''
+        },
+        'SCOPE': ['email', 'name'],
+        'AUTH_PARAMS': {'response_mode': 'form_post'},
     },
 }
 
