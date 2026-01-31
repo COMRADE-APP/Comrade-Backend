@@ -515,3 +515,107 @@ class EventPermission(models.Model):
     
     def __str__(self):
         return f"Permissions for {self.user.email} on {self.event.name}"
+
+
+# ============ LOGISTICS MODELS ============
+
+class EventDocument(models.Model):
+    """Documents attached to events (PDFs, slides, etc.)"""
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    event = models.ForeignKey(Event, on_delete=models.CASCADE, related_name='event_documents')
+    title = models.CharField(max_length=255)
+    file = models.FileField(upload_to='event_documents/')
+    file_type = models.CharField(max_length=50, blank=True)  # pdf, pptx, docx, etc.
+    description = models.TextField(blank=True)
+    is_public = models.BooleanField(default=False)  # Visible to non-attendees
+    requires_ticket = models.BooleanField(default=False)
+    uploaded_by = models.ForeignKey(CustomUser, on_delete=models.SET_NULL, null=True)
+    upload_date = models.DateTimeField(auto_now_add=True)
+    download_count = models.IntegerField(default=0)
+    
+    def __str__(self):
+        return f"{self.title} - {self.event.name}"
+
+
+class EventProductLink(models.Model):
+    """Links products to events (merchandise, equipment, etc.)"""
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    event = models.ForeignKey(Event, on_delete=models.CASCADE, related_name='event_products')
+    product = models.ForeignKey('Payment.Product', on_delete=models.CASCADE, related_name='linked_events')
+    link_type = models.CharField(max_length=50, choices=(
+        ('merchandise', 'Event Merchandise'),
+        ('equipment', 'Equipment/Supplies'),
+        ('recommended', 'Recommended Product'),
+        ('sponsor', 'Sponsor Product'),
+    ), default='merchandise')
+    is_featured = models.BooleanField(default=False)
+    discount_percentage = models.DecimalField(max_digits=5, decimal_places=2, default=0)
+    created_at = models.DateTimeField(auto_now_add=True)
+    
+    class Meta:
+        unique_together = ['event', 'product']
+
+
+class EventArticleLink(models.Model):
+    """Links articles to events"""
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    event = models.ForeignKey(Event, on_delete=models.CASCADE, related_name='event_articles')
+    article = models.ForeignKey('Articles.Article', on_delete=models.CASCADE, related_name='linked_events')
+    link_type = models.CharField(max_length=50, choices=(
+        ('preview', 'Event Preview'),
+        ('recap', 'Event Recap'),
+        ('related', 'Related Content'),
+        ('press', 'Press Coverage'),
+    ), default='related')
+    created_at = models.DateTimeField(auto_now_add=True)
+    
+    class Meta:
+        unique_together = ['event', 'article']
+
+
+class EventResearchLink(models.Model):
+    """Links research publications to events"""
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    event = models.ForeignKey(Event, on_delete=models.CASCADE, related_name='event_research')
+    research = models.ForeignKey('Research.ResearchProject', on_delete=models.CASCADE, related_name='linked_events')
+    presentation_order = models.IntegerField(default=0)  # Order during event
+    is_keynote = models.BooleanField(default=False)
+    created_at = models.DateTimeField(auto_now_add=True)
+    
+    class Meta:
+        unique_together = ['event', 'research']
+        ordering = ['presentation_order']
+
+
+class EventAnnouncementLink(models.Model):
+    """Links announcements to events"""
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    event = models.ForeignKey(Event, on_delete=models.CASCADE, related_name='event_announcements')
+    announcement = models.ForeignKey('Announcements.Announcements', on_delete=models.CASCADE, related_name='linked_events')
+    link_type = models.CharField(max_length=50, choices=(
+        ('promotion', 'Event Promotion'),
+        ('update', 'Event Update'),
+        ('reminder', 'Event Reminder'),
+        ('cancellation', 'Cancellation Notice'),
+    ), default='promotion')
+    created_at = models.DateTimeField(auto_now_add=True)
+
+
+class EventPaymentGroupLink(models.Model):
+    """Links payment groups (piggy banks) to events for crowdfunding"""
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    event = models.ForeignKey(Event, on_delete=models.CASCADE, related_name='event_payment_groups')
+    payment_group = models.ForeignKey('Payment.PaymentGroups', on_delete=models.CASCADE, related_name='linked_events')
+    purpose = models.CharField(max_length=100, choices=(
+        ('venue', 'Venue Rental'),
+        ('catering', 'Catering'),
+        ('equipment', 'Equipment'),
+        ('speakers', 'Speaker Fees'),
+        ('general', 'General Fund'),
+    ), default='general')
+    target_amount = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    created_at = models.DateTimeField(auto_now_add=True)
+    
+    class Meta:
+        unique_together = ['event', 'payment_group']
+

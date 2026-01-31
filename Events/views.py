@@ -38,7 +38,20 @@ class EventViewSet(ModelViewSet):
     filter_backends = [SearchFilter, OrderingFilter]
     lookup_field = 'id'
     search_fields = ['id', 'name', 'description', 'location']
-    filterset_fields = ['date', 'location', 'created_by']
+    filterset_fields = ['event_date', 'location', 'created_by', 'status', 'complexity_level']
+
+    def perform_create(self, serializer):
+        """Auto-set created_by to the authenticated user and optionally link to a room"""
+        instance = serializer.save(created_by=self.request.user)
+        
+        # Check if room parameter was provided
+        room_id = self.request.data.get('room')
+        if room_id:
+            try:
+                room = Room.objects.get(pk=room_id)
+                room.events.add(instance)
+            except Room.DoesNotExist:
+                pass  # Silently ignore invalid room ID
 
     # @action(detail=False, methods=['get'])
     # def create_event(self, request):

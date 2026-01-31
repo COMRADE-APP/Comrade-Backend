@@ -467,6 +467,148 @@ class PaymentGroupsViewSet(ModelViewSet):
         serializer = ContributionSerializer(contributions, many=True)
         return Response(serializer.data)
 
+class GroupInvitationViewSet(ModelViewSet):
+    """ViewSet for handling group invitations"""
+    queryset = GroupInvitation.objects.all()
+    serializer_class = GroupInvitationSerializer
+    permission_classes = [IsAuthenticated]
+    
+    def get_queryset(self):
+        user = self.request.user
+        try:
+            profile = Profile.objects.get(user=user)
+            payment_profile = PaymentProfile.objects.get(user=profile)
+            return GroupInvitation.objects.filter(
+                invited_profile=payment_profile,
+                status='pending',
+                expires_at__gt=timezone.now()
+            ).select_related('payment_group', 'invited_by')
+        except:
+            return GroupInvitation.objects.none()
+    
+    @action(detail=False, methods=['get'])
+    def pending(self, request):
+        """Get pending invitations for current user"""
+        invitations = self.get_queryset()
+        serializer = self.get_serializer(invitations, many=True)
+        return Response(serializer.data)
+    
+    @action(detail=True, methods=['post'])
+    @db_transaction.atomic
+    def accept(self, request, pk=None):
+        """Accept a group invitation"""
+        invitation = self.get_object()
+        user = request.user
+        profile = Profile.objects.get(user=user)
+        payment_profile = PaymentProfile.objects.get(user=profile)
+        
+        # Verify invitation is for this user
+        if invitation.invited_profile != payment_profile:
+            return Response({'error': 'Invalid invitation'}, status=status.HTTP_403_FORBIDDEN)
+        
+        # Check if invitation is still valid
+        if invitation.status != 'pending':
+            return Response({'error': 'Invitation already processed'}, status=status.HTTP_400_BAD_REQUEST)
+        
+        if invitation.expires_at < timezone.now():
+            invitation.status = 'expired'
+            invitation.save()
+            return Response({'error': 'Invitation has expired'}, status=status.HTTP_400_BAD_REQUEST)
+        
+        # Check group capacity
+        group = invitation.payment_group
+        if group.members.count() >= group.max_capacity:
+            return Response({'error': 'Group is full'}, status=status.HTTP_400_BAD_REQUEST)
+        
+        # Add user to group
+        PaymentGroupMember.objects.create(
+            payment_group=group,
+            payment_profile=payment_profile,
+            is_admin=False
+        )
+        
+        # Update invitation status
+        invitation.status = 'accepted'
+        invitation.save()
+        
+        return Response({
+            'status': 'Invitation accepted',
+            'group_id': str(group.id),
+            'group_name': group.name
+        })
+    
+    @action(detail=True, methods=['post'])
+    def reject(self, request, pk=None):
+        """Reject a group invitation"""
+        invitation = self.get_object()
+        user = request.user
+        profile = Profile.objects.get(user=user)
+        payment_profile = PaymentProfile.objects.get(user=profile)
+        
+        # Verify invitation is for this user
+        if invitation.invited_profile != payment_profile:
+            return Response({'error': 'Invalid invitation'}, status=status.HTTP_403_FORBIDDEN)
+        
+        # Update invitation status
+        invitation.status = 'rejected'
+        invitation.save()
+        
+        return Response({'status': 'Invitation rejected'})
+    
+    @action(detail=False, methods=['post'])
+    def respond(self, request):
+        """Respond to an invitation (accept or reject) by ID"""
+        invitation_id = request.data.get('invitation_id')
+        accept = request.data.get('accept', False)
+        
+        try:
+            invitation = GroupInvitation.objects.get(id=invitation_id)
+        except GroupInvitation.DoesNotExist:
+            return Response({'error': 'Invitation not found'}, status=status.HTTP_404_NOT_FOUND)
+        
+        user = request.user
+        profile = Profile.objects.get(user=user)
+        payment_profile = PaymentProfile.objects.get(user=profile)
+        
+        # Verify invitation is for this user
+        if invitation.invited_profile != payment_profile:
+            return Response({'error': 'Invalid invitation'}, status=status.HTTP_403_FORBIDDEN)
+        
+        if accept:
+            # Check if invitation is still valid
+            if invitation.status != 'pending':
+                return Response({'error': 'Invitation already processed'}, status=status.HTTP_400_BAD_REQUEST)
+            
+            if invitation.expires_at < timezone.now():
+                invitation.status = 'expired'
+                invitation.save()
+                return Response({'error': 'Invitation has expired'}, status=status.HTTP_400_BAD_REQUEST)
+            
+            # Check group capacity
+            group = invitation.payment_group
+            if group.members.count() >= group.max_capacity:
+                return Response({'error': 'Group is full'}, status=status.HTTP_400_BAD_REQUEST)
+            
+            # Add user to group
+            PaymentGroupMember.objects.create(
+                payment_group=group,
+                payment_profile=payment_profile,
+                is_admin=False
+            )
+            
+            invitation.status = 'accepted'
+            invitation.save()
+            
+            return Response({
+                'status': 'Invitation accepted',
+                'group_id': str(group.id),
+                'group_name': group.name
+            })
+        else:
+            invitation.status = 'rejected'
+            invitation.save()
+            return Response({'status': 'Invitation rejected'})
+
 
 class PaymentItemViewSet(ModelViewSet):
     queryset = PaymentItem.objects.all()
@@ -499,11 +641,31 @@ class GroupTargetViewSet(ModelViewSet):
         try:
             profile = Profile.objects.get(user=user)
             payment_profile = PaymentProfile.objects.get(user=profile)
-            return GroupTarget.objects.filter(payment_group__members__payment_profile=payment_profile)
+            # Get both individual piggy banks and group piggy banks
+            return GroupTarget.objects.filter(
+                Q(owner=payment_profile) |  # Individual piggy banks
+                Q(payment_group__members__payment_profile=payment_profile)  # Group piggy banks
+            ).distinct()
         except:
             return GroupTarget.objects.none()
 
+    def perform_create(self, serializer):
+        user = self.request.user
+        profile = Profile.objects.get(user=user)
+        payment_profile = PaymentProfile.objects.get(user=profile)
+        
+        # Check if individual or group piggy bank
+        payment_group_id = self.request.data.get('payment_group')
+        
+        if payment_group_id:
+            # Group piggy bank
+            serializer.save()
+        else:
+            # Individual piggy bank
+            serializer.save(owner=payment_profile)
+
     @action(detail=True, methods=['post'])
+    @db_transaction.atomic
     def contribute(self, request, pk=None):
         """Contribute to a piggy bank / target"""
         target = self.get_object()
@@ -511,25 +673,143 @@ class GroupTargetViewSet(ModelViewSet):
         
         if not amount:
             return Response({'error': 'Amount required'}, status=status.HTTP_400_BAD_REQUEST)
+        
+        try:
+            amount = float(amount)
+            if amount <= 0:
+                return Response({'error': 'Amount must be positive'}, status=status.HTTP_400_BAD_REQUEST)
+        except ValueError:
+            return Response({'error': 'Invalid amount'}, status=status.HTTP_400_BAD_REQUEST)
+        
+        # Get payment profile
+        user = request.user
+        profile = Profile.objects.get(user=user)
+        payment_profile = PaymentProfile.objects.get(user=profile)
+        
+        # Check balance
+        if payment_profile.comrade_balance < amount:
+            return Response({'error': 'Insufficient balance'}, status=status.HTTP_400_BAD_REQUEST)
+        
+        # Check locking for contributions (usually only withdrawals should be blocked)
+        if target.locking_status in ['locked', 'locked_time', 'locked_goal']:
+            # Allow contributions but notify about locked status
+            pass
             
-        # Check locking
-        if target.locking_status == 'locked_time' and target.maturity_date and target.maturity_date > timezone.now():
-            return Response({'error': f'Piggy bank is locked until {target.maturity_date}'}, status=status.HTTP_403_FORBIDDEN)
-            
-        if target.locking_status == 'locked_goal' and target.current_amount < target.target_amount:
-             # Just a warning? Or prevent withdrawal? Normally deposit is fine, withdrawal is locked.
-             pass
-             
-        # Add logic to process payment (deduct balance etc) -> Simplified for now
-        target.current_amount += float(amount)
+        # Deduct from user balance
+        payment_profile.comrade_balance -= amount
+        payment_profile.save()
+        
+        # Add to piggy bank
+        target.current_amount += amount
         if target.current_amount >= target.target_amount:
             target.achieved = True
             target.achieved_at = timezone.now()
-            # Notify user logic here
             
         target.save()
         
-        return Response({'status': 'Contribution successful', 'current_amount': target.current_amount})
+        return Response({
+            'status': 'Contribution successful',
+            'amount_contributed': amount,
+            'current_amount': float(target.current_amount),
+            'target_amount': float(target.target_amount),
+            'achieved': target.achieved
+        })
+    
+    @action(detail=True, methods=['post'])
+    @db_transaction.atomic
+    def withdraw(self, request, pk=None):
+        """Withdraw from a piggy bank"""
+        target = self.get_object()
+        amount = request.data.get('amount')
+        
+        if not amount:
+            return Response({'error': 'Amount required'}, status=status.HTTP_400_BAD_REQUEST)
+        
+        try:
+            amount = float(amount)
+        except ValueError:
+            return Response({'error': 'Invalid amount'}, status=status.HTTP_400_BAD_REQUEST)
+        
+        # Check locking status
+        if target.locking_status == 'locked':
+            return Response({'error': 'This piggy bank is locked'}, status=status.HTTP_403_FORBIDDEN)
+        
+        if target.locking_status == 'locked_time':
+            if target.maturity_date and target.maturity_date > timezone.now():
+                return Response({
+                    'error': f'Piggy bank is locked until {target.maturity_date.strftime("%Y-%m-%d")}'
+                }, status=status.HTTP_403_FORBIDDEN)
+        
+        if target.locking_status == 'locked_goal':
+            if target.current_amount < target.target_amount:
+                return Response({'error': 'Piggy bank is locked until goal is reached'}, status=status.HTTP_403_FORBIDDEN)
+        
+        # Check available amount
+        if target.current_amount < amount:
+            return Response({'error': 'Insufficient funds in piggy bank'}, status=status.HTTP_400_BAD_REQUEST)
+        
+        # Get payment profile
+        user = request.user
+        profile = Profile.objects.get(user=user)
+        payment_profile = PaymentProfile.objects.get(user=profile)
+        
+        # Deduct from piggy bank
+        target.current_amount -= amount
+        target.save()
+        
+        # Add to user balance
+        payment_profile.comrade_balance += amount
+        payment_profile.save()
+        
+        return Response({
+            'status': 'Withdrawal successful',
+            'amount_withdrawn': amount,
+            'remaining_amount': float(target.current_amount),
+            'new_balance': float(payment_profile.comrade_balance)
+        })
+    
+    @action(detail=True, methods=['post'])
+    def lock(self, request, pk=None):
+        """Lock a piggy bank"""
+        target = self.get_object()
+        lock_type = request.data.get('lock_type', 'locked')
+        maturity_date = request.data.get('maturity_date')
+        
+        if lock_type == 'locked_time' and maturity_date:
+            target.maturity_date = maturity_date
+        
+        target.locking_status = lock_type
+        target.save()
+        
+        return Response({
+            'status': 'Piggy bank locked successfully',
+            'locking_status': target.locking_status,
+            'maturity_date': target.maturity_date
+        })
+    
+    @action(detail=True, methods=['post'])
+    def unlock(self, request, pk=None):
+        """Unlock a piggy bank"""
+        target = self.get_object()
+        
+        # Check if it can be unlocked
+        if target.locking_status == 'locked_time' and target.maturity_date:
+            if target.maturity_date > timezone.now():
+                return Response({
+                    'error': f'Cannot unlock until {target.maturity_date.strftime("%Y-%m-%d")}'
+                }, status=status.HTTP_403_FORBIDDEN)
+        
+        if target.locking_status == 'locked_goal':
+            if target.current_amount < target.target_amount:
+                return Response({'error': 'Cannot unlock until goal is reached'}, status=status.HTTP_403_FORBIDDEN)
+        
+        target.locking_status = 'unlocked'
+        target.save()
+        
+        return Response({
+            'status': 'Piggy bank unlocked successfully',
+            'locking_status': target.locking_status
+        })
 
 class UserSubscriptionViewSet(ModelViewSet):
     queryset = UserSubscription.objects.all()

@@ -165,6 +165,22 @@ class PaymentLog(models.Model):
 # Payment Group - Group savings/purchases
 class PaymentGroups(models.Model):
     import uuid
+    
+    CONTRIBUTION_TYPE_CHOICES = (
+        ('fixed', 'Fixed Amount'),
+        ('percentage', 'Percentage'),
+        ('flexible', 'Flexible'),
+    )
+    
+    FREQUENCY_CHOICES = (
+        ('daily', 'Daily'),
+        ('weekly', 'Weekly'),
+        ('biweekly', 'Bi-Weekly'),
+        ('monthly', 'Monthly'),
+        ('quarterly', 'Quarterly'),
+        ('one_time', 'One Time'),
+    )
+    
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     name = models.CharField(max_length=5000)
     description = models.TextField(blank=True)
@@ -177,9 +193,16 @@ class PaymentGroups(models.Model):
     target_amount = models.DecimalField(decimal_places=2, max_digits=12, null=True, blank=True)
     current_amount = models.DecimalField(decimal_places=2, max_digits=12, default=0.00)
     expiry_date = models.DateTimeField(null=True, blank=True)
+    deadline = models.DateTimeField(null=True, blank=True)  # Alternative deadline field
     is_active = models.BooleanField(default=True)
+    is_public = models.BooleanField(default=True)  # Visibility setting
     auto_purchase = models.BooleanField(default=False)
     requires_approval = models.BooleanField(default=True)
+    
+    # Contribution settings
+    contribution_type = models.CharField(max_length=20, choices=CONTRIBUTION_TYPE_CHOICES, default='flexible')
+    contribution_amount = models.DecimalField(decimal_places=2, max_digits=12, default=0.00)
+    frequency = models.CharField(max_length=20, choices=FREQUENCY_CHOICES, default='monthly')
     
     created_at = models.DateTimeField(default=datetime.now)
     updated_at = models.DateTimeField(auto_now=True)
@@ -316,18 +339,30 @@ class UserSubscription(models.Model):
 class GroupTarget(models.Model):
     LOCK_OPTIONS = (
         ('unlocked', 'Unlocked'),
+        ('locked', 'Locked'),  # Simple locked status
         ('locked_time', 'Locked until Date'),
         ('locked_goal', 'Locked until Goal'),
     )
     
-    payment_group = models.ForeignKey(PaymentGroups, on_delete=models.CASCADE, related_name='targets')
+    STATUS_CHOICES = (
+        ('active', 'Active'),
+        ('pending', 'Pending'),
+        ('completed', 'Completed'),
+        ('cancelled', 'Cancelled'),
+    )
+    
+    # Owner for individual piggy banks (null if group piggy bank)
+    owner = models.ForeignKey(PaymentProfile, on_delete=models.CASCADE, null=True, blank=True, related_name='individual_piggy_banks')
+    # Group piggy bank - null for individual
+    payment_group = models.ForeignKey(PaymentGroups, on_delete=models.CASCADE, related_name='targets', null=True, blank=True)
     target_item = models.ForeignKey(PaymentItem, on_delete=models.SET_NULL, null=True, blank=True)
     target_product = models.ForeignKey(Product, on_delete=models.SET_NULL, null=True, blank=True) # Link to Shop Product
     
     name = models.CharField(max_length=255, default='Piggy Bank')
     target_amount = models.DecimalField(decimal_places=2, max_digits=12)
     current_amount = models.DecimalField(decimal_places=2, max_digits=12, default=0.00)
-    description = models.TextField()
+    description = models.TextField(blank=True)
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='active')
     
     # Piggy Bank Logic
     locking_status = models.CharField(max_length=20, choices=LOCK_OPTIONS, default='unlocked')
@@ -344,7 +379,11 @@ class GroupTarget(models.Model):
     class Meta:
         indexes = [
             models.Index(fields=['payment_group', 'achieved']),
+            models.Index(fields=['owner', 'achieved']),
         ]
+    
+    def is_individual(self):
+        return self.payment_group is None and self.owner is not None
 
 # Individual Savings within a Group Target (for non-sharable)
 class IndividualShare(models.Model):

@@ -10,7 +10,9 @@ from Events.enhanced_models import (
     EventRepost, EventShare, EventSocialLink, EventBlock,
     EventUserReport, EventTicketPurchase, EventBrowserReminder,
     EventEmailReminder, EventToAnnouncementConversion,
-    EventHelpRequest, EventHelpResponse, EventPermission
+    EventHelpRequest, EventHelpResponse, EventPermission,
+    EventDocument, EventArticleLink, EventResearchLink,
+    EventAnnouncementLink, EventProductLink, EventPaymentGroupLink
 )
 from Authentication.models import CustomUser
 
@@ -312,3 +314,106 @@ class EventDetailSerializer(serializers.ModelSerializer):
     
     def get_interested_count(self, obj):
         return obj.interests.filter(interested=True).count()
+
+
+# ===== LOGISTICS SERIALIZERS =====
+
+class EventDocumentSerializer(serializers.ModelSerializer):
+    """Serializer for event-related documents"""
+    event_name = serializers.CharField(source='event.name', read_only=True)
+    uploaded_by_name = serializers.SerializerMethodField()
+    file_url = serializers.FileField(source='file', read_only=True)
+    
+    class Meta:
+        model = EventDocument
+        fields = [
+            'id', 'event', 'event_name', 'title', 'description',
+            'file', 'file_url', 'document_type', 'visibility',
+            'uploaded_by', 'uploaded_by_name', 'download_count',
+            'is_archived', 'created_at', 'updated_at'
+        ]
+        read_only_fields = ['id', 'uploaded_by', 'download_count', 'created_at', 'updated_at']
+    
+    def get_uploaded_by_name(self, obj):
+        return f"{obj.uploaded_by.first_name} {obj.uploaded_by.last_name}".strip() or obj.uploaded_by.email
+    
+    def create(self, validated_data):
+        validated_data['uploaded_by'] = self.context['request'].user
+        return super().create(validated_data)
+
+
+class EventArticleLinkSerializer(serializers.ModelSerializer):
+    """Serializer for articles linked to events"""
+    event_name = serializers.CharField(source='event.name', read_only=True)
+    article_title = serializers.CharField(source='article.title', read_only=True)
+    article_thumbnail = serializers.ImageField(source='article.thumbnail', read_only=True)
+    
+    class Meta:
+        model = EventArticleLink
+        fields = [
+            'id', 'event', 'event_name', 'article', 'article_title',
+            'article_thumbnail', 'link_type', 'created_at'
+        ]
+        read_only_fields = ['id', 'created_at']
+
+
+class EventResearchLinkSerializer(serializers.ModelSerializer):
+    """Serializer for research projects linked to events"""
+    event_name = serializers.CharField(source='event.name', read_only=True)
+    research_title = serializers.CharField(source='research.title', read_only=True)
+    research_abstract = serializers.CharField(source='research.abstract', read_only=True)
+    
+    class Meta:
+        model = EventResearchLink
+        fields = [
+            'id', 'event', 'event_name', 'research', 'research_title',
+            'research_abstract', 'presentation_order', 'is_keynote', 'created_at'
+        ]
+        read_only_fields = ['id', 'created_at']
+
+
+class EventAnnouncementLinkSerializer(serializers.ModelSerializer):
+    """Serializer for announcements linked to events"""
+    event_name = serializers.CharField(source='event.name', read_only=True)
+    announcement_title = serializers.CharField(source='announcement.title', read_only=True)
+    announcement_content = serializers.CharField(source='announcement.content', read_only=True)
+    
+    class Meta:
+        model = EventAnnouncementLink
+        fields = [
+            'id', 'event', 'event_name', 'announcement', 'announcement_title',
+            'announcement_content', 'link_type', 'created_at'
+        ]
+        read_only_fields = ['id', 'created_at']
+
+
+class EventProductLinkSerializer(serializers.ModelSerializer):
+    """Serializer for products linked to events"""
+    event_name = serializers.CharField(source='event.name', read_only=True)
+    product_name = serializers.CharField(source='product.name', read_only=True)
+    product_price = serializers.DecimalField(source='product.price', max_digits=12, decimal_places=2, read_only=True)
+    product_image = serializers.ImageField(source='product.image', read_only=True)
+    
+    class Meta:
+        model = EventProductLink
+        fields = [
+            'id', 'event', 'event_name', 'product', 'product_name',
+            'product_price', 'product_image', 'link_type', 'discount_percentage',
+            'is_exclusive', 'available_from', 'available_until', 'created_at'
+        ]
+        read_only_fields = ['id', 'created_at']
+
+
+class EventPaymentGroupLinkSerializer(serializers.ModelSerializer):
+    """Serializer for payment groups (piggy banks) linked to events"""
+    event_name = serializers.CharField(source='event.name', read_only=True)
+    group_name = serializers.CharField(source='payment_group.name', read_only=True)
+    current_amount = serializers.DecimalField(source='payment_group.total_collected', max_digits=12, decimal_places=2, read_only=True)
+    
+    class Meta:
+        model = EventPaymentGroupLink
+        fields = [
+            'id', 'event', 'event_name', 'payment_group', 'group_name',
+            'current_amount', 'purpose', 'target_amount', 'created_at'
+        ]
+        read_only_fields = ['id', 'created_at']

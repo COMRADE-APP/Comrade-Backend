@@ -24,6 +24,9 @@ class Organisation(models.Model):
     industry = models.CharField(max_length=5000)
     created_on = models.DateTimeField(default=datetime.now)
     members = models.ManyToManyField('Authentication.CustomUser', blank=True)
+    
+    # Creator tracking
+    created_by = models.ForeignKey('Authentication.CustomUser', on_delete=models.SET_NULL, null=True, blank=True, related_name='created_organisations')
 
 
 
@@ -60,6 +63,17 @@ class Division(models.Model):
     div_code = models.CharField(max_length=200, unique=True, primary_key=True)
     created_on = models.DateTimeField(default=datetime.now)
     members = models.ManyToManyField('Authentication.CustomUser', blank=True)
+    
+    # Approval workflow fields
+    approval_status = models.CharField(max_length=20, choices=(
+        ('approved', 'Approved'),
+        ('pending', 'Pending Approval'),
+        ('rejected', 'Rejected'),
+    ), default='approved')
+    created_by = models.ForeignKey('Authentication.CustomUser', on_delete=models.SET_NULL, null=True, blank=True, related_name='created_org_divisions')
+    approved_by = models.ForeignKey('Authentication.CustomUser', on_delete=models.SET_NULL, null=True, blank=True, related_name='approved_org_divisions')
+    approved_at = models.DateTimeField(null=True, blank=True)
+    rejection_reason = models.TextField(blank=True)
 
     
 class Department(models.Model):
@@ -68,6 +82,17 @@ class Department(models.Model):
     dep_code = models.CharField(max_length=200, unique=True, primary_key=True)
     created_on = models.DateTimeField(default=datetime.now)
     members = models.ManyToManyField('Authentication.CustomUser', blank=True)
+    
+    # Approval workflow fields
+    approval_status = models.CharField(max_length=20, choices=(
+        ('approved', 'Approved'),
+        ('pending', 'Pending Approval'),
+        ('rejected', 'Rejected'),
+    ), default='approved')
+    created_by = models.ForeignKey('Authentication.CustomUser', on_delete=models.SET_NULL, null=True, blank=True, related_name='created_org_departments')
+    approved_by = models.ForeignKey('Authentication.CustomUser', on_delete=models.SET_NULL, null=True, blank=True, related_name='approved_org_departments')
+    approved_at = models.DateTimeField(null=True, blank=True)
+    rejection_reason = models.TextField(blank=True)
 
 
 class Section(models.Model):
@@ -76,6 +101,17 @@ class Section(models.Model):
     section_code = models.CharField(max_length=200, unique=True, primary_key=True)
     created_on = models.DateTimeField(default=datetime.now)
     members = models.ManyToManyField('Authentication.CustomUser', blank=True)
+    
+    # Approval workflow fields
+    approval_status = models.CharField(max_length=20, choices=(
+        ('approved', 'Approved'),
+        ('pending', 'Pending Approval'),
+        ('rejected', 'Rejected'),
+    ), default='approved')
+    created_by = models.ForeignKey('Authentication.CustomUser', on_delete=models.SET_NULL, null=True, blank=True, related_name='created_org_sections')
+    approved_by = models.ForeignKey('Authentication.CustomUser', on_delete=models.SET_NULL, null=True, blank=True, related_name='approved_org_sections')
+    approved_at = models.DateTimeField(null=True, blank=True)
+    rejection_reason = models.TextField(blank=True)
 
 
 class Unit(models.Model):
@@ -84,6 +120,17 @@ class Unit(models.Model):
     unit_code = models.CharField(max_length=200, unique=True, primary_key=True)
     created_on = models.DateTimeField(default=datetime.now)
     members = models.ManyToManyField('Authentication.CustomUser', blank=True)
+    
+    # Approval workflow fields
+    approval_status = models.CharField(max_length=20, choices=(
+        ('approved', 'Approved'),
+        ('pending', 'Pending Approval'),
+        ('rejected', 'Rejected'),
+    ), default='approved')
+    created_by = models.ForeignKey('Authentication.CustomUser', on_delete=models.SET_NULL, null=True, blank=True, related_name='created_org_units')
+    approved_by = models.ForeignKey('Authentication.CustomUser', on_delete=models.SET_NULL, null=True, blank=True, related_name='approved_org_units')
+    approved_at = models.DateTimeField(null=True, blank=True)
+    rejection_reason = models.TextField(blank=True)
 
 
 class Team(models.Model):

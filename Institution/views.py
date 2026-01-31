@@ -188,6 +188,109 @@ class InstBranchViewSet(ModelViewSet):
     queryset = InstBranch.objects.all()
     permission_classes = [IsAuthenticatedOrReadOnly]
     serializer_class = InstBranchSerializer
+    
+    def get_queryset(self):
+        """Filter to show only approved units to non-admins"""
+        qs = super().get_queryset()
+        institution_id = self.request.query_params.get('institution')
+        if institution_id:
+            qs = qs.filter(institution_id=institution_id)
+        # Only show approved units to general users
+        if not self.request.user.is_staff:
+            qs = qs.filter(approval_status='approved')
+        return qs
+    
+    def perform_create(self, serializer):
+        """Auto-approve if user is institution creator/admin, else pending"""
+        institution_id = self.request.data.get('institution')
+        user = self.request.user
+        is_admin = False
+        
+        if institution_id:
+            try:
+                institution = Institution.objects.get(pk=institution_id)
+                is_admin = (institution.created_by == user or 
+                           InstitutionMember.objects.filter(
+                               institution=institution, 
+                               user=user, 
+                               role__in=['creator', 'admin']
+                           ).exists())
+            except Institution.DoesNotExist:
+                pass
+        
+        serializer.save(
+            created_by=user,
+            approval_status='approved' if is_admin else 'pending'
+        )
+    
+    @action(detail=False, methods=['get'], permission_classes=[IsAuthenticated])
+    def pending_units(self, request):
+        """Get pending units for institutions where user is admin"""
+        institution_id = request.query_params.get('institution')
+        if not institution_id:
+            return Response({'error': 'institution query param required'}, status=status.HTTP_400_BAD_REQUEST)
+        
+        # Check if user is admin
+        try:
+            institution = Institution.objects.get(pk=institution_id)
+            is_admin = (institution.created_by == request.user or 
+                       InstitutionMember.objects.filter(
+                           institution=institution, 
+                           user=request.user, 
+                           role__in=['creator', 'admin']
+                       ).exists())
+            if not is_admin:
+                return Response({'error': 'Not authorized'}, status=status.HTTP_403_FORBIDDEN)
+        except Institution.DoesNotExist:
+            return Response({'error': 'Institution not found'}, status=status.HTTP_404_NOT_FOUND)
+        
+        pending = InstBranch.objects.filter(institution_id=institution_id, approval_status='pending')
+        serializer = self.get_serializer(pending, many=True)
+        return Response(serializer.data)
+    
+    @action(detail=True, methods=['post'], permission_classes=[IsAuthenticated])
+    def approve(self, request, pk=None):
+        """Approve a pending unit"""
+        from datetime import datetime
+        unit = self.get_object()
+        
+        # Check if user is admin of the institution
+        institution = unit.institution
+        is_admin = (institution.created_by == request.user or 
+                   InstitutionMember.objects.filter(
+                       institution=institution, 
+                       user=request.user, 
+                       role__in=['creator', 'admin']
+                   ).exists())
+        if not is_admin:
+            return Response({'error': 'Not authorized'}, status=status.HTTP_403_FORBIDDEN)
+        
+        unit.approval_status = 'approved'
+        unit.approved_by = request.user
+        unit.approved_at = datetime.now()
+        unit.save()
+        return Response({'status': 'approved', 'id': str(unit.id)})
+    
+    @action(detail=True, methods=['post'], permission_classes=[IsAuthenticated])
+    def reject(self, request, pk=None):
+        """Reject a pending unit"""
+        unit = self.get_object()
+        
+        # Check if user is admin of the institution
+        institution = unit.institution
+        is_admin = (institution.created_by == request.user or 
+                   InstitutionMember.objects.filter(
+                       institution=institution, 
+                       user=request.user, 
+                       role__in=['creator', 'admin']
+                   ).exists())
+        if not is_admin:
+            return Response({'error': 'Not authorized'}, status=status.HTTP_403_FORBIDDEN)
+        
+        unit.approval_status = 'rejected'
+        unit.rejection_reason = request.data.get('reason', '')
+        unit.save()
+        return Response({'status': 'rejected', 'id': str(unit.id)})
 
 
 class VCOfficeViewSet(ModelViewSet):

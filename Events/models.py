@@ -120,6 +120,13 @@ class Event(models.Model):
     event_date = models.DateTimeField(default=datetime.now)
     deadline_reached = models.BooleanField(default=False)
     location = models.CharField(max_length=300)
+    latitude = models.DecimalField(max_digits=9, decimal_places=6, null=True, blank=True)
+    longitude = models.DecimalField(max_digits=9, decimal_places=6, null=True, blank=True)
+    complexity_level = models.CharField(max_length=50, choices=(
+        ('small', 'Small Event'),
+        ('midlevel', 'Mid-Level Event'),
+        ('sophisticated', 'Sophisticated Event'),
+    ), default='small')
     status = models.CharField(max_length=200, choices=EVENT_STATE, default='active')
     scheduled_time = models.DateTimeField(default=datetime.now)
     time_stamp = models.DateTimeField(auto_now_add=True)

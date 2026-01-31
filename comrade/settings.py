@@ -56,6 +56,7 @@ INSTALLED_APPS = [
     'Notifications',  # Notification system
     'Messages',  # Direct messaging system
     'Verification',  # New verification system
+    'Articles',  # Articles/Blog system
     
     # Authentication Support Apps
     'DeviceManagement',

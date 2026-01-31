@@ -12,6 +12,7 @@ from datetime import datetime as _datetime
 from Announcements.models import Announcements as _Announcements
 from django.contrib.sessions.models import Session
 from django.utils import timezone
+from Rooms.models import Room
 
 # Create your views here.
 class AnnouncementsViewSet(ModelViewSet):
@@ -20,6 +21,19 @@ class AnnouncementsViewSet(ModelViewSet):
     filterset_fields = ['user', 'status', 'time_stamp', 'visibility']
     search_fields = ['heading', 'content']
     ordering_fields = ['time_stamp', 'status']
+
+    def perform_create(self, serializer):
+        """Create announcement and optionally link to a room"""
+        instance = serializer.save()
+        
+        # Check if room parameter was provided
+        room_id = self.request.data.get('room')
+        if room_id:
+            try:
+                room = Room.objects.get(pk=room_id)
+                room.announcements.add(instance)
+            except Room.DoesNotExist:
+                pass  # Silently ignore invalid room ID
 
     @action(detail=False, methods=['get', 'post'])
     def recent_announcements(self, request):
@@ -323,6 +337,19 @@ class TaskViewSet(ModelViewSet):
     filterset_fields = ['user', 'status', 'time_stamp']
     search_fields = ['content']
     ordering_fields = ['time_stamp', 'status']  
+
+    def perform_create(self, serializer):
+        """Create task and optionally link to a room"""
+        instance = serializer.save()
+        
+        # Check if room parameter was provided
+        room_id = self.request.data.get('room')
+        if room_id:
+            try:
+                room = Room.objects.get(pk=room_id)
+                room.tasks.add(instance)
+            except Room.DoesNotExist:
+                pass  # Silently ignore invalid room ID
 
     @action(methods=['post', 'get'], detail=False)
     def set_expiry_duration(self, request):

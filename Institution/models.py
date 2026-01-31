@@ -371,12 +371,24 @@ class InstBranch(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
     
+    # Approval workflow fields
+    approval_status = models.CharField(max_length=20, choices=(
+        ('approved', 'Approved'),
+        ('pending', 'Pending Approval'),
+        ('rejected', 'Rejected'),
+    ), default='approved')
+    created_by = models.ForeignKey('Authentication.CustomUser', on_delete=models.SET_NULL, null=True, blank=True, related_name='created_inst_branches')
+    approved_by = models.ForeignKey('Authentication.CustomUser', on_delete=models.SET_NULL, null=True, blank=True, related_name='approved_inst_branches')
+    approved_at = models.DateTimeField(null=True, blank=True)
+    rejection_reason = models.TextField(blank=True)
+    
     class Meta:
         verbose_name = 'Institution Branch'
         verbose_name_plural = 'Institution Branches'
         indexes = [
             models.Index(fields=['institution', 'is_active']),
             models.Index(fields=['branch_code']),
+            models.Index(fields=['approval_status']),
         ]
     
     def __str__(self):
@@ -397,6 +409,17 @@ class VCOffice(models.Model):
     is_active = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
+    
+    # Approval workflow fields
+    approval_status = models.CharField(max_length=20, choices=(
+        ('approved', 'Approved'),
+        ('pending', 'Pending Approval'),
+        ('rejected', 'Rejected'),
+    ), default='approved')
+    created_by = models.ForeignKey('Authentication.CustomUser', on_delete=models.SET_NULL, null=True, blank=True, related_name='created_vc_offices')
+    approved_by = models.ForeignKey('Authentication.CustomUser', on_delete=models.SET_NULL, null=True, blank=True, related_name='approved_vc_offices')
+    approved_at = models.DateTimeField(null=True, blank=True)
+    rejection_reason = models.TextField(blank=True)
     
     class Meta:
         verbose_name = 'Vice Chancellor Office'
@@ -424,6 +447,17 @@ class Faculty(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
     
+    # Approval workflow fields
+    approval_status = models.CharField(max_length=20, choices=(
+        ('approved', 'Approved'),
+        ('pending', 'Pending Approval'),
+        ('rejected', 'Rejected'),
+    ), default='approved')
+    created_by = models.ForeignKey('Authentication.CustomUser', on_delete=models.SET_NULL, null=True, blank=True, related_name='created_faculties')
+    approved_by = models.ForeignKey('Authentication.CustomUser', on_delete=models.SET_NULL, null=True, blank=True, related_name='approved_faculties')
+    approved_at = models.DateTimeField(null=True, blank=True)
+    rejection_reason = models.TextField(blank=True)
+    
     class Meta:
         verbose_name = 'Faculty'
         verbose_name_plural = 'Faculties'
@@ -449,6 +483,17 @@ class InstDepartment(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
     
+    # Approval workflow fields
+    approval_status = models.CharField(max_length=20, choices=(
+        ('approved', 'Approved'),
+        ('pending', 'Pending Approval'),
+        ('rejected', 'Rejected'),
+    ), default='approved')
+    created_by = models.ForeignKey('Authentication.CustomUser', on_delete=models.SET_NULL, null=True, blank=True, related_name='created_inst_departments')
+    approved_by = models.ForeignKey('Authentication.CustomUser', on_delete=models.SET_NULL, null=True, blank=True, related_name='approved_inst_departments')
+    approved_at = models.DateTimeField(null=True, blank=True)
+    rejection_reason = models.TextField(blank=True)
+    
     class Meta:
         verbose_name = 'Institution Department'
         verbose_name_plural = 'Institution Departments'
@@ -473,6 +518,17 @@ class Programme(models.Model):
     is_active = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
+    
+    # Approval workflow fields
+    approval_status = models.CharField(max_length=20, choices=(
+        ('approved', 'Approved'),
+        ('pending', 'Pending Approval'),
+        ('rejected', 'Rejected'),
+    ), default='approved')
+    created_by = models.ForeignKey('Authentication.CustomUser', on_delete=models.SET_NULL, null=True, blank=True, related_name='created_programmes')
+    approved_by = models.ForeignKey('Authentication.CustomUser', on_delete=models.SET_NULL, null=True, blank=True, related_name='approved_programmes')
+    approved_at = models.DateTimeField(null=True, blank=True)
+    rejection_reason = models.TextField(blank=True)
     
     class Meta:
         verbose_name = 'Programme'
@@ -503,6 +559,17 @@ class AdminDep(models.Model):
     is_active = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
+    
+    # Approval workflow fields
+    approval_status = models.CharField(max_length=20, choices=(
+        ('approved', 'Approved'),
+        ('pending', 'Pending Approval'),
+        ('rejected', 'Rejected'),
+    ), default='approved')
+    created_by = models.ForeignKey('Authentication.CustomUser', on_delete=models.SET_NULL, null=True, blank=True, related_name='created_admin_deps')
+    approved_by = models.ForeignKey('Authentication.CustomUser', on_delete=models.SET_NULL, null=True, blank=True, related_name='approved_admin_deps')
+    approved_at = models.DateTimeField(null=True, blank=True)
+    rejection_reason = models.TextField(blank=True)
     
     class Meta:
         verbose_name = 'Administrative Department'

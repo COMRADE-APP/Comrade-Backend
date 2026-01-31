@@ -35,6 +35,7 @@ urlpatterns = [
     
     # User Management
     path('users/', include('UserManagement.urls')),
+    path('api/articles/', include('Articles.urls')),
     
     # API endpoints
     path('api/rooms/', include('Rooms.urls')),
