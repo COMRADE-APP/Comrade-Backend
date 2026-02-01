@@ -72,6 +72,12 @@ class CustomUser(AbstractUser):
     # Profile completion tracking
     profile_completed = models.BooleanField(default=False)
     
+    # TOTP/2FA Authentication
+    totp_enabled = models.BooleanField(default=False)
+    totp_secret = models.CharField(max_length=32, blank=True, null=True)
+    totp_verified = models.BooleanField(default=False)
+    totp_backup_codes = models.TextField(blank=True, null=True)  #Comma-separated backup codes
+    
     # Login OTP (email verification on login)
     login_otp = models.CharField(max_length=6, blank=True, null=True)
     login_otp_expires = models.DateTimeField(null=True, blank=True)

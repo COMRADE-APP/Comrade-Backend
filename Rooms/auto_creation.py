@@ -19,7 +19,7 @@ def generate_room_code():
 @receiver(post_save, sender=Institution)
 def create_institution_default_rooms(sender, instance, created, **kwargs):
     """Auto-create default rooms when an Institution is created"""
-    if created and instance.creator:
+    if created and instance.created_by:
         # Main institutional rooms
         base_rooms = [
             {
@@ -57,12 +57,12 @@ def create_institution_default_rooms(sender, instance, created, **kwargs):
         created_rooms = []
         for room_data in base_rooms:
             room = Room.objects.create(
-                created_by=instance.creator,
+                created_by=instance.created_by,
                 **room_data
             )
-            # Add creator as admin
-            room.admins.add(instance.creator)
-            room.members.add(instance.creator)
+            # Add created_by as admin
+            room.admins.add(instance.created_by)
+            room.members.add(instance.created_by)
             # Link to institution
             room.institutions.add(instance)
             created_rooms.append(room)
@@ -72,12 +72,12 @@ def create_institution_default_rooms(sender, instance, created, **kwargs):
             name=f"{instance.name} - Default Rooms",
             inst_or_org_name=instance.name,
             reference_object_code=str(instance.id),
-            created_by=instance.creator,
+            created_by=instance.created_by,
             operation_state='active'
         )
         default_room.rooms.set(created_rooms)
-        default_room.admins.add(instance.creator)
-        default_room.members.add(instance.creator)
+        default_room.admins.add(instance.created_by)
+        default_room.members.add(instance.created_by)
         
         print(f"Created {len(created_rooms)} default rooms for Institution: {instance.name}")
         return created_rooms
@@ -86,7 +86,7 @@ def create_institution_default_rooms(sender, instance, created, **kwargs):
 @receiver(post_save, sender=Organisation)
 def create_organization_default_rooms(sender, instance, created, **kwargs):
     """Auto-create default rooms when an Organization is created"""
-    if created and instance.creator:
+    if created and instance.created_by:
         base_rooms = [
             {
                 'name': f'{instance.name} - Hub',
@@ -117,11 +117,12 @@ def create_organization_default_rooms(sender, instance, created, **kwargs):
         created_rooms = []
         for room_data in base_rooms:
             room = Room.objects.create(
-                created_by=instance.creator,
+                created_by=instance.created_by,
                 **room_data
             )
-            room.admins.add(instance.creator)
-            room.members.add(instance.creator)
+            room.admins.add(instance.created_by)
+            room.members.add(instance.created_by)
+            print(instance)
             room.organisation.add(instance)
             created_rooms.append(room)
         
@@ -130,12 +131,12 @@ def create_organization_default_rooms(sender, instance, created, **kwargs):
             name=f"{instance.name} - Default Rooms",
             inst_or_org_name=instance.name,
             reference_object_code=str(instance.id),
-            created_by=instance.creator,
+            created_by=instance.created_by,
             operation_state='active'
         )
         default_room.rooms.set(created_rooms)
-        default_room.admins.add(instance.creator)
-        default_room.members.add(instance.creator)
+        default_room.admins.add(instance.created_by)
+        default_room.members.add(instance.created_by)
         
         print(f"Created {len(created_rooms)} default rooms for Organization: {instance.name}")
         return created_rooms
@@ -146,19 +147,19 @@ def create_specialization_room_optional(specialization, create_room=True):
     Optionally create a room for a Specialization
     This is called manually or via a signal based on creator preference
     """
-    if not create_room or not specialization.creator:
+    if not create_room or not specialization.created_by:
         return None
     
     room = Room.objects.create(
         name=f'{specialization.name} - Community',
         description=f'Community discussion for {specialization.name} specialization',
-        created_by=specialization.creator,
+        created_by=specialization.created_by,
         text_priority='all_members',
         operation_state='active'
     )
     
-    room.admins.add(specialization.creator)
-    room.members.add(specialization.creator)
+    room.admins.add(specialization.created_by)
+    room.members.add(specialization.created_by)
     
     print(f"Created room for Specialization: {specialization.name}")
     return room
@@ -175,23 +176,23 @@ def create_faculty_rooms(institution, faculty_data):
         room = Room.objects.create(
             name=f"{institution.name} - {faculty['name']}",
             description=faculty.get('description', f"{faculty['name']} discussions"),
-            created_by=institution.creator,
+            created_by=institution.created_by,
             text_priority='all_members',
             operation_state='active'
         )
         room.institutions.add(institution)
-        room.admins.add(institution.creator)
+        room.admins.add(institution.created_by)
         
         # Student-specific sub-room
         student_room = Room.objects.create(
             name=f"{institution.name} - {faculty['name']} Students",
             description=f"Student discussions for {faculty['name']}",
-            created_by=institution.creator,
+            created_by=institution.created_by,
             text_priority='all_members',
             operation_state='active'
         )
         student_room.institutions.add(institution)
-        student_room.admins.add(institution.creator)
+        student_room.admins.add(institution.created_by)
         
         created_rooms.extend([room, student_room])
     

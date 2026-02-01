@@ -135,6 +135,19 @@ class ResourceViewSet(ModelViewSet):
     # permission_classes = [IsAuthenticatedOrReadOnly]
     # renderer_classes = [PDFRenderer]
 
+    def perform_create(self, serializer):
+        """Create resource and optionally link to a room"""
+        instance = serializer.save()
+        
+        # Check if room parameter was provided
+        room_id = self.request.data.get('room')
+        if room_id:
+            try:
+                room = Room.objects.get(pk=room_id)
+                room.resources.add(instance)
+            except Room.DoesNotExist:
+                pass  # Silently ignore invalid room ID
+
     @action(detail=True, methods=['get'], renderer_classes=[PDFRenderer])
     def view_resource(self, request, pk=None):
         resource = self.get_object()

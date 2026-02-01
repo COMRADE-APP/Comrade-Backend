@@ -4,3 +4,6 @@ from django.apps import AppConfig
 class InstitutionConfig(AppConfig):
     default_auto_field = 'django.db.models.BigAutoField'
     name = 'Institution'
+
+    def ready(self):
+        import Institution.signals  # noqa

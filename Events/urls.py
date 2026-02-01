@@ -1,5 +1,9 @@
 from Events.views import EventViewSet, EventCategoryViewSet, EventAttendanceViewSet, EventBudgetViewSet, EventCategoryAssignmentViewSet, EventCollaborationViewSet, EventFeedbackViewSet, EventFeedbackResponseViewSet, EventFileViewSet, EventFollowUpViewSet, EventLogisticsViewSet, EventMediaCoverageViewSet, EventPartnershipViewSet, EventPhotoViewSet, EventPromotionViewSet, EventRegistrationViewSet, EventReminderViewSet, EventScheduleViewSet, EventSessionViewSet, EventSpeakerViewSet, EventSponsorViewSet, EventSponsorAgreementViewSet, EventSponsorBenefitViewSet, EventSponsorLogoViewSet, EventSponsorPackageViewSet, EventSponsorPaymentViewSet, EventSponsorshipAgreementDocumentViewSet, EventSponsorshipApplicationViewSet, EventSponsorshipApprovalViewSet, EventSponsorshipCertificateViewSet, EventSponsorshipContractViewSet, EventSponsorshipDowngradeViewSet, EventSponsorshipEvaluationViewSet, EventSponsorshipExtensionViewSet, EventSponsorshipFeedbackViewSet, EventSponsorshipHistoryViewSet, EventSponsorshipInvoiceViewSet, EventSponsorshipLetterViewSet, EventSponsorshipLevelViewSet, EventSponsorshipRecognitionViewSet, EventSponsorshipRejectionViewSet, EventSponsorshipRenewalViewSet, EventSponsorshipReportViewSet, EventSponsorshipTerminationViewSet, EventSponsorshipTransferViewSet, EventSponsorshipUpgradeViewSet, EventSurveyViewSet, EventSurveyQuestionViewSet, EventSurveyResponseViewSet, EventTagViewSet, EventTagAssignmentViewSet, EventTicketViewSet, EventVideoViewSet, EventReportViewSet, EventInvitationViewSet, EventLikeViewSet, VisibilityLogViewSet, EventVisibilityViewSet
-from Events.enhanced_views import EventEnhancedViewSet
+from Events.enhanced_views import (
+    EventEnhancedViewSet,
+    EventDocumentViewSet, EventArticleLinkViewSet, EventResearchLinkViewSet,
+    EventAnnouncementLinkViewSet, EventProductLinkViewSet, EventPaymentGroupLinkViewSet
+)
 from rest_framework.routers import DefaultRouter
 
 router = DefaultRouter()
@@ -61,6 +65,14 @@ router.register(r'event_ticket', EventTicketViewSet, basename='event_ticket')
 router.register(r'event_video', EventVideoViewSet, basename='event_video')
 router.register(r'event_report', EventReportViewSet, basename='event_report')
 router.register(r'event_invitation', EventInvitationViewSet, basename='event_invitation')
+
+# Logistics ViewSets
+router.register(r'event_documents', EventDocumentViewSet, basename='event_document')
+router.register(r'event_article_links', EventArticleLinkViewSet, basename='event_article_link')
+router.register(r'event_research_links', EventResearchLinkViewSet, basename='event_research_link')
+router.register(r'event_announcement_links', EventAnnouncementLinkViewSet, basename='event_announcement_link')
+router.register(r'event_product_links', EventProductLinkViewSet, basename='event_product_link')
+router.register(r'event_payment_group_links', EventPaymentGroupLinkViewSet, basename='event_payment_group_link')
 
 
 urlpatterns = [ ]

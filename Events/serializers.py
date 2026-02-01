@@ -4,10 +4,23 @@ from rest_framework import serializers
 from datetime import datetime
 
 class EventSerializer(ModelSerializer):
+    created_by_name = serializers.SerializerMethodField()
+    
     class Meta:
         model = Event
         fields = '__all__'
-        read_only_fields = ['timestamp']
+        read_only_fields = ['time_stamp', 'created_by']
+
+    def get_created_by_name(self, obj):
+        if obj.created_by:
+            return f"{obj.created_by.first_name} {obj.created_by.last_name}".strip() or obj.created_by.email
+        return None
+
+    def validate_event_date(self, value):
+        from django.utils import timezone
+        if value < timezone.now():
+            raise serializers.ValidationError("Event date cannot be in the past.")
+        return value
 
     def validate_scheduled_time(self, value):
         if value < datetime.now():

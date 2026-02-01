@@ -109,16 +109,29 @@ class StandingOrderSerializer(serializers.ModelSerializer):
 class GroupTargetSerializer(serializers.ModelSerializer):
     item_details = PaymentItemSerializer(source='target_item', read_only=True)
     progress_percentage = serializers.SerializerMethodField()
+    owner_email = serializers.EmailField(source='owner.user.user.email', read_only=True)
+    owner_name = serializers.SerializerMethodField()
+    group_name = serializers.CharField(source='payment_group.name', read_only=True)
+    type = serializers.SerializerMethodField()
     
     class Meta:
         model = GroupTarget
         fields = '__all__'
-        read_only_fields = ['achieved', 'achieved_at']
+        read_only_fields = ['achieved', 'achieved_at', 'current_amount']
     
     def get_progress_percentage(self, obj):
-        if obj.payment_group.current_amount and obj.target_amount:
-            return round((obj.payment_group.current_amount / obj.target_amount) * 100, 2)
+        if obj.target_amount and obj.target_amount > 0:
+            return round((float(obj.current_amount) / float(obj.target_amount)) * 100, 2)
         return 0.0
+    
+    def get_owner_name(self, obj):
+        if obj.owner:
+            return f"{obj.owner.user.user.first_name} {obj.owner.user.user.last_name}"
+        return None
+    
+    def get_type(self, obj):
+        """Return 'individual' or 'group' based on piggy bank type"""
+        return 'individual' if obj.owner else 'group'
 
 class GroupInvitationSerializer(serializers.ModelSerializer):
     invited_user_email = serializers.EmailField(source='invited_profile.user.user.email', read_only=True)
@@ -167,7 +180,9 @@ class PaymentGroupsSerializer(serializers.ModelSerializer):
 class PaymentGroupsCreateSerializer(serializers.ModelSerializer):
     class Meta:
         model = PaymentGroups
-        fields = ['name', 'description', 'max_capacity', 'target_amount', 'expiry_date', 'auto_purchase', 'requires_approval']
+        fields = ['name', 'description', 'max_capacity', 'target_amount', 'expiry_date', 
+                  'deadline', 'auto_purchase', 'requires_approval', 'is_public',
+                  'contribution_type', 'contribution_amount', 'frequency']
 
 class CreateTransactionSerializer(serializers.Serializer):
     recipient_email = serializers.EmailField()

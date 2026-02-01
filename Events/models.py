@@ -78,12 +78,38 @@ ATTEND_STATE = (
     ('neutral', 'Neutral')
 )
 
+EVENT_TYPE = (
+    ('public', 'Public'),
+    ('private', 'Private'),
+    ('invite_only', 'Invite Only'),
+    ('members_only', 'Members Only'),
+    ('students_only', 'Students Only'),
+    ('staff_only', 'Staff Only'),
+    ('faculty_only', 'Faculty Only'),
+    ('department_only', 'Department Only'),
+    ('division_only', 'Division Only'),
+    ('organisation_only', 'Organisation Only'),
+    ('institution_only', 'Institution Only'),
+    ('program_only', 'Program Only'),
+    ('other_organisation_unit_only', 'Other Organisation Unit Only'),
+    ('other_institution_unit_only', 'Other Institution Unit Only'),
+)
+
+EVENT_LOCATION = (
+    ('online', 'Online'),
+    ('physical', 'Physical'),
+    ('hybrid', 'Hybrid'),
+)
+
 
 class Event(models.Model):
     name = models.CharField(max_length=200)
     description = models.TextField(max_length=2000)
     capacity = models.IntegerField()
     duration = models.DurationField()
+    event_type = models.CharField(max_length=200, choices=EVENT_TYPE, default='public')
+    event_location = models.CharField(max_length=200, choices=EVENT_LOCATION, default='physical')
+    event_url = models.URLField(blank=True, null=True)
     start_time = models.TimeField()
     end_time = models.TimeField()
     booking_deadline = models.DateTimeField(default=datetime.now)
@@ -94,6 +120,13 @@ class Event(models.Model):
     event_date = models.DateTimeField(default=datetime.now)
     deadline_reached = models.BooleanField(default=False)
     location = models.CharField(max_length=300)
+    latitude = models.DecimalField(max_digits=9, decimal_places=6, null=True, blank=True)
+    longitude = models.DecimalField(max_digits=9, decimal_places=6, null=True, blank=True)
+    complexity_level = models.CharField(max_length=50, choices=(
+        ('small', 'Small Event'),
+        ('midlevel', 'Mid-Level Event'),
+        ('sophisticated', 'Sophisticated Event'),
+    ), default='small')
     status = models.CharField(max_length=200, choices=EVENT_STATE, default='active')
     scheduled_time = models.DateTimeField(default=datetime.now)
     time_stamp = models.DateTimeField(auto_now_add=True)

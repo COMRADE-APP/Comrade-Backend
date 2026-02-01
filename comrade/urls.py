@@ -35,6 +35,7 @@ urlpatterns = [
     
     # User Management
     path('users/', include('UserManagement.urls')),
+    path('api/articles/', include('Articles.urls')),
     
     # API endpoints
     path('api/rooms/', include('Rooms.urls')),
@@ -51,6 +52,7 @@ urlpatterns = [
     path('api/opinions/', include('Opinions.urls')),  # Opinions & Social
     path('api/notifications/', include('Notifications.urls')),  # Notifications
     path('api/messages/', include('Messages.urls')),  # Direct Messaging
+    path('api/qomai/', include('QomAI.urls')),  # QomAI AI Assistant
     path('api/', include(rest_framework.urls)),
 ]
 
