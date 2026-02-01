@@ -5,6 +5,7 @@ env_rec/
 env_rec/
 *.secret
 *.env
+.env
 .env.exit
 
 
