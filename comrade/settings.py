@@ -57,6 +57,7 @@ INSTALLED_APPS = [
     'Messages',  # Direct messaging system
     'Verification',  # New verification system
     'Articles',  # Articles/Blog system
+    'QomAI',  # AI Assistant
     
     # Authentication Support Apps
     'DeviceManagement',

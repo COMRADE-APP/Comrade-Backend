@@ -13,7 +13,15 @@ class OrganisationViewSet(ModelViewSet):
     queryset = Organisation.objects.all()
     permission_classes = [IsAuthenticatedOrReadOnly]
     serializer_class = OrganisationSerializer
+
+    def get_queryset(self):
+        queryset = super().get_queryset()
+        return queryset
     
+    def perform_create(self, serializer):
+        print(self.request.data)
+        """Set created_by to the authenticated user"""
+        serializer.save(created_by=self.request.user)
 
 class OrgBranchViewSet(ModelViewSet):
     queryset = OrgBranch.objects.all()

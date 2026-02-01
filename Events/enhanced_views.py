@@ -67,6 +67,7 @@ class EventEnhancedViewSet(viewsets.ModelViewSet):
     
     def perform_create(self, serializer):
         """Auto-set created_by to the authenticated user"""
+        print('-----------------------------------------------------------')
         serializer.save(created_by=self.request.user)
     
     @action(detail=False, methods=['get'])

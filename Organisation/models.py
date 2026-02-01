@@ -13,15 +13,15 @@ ORG_TYPES = (
 
 class Organisation(models.Model):
     name = models.CharField(max_length=1000)
-    origin = models.CharField(max_length=500)
-    abbreviation = models.CharField(max_length=200)
-    address = models.CharField(max_length=200)
-    postal_code = models.CharField(max_length=200)
-    town = models.CharField(max_length=100)
-    city = models.CharField(max_length=500)
+    origin = models.CharField(max_length=500, blank=True, default='')
+    abbreviation = models.CharField(max_length=200, blank=True, default='')
+    address = models.CharField(max_length=200, blank=True, default='')
+    postal_code = models.CharField(max_length=200, blank=True, default='')
+    town = models.CharField(max_length=100, blank=True, default='')
+    city = models.CharField(max_length=500, blank=True, default='')
     org_type = models.CharField(max_length=200, choices=ORG_TYPES, default='business')
     is_learning_inst = models.BooleanField(default=False)
-    industry = models.CharField(max_length=5000)
+    industry = models.CharField(max_length=5000, blank=True, default='')
     created_on = models.DateTimeField(default=datetime.now)
     members = models.ManyToManyField('Authentication.CustomUser', blank=True)
     

@@ -33,13 +33,13 @@ TEXTING_STATUS = (
 
 class Room(models.Model):
     name = models.CharField(max_length=255)
-    room_code = models.CharField(max_length=200, unique=True, editable=False, default=uuid.uuid4().hex[:10].upper())
+    room_code = models.CharField(max_length=200, unique=True, editable=False, default=uuid.uuid4)
     invitation_code = models.CharField(max_length=10, unique=True, editable=False)
     description = models.TextField(max_length=255, null=True)
     avatar = models.ImageField(upload_to='room_avatars/', null=True, blank=True)
     cover_image = models.ImageField(upload_to='room_covers/', null=True, blank=True)
     institutions = models.ManyToManyField(Institution, blank=True, related_name='institution_related_to_room')
-    organisation = models.ManyToManyField(Institution, blank=True, related_name='organisation_related_to_room')
+    organisation = models.ManyToManyField('Organisation.Organisation', blank=True, related_name='organisation_related_to_room')
     created_by = models.ForeignKey(CustomUser, on_delete=models.CASCADE, null=True)
     created_on = models.DateTimeField(default=datetime.now)
     admins = models.ManyToManyField(CustomUser, related_name='room_admins', blank=True) # CustomUser can admin many rooms, a room can have many admins 
@@ -77,7 +77,7 @@ class Room(models.Model):
     
 class DefaultRoom(models.Model):
     name = models.CharField(max_length=255)
-    room_code = models.CharField(max_length=200, unique=True, default=uuid.uuid4().hex[:10].upper(), editable=False)
+    room_code = models.CharField(max_length=200, unique=True, default=uuid.uuid4, editable=False)
     description = models.TextField(max_length=255, null=True)
     inst_or_org_name = models.CharField(max_length=255)
     reference_object_code = models.CharField(max_length=255, default='None')

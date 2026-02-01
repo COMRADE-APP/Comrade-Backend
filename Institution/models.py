@@ -472,7 +472,9 @@ class Faculty(models.Model):
 class InstDepartment(models.Model):
     """Academic Departments within Faculties"""
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    faculty = models.ForeignKey(Faculty, on_delete=models.CASCADE, related_name='departments')
+    faculty = models.ForeignKey(Faculty, on_delete=models.CASCADE, related_name='departments', null=True, blank=True)
+    institution = models.ForeignKey(Institution, on_delete=models.CASCADE, related_name='departments', null=True, blank=True)
+    inst_branch = models.ForeignKey(InstBranch, on_delete=models.CASCADE, null=True, blank=True, related_name='departments')
     
     name = models.CharField(max_length=500)
     dep_code = models.CharField(max_length=500, unique=True)
@@ -508,7 +510,9 @@ class InstDepartment(models.Model):
 class Programme(models.Model):
     """Academic Programs/Courses"""
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    department = models.ForeignKey(InstDepartment, on_delete=models.CASCADE, related_name='programmes')
+    department = models.ForeignKey(InstDepartment, on_delete=models.CASCADE, related_name='programmes', null=True, blank=True)
+    institution = models.ForeignKey(Institution, on_delete=models.CASCADE, related_name='programmes', null=True, blank=True)
+    inst_branch = models.ForeignKey(InstBranch, on_delete=models.CASCADE, null=True, blank=True, related_name='programmes')
     
     name = models.CharField(max_length=500)
     programme_code = models.CharField(max_length=500, unique=True)
@@ -585,7 +589,9 @@ class AdminDep(models.Model):
 class RegistrarOffice(models.Model):
     """Registrar's Office"""
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    admin_dep = models.ForeignKey(AdminDep, on_delete=models.CASCADE, related_name='registrar_offices')
+    admin_dep = models.ForeignKey(AdminDep, on_delete=models.CASCADE, related_name='registrar_offices', null=True, blank=True)
+    institution = models.ForeignKey(Institution, on_delete=models.CASCADE, related_name='registrar_offices', null=True, blank=True)
+    inst_branch = models.ForeignKey(InstBranch, on_delete=models.CASCADE, null=True, blank=True, related_name='registrar_offices')
     
     name = models.CharField(max_length=500)
     registrar_code = models.CharField(max_length=500, unique=True)
@@ -607,7 +613,9 @@ class RegistrarOffice(models.Model):
 class HR(models.Model):
     """Human Resources Department"""
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    admin_dep = models.ForeignKey(AdminDep, on_delete=models.CASCADE, related_name='hr_departments')
+    admin_dep = models.ForeignKey(AdminDep, on_delete=models.CASCADE, related_name='hr_departments', null=True, blank=True)
+    institution = models.ForeignKey(Institution, on_delete=models.CASCADE, related_name='hr_departments', null=True, blank=True)
+    inst_branch = models.ForeignKey(InstBranch, on_delete=models.CASCADE, null=True, blank=True, related_name='hr_departments')
     
     name = models.CharField(max_length=500)
     hr_code = models.CharField(max_length=500, unique=True)
@@ -629,7 +637,9 @@ class HR(models.Model):
 class ICT(models.Model):
     """ICT/IT Department"""
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    admin_dep = models.ForeignKey(AdminDep, on_delete=models.CASCADE, related_name='ict_departments')
+    admin_dep = models.ForeignKey(AdminDep, on_delete=models.CASCADE, related_name='ict_departments', null=True, blank=True)
+    institution = models.ForeignKey(Institution, on_delete=models.CASCADE, related_name='ict_departments', null=True, blank=True)
+    inst_branch = models.ForeignKey(InstBranch, on_delete=models.CASCADE, null=True, blank=True, related_name='ict_departments')
     
     name = models.CharField(max_length=500)
     ict_code = models.CharField(max_length=500, unique=True)
@@ -651,7 +661,9 @@ class ICT(models.Model):
 class Finance(models.Model):
     """Finance Department"""
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    admin_dep = models.ForeignKey(AdminDep, on_delete=models.CASCADE, related_name='finance_departments')
+    admin_dep = models.ForeignKey(AdminDep, on_delete=models.CASCADE, related_name='finance_departments', null=True, blank=True)
+    institution = models.ForeignKey(Institution, on_delete=models.CASCADE, related_name='finance_departments', null=True, blank=True)
+    inst_branch = models.ForeignKey(InstBranch, on_delete=models.CASCADE, null=True, blank=True, related_name='finance_departments')
     
     name = models.CharField(max_length=500)
     finance_code = models.CharField(max_length=500, unique=True)
@@ -673,7 +685,9 @@ class Finance(models.Model):
 class Marketing(models.Model):
     """Marketing Department"""
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    admin_dep = models.ForeignKey(AdminDep, on_delete=models.CASCADE, related_name='marketing_departments')
+    admin_dep = models.ForeignKey(AdminDep, on_delete=models.CASCADE, related_name='marketing_departments', null=True, blank=True)
+    institution = models.ForeignKey(Institution, on_delete=models.CASCADE, related_name='marketing_departments', null=True, blank=True)
+    inst_branch = models.ForeignKey(InstBranch, on_delete=models.CASCADE, null=True, blank=True, related_name='marketing_departments')
     
     name = models.CharField(max_length=500)
     marketing_code = models.CharField(max_length=500, unique=True)
@@ -695,7 +709,9 @@ class Marketing(models.Model):
 class Legal(models.Model):
     """Legal Department"""
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    admin_dep = models.ForeignKey(AdminDep, on_delete=models.CASCADE, related_name='legal_departments')
+    admin_dep = models.ForeignKey(AdminDep, on_delete=models.CASCADE, related_name='legal_departments', null=True, blank=True)
+    institution = models.ForeignKey(Institution, on_delete=models.CASCADE, related_name='legal_departments', null=True, blank=True)
+    inst_branch = models.ForeignKey(InstBranch, on_delete=models.CASCADE, null=True, blank=True, related_name='legal_departments')
     
     name = models.CharField(max_length=500)
     legal_code = models.CharField(max_length=500, unique=True)
@@ -747,7 +763,9 @@ class StudentAffairs(models.Model):
 class Admissions(models.Model):
     """Admissions Office"""
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    stud_affairs = models.ForeignKey(StudentAffairs, on_delete=models.CASCADE, related_name='admissions_offices')
+    stud_affairs = models.ForeignKey(StudentAffairs, on_delete=models.CASCADE, related_name='admissions_offices', null=True, blank=True)
+    institution = models.ForeignKey(Institution, on_delete=models.CASCADE, related_name='admissions_offices', null=True, blank=True)
+    inst_branch = models.ForeignKey(InstBranch, on_delete=models.CASCADE, null=True, blank=True, related_name='admissions_offices')
     
     name = models.CharField(max_length=500)
     admissions_code = models.CharField(max_length=500, unique=True)
@@ -769,7 +787,9 @@ class Admissions(models.Model):
 class CareerOffice(models.Model):
     """Career Services Office"""
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    stud_affairs = models.ForeignKey(StudentAffairs, on_delete=models.CASCADE, related_name='career_offices')
+    stud_affairs = models.ForeignKey(StudentAffairs, on_delete=models.CASCADE, related_name='career_offices', null=True, blank=True)
+    institution = models.ForeignKey(Institution, on_delete=models.CASCADE, related_name='career_offices', null=True, blank=True)
+    inst_branch = models.ForeignKey(InstBranch, on_delete=models.CASCADE, null=True, blank=True, related_name='career_offices')
     
     name = models.CharField(max_length=500)
     career_code = models.CharField(max_length=500, unique=True)
@@ -791,7 +811,9 @@ class CareerOffice(models.Model):
 class Counselling(models.Model):
     """Counselling Services"""
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    stud_affairs = models.ForeignKey(StudentAffairs, on_delete=models.CASCADE, related_name='counselling_services')
+    stud_affairs = models.ForeignKey(StudentAffairs, on_delete=models.CASCADE, related_name='counselling_services', null=True, blank=True)
+    institution = models.ForeignKey(Institution, on_delete=models.CASCADE, related_name='counselling_services', null=True, blank=True)
+    inst_branch = models.ForeignKey(InstBranch, on_delete=models.CASCADE, null=True, blank=True, related_name='counselling_services')
     
     name = models.CharField(max_length=500)
     counselling_code = models.CharField(max_length=500, unique=True)
@@ -843,7 +865,9 @@ class SupportServices(models.Model):
 class Security(models.Model):
     """Security Services"""
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    support_services = models.ForeignKey(SupportServices, on_delete=models.CASCADE, related_name='security_units')
+    support_services = models.ForeignKey(SupportServices, on_delete=models.CASCADE, related_name='security_units', null=True, blank=True)
+    institution = models.ForeignKey(Institution, on_delete=models.CASCADE, related_name='security_units', null=True, blank=True)
+    inst_branch = models.ForeignKey(InstBranch, on_delete=models.CASCADE, null=True, blank=True, related_name='security_units')
     
     name = models.CharField(max_length=500)
     security_code = models.CharField(max_length=500, unique=True)
@@ -865,7 +889,9 @@ class Security(models.Model):
 class Transport(models.Model):
     """Transport Services"""
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    support_services = models.ForeignKey(SupportServices, on_delete=models.CASCADE, related_name='transport_units')
+    support_services = models.ForeignKey(SupportServices, on_delete=models.CASCADE, related_name='transport_units', null=True, blank=True)
+    institution = models.ForeignKey(Institution, on_delete=models.CASCADE, related_name='transport_units', null=True, blank=True)
+    inst_branch = models.ForeignKey(InstBranch, on_delete=models.CASCADE, null=True, blank=True, related_name='transport_units')
     
     name = models.CharField(max_length=500)
     transport_code = models.CharField(max_length=500, unique=True)
@@ -887,7 +913,9 @@ class Transport(models.Model):
 class Library(models.Model):
     """Library Services"""
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    support_services = models.ForeignKey(SupportServices, on_delete=models.CASCADE, related_name='libraries')
+    support_services = models.ForeignKey(SupportServices, on_delete=models.CASCADE, related_name='libraries', null=True, blank=True)
+    institution = models.ForeignKey(Institution, on_delete=models.CASCADE, related_name='libraries', null=True, blank=True)
+    inst_branch = models.ForeignKey(InstBranch, on_delete=models.CASCADE, null=True, blank=True, related_name='libraries')
     
     name = models.CharField(max_length=500)
     library_code = models.CharField(max_length=500, unique=True)
@@ -909,7 +937,9 @@ class Library(models.Model):
 class Cafeteria(models.Model):
     """Cafeteria Services"""
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    support_services = models.ForeignKey(SupportServices, on_delete=models.CASCADE, related_name='cafeterias')
+    support_services = models.ForeignKey(SupportServices, on_delete=models.CASCADE, related_name='cafeterias', null=True, blank=True)
+    institution = models.ForeignKey(Institution, on_delete=models.CASCADE, related_name='cafeterias', null=True, blank=True)
+    inst_branch = models.ForeignKey(InstBranch, on_delete=models.CASCADE, null=True, blank=True, related_name='cafeterias')
     
     name = models.CharField(max_length=500)
     cafeteria_code = models.CharField(max_length=500, unique=True)
@@ -931,7 +961,9 @@ class Cafeteria(models.Model):
 class Hostel(models.Model):
     """Hostel/Accommodation Services"""
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    support_services = models.ForeignKey(SupportServices, on_delete=models.CASCADE, related_name='hostels')
+    support_services = models.ForeignKey(SupportServices, on_delete=models.CASCADE, related_name='hostels', null=True, blank=True)
+    institution = models.ForeignKey(Institution, on_delete=models.CASCADE, related_name='hostels', null=True, blank=True)
+    inst_branch = models.ForeignKey(InstBranch, on_delete=models.CASCADE, null=True, blank=True, related_name='hostels')
     
     name = models.CharField(max_length=500)
     hostel_code = models.CharField(max_length=500, unique=True)
@@ -953,7 +985,9 @@ class Hostel(models.Model):
 class HealthServices(models.Model):
     """Health/Medical Services"""
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    support_services = models.ForeignKey(SupportServices, on_delete=models.CASCADE, related_name='health_services')
+    support_services = models.ForeignKey(SupportServices, on_delete=models.CASCADE, related_name='health_services', null=True, blank=True)
+    institution = models.ForeignKey(Institution, on_delete=models.CASCADE, related_name='health_services', null=True, blank=True)
+    inst_branch = models.ForeignKey(InstBranch, on_delete=models.CASCADE, null=True, blank=True, related_name='health_services')
     
     name = models.CharField(max_length=500)
     health_services_code = models.CharField(max_length=500, unique=True)

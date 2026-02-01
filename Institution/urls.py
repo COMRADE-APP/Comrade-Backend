@@ -47,10 +47,11 @@ router.register(r'documents', InstitutionVerificationDocumentViewSet, basename='
 router.register(r'organizations', OrganizationViewSet, basename='organization')
 
 # Hierarchical Structure Routes
-router.register(r'branches', InstBranchViewSet, basename='inst-branch')
+# Hierarchical Structure Routes
+router.register(r'inst-branches', InstBranchViewSet, basename='inst-branch')
 router.register(r'vc-offices', VCOfficeViewSet, basename='vc-office')
 router.register(r'faculties', FacultyViewSet, basename='faculty')
-router.register(r'departments', InstDepartmentViewSet, basename='inst-department')
+router.register(r'inst-departments', InstDepartmentViewSet, basename='inst-department')
 router.register(r'programmes', ProgrammeViewSet, basename='programme')
 
 # Administrative
