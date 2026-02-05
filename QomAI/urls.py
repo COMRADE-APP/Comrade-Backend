@@ -7,7 +7,8 @@ from .views import (
     ChatView, ConversationViewSet, ChatHistoryView,
     FakeNewsAnalysisView, RecommendationsView,
     GenerateLearningPathView, GenerateTestView, 
-    UserPreferenceView, WebSearchView
+    UserPreferenceView, WebSearchView,
+    ImageGenerationView, VoiceTranscriptionView
 )
 
 router = DefaultRouter()
@@ -25,6 +26,10 @@ urlpatterns = [
     
     # Web search
     path('search/', WebSearchView.as_view(), name='qomai-search'),
+    
+    # Multimodal Enpoints
+    path('generate/image/', ImageGenerationView.as_view(), name='generate-image'),
+    path('transcribe/', VoiceTranscriptionView.as_view(), name='transcribe-voice'),
     
     # Analysis endpoints
     path('analyze/fake-news/', FakeNewsAnalysisView.as_view(), name='fake-news-analysis'),

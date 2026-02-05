@@ -237,6 +237,7 @@ class PartnerApplicationSerializer(serializers.ModelSerializer):
         return super().create(validated_data)
 
 
+
 class PartnerApplicationCreateSerializer(serializers.ModelSerializer):
     """Simplified serializer for creating partner applications"""
     class Meta:
@@ -250,4 +251,58 @@ class PartnerApplicationCreateSerializer(serializers.ModelSerializer):
         if request and hasattr(request, 'user'):
             profile = Profile.objects.get(user=request.user)
             validated_data['applicant'] = profile
+        return super().create(validated_data)
+
+
+# Agent, Supplier, Shop Serializers
+from Payment.models import AgentApplication, SupplierApplication, ShopRegistration
+
+class AgentApplicationSerializer(serializers.ModelSerializer):
+    applicant_name = serializers.CharField(source='applicant.user.get_full_name', read_only=True)
+    agent_type_display = serializers.CharField(source='get_agent_type_display', read_only=True)
+    status_display = serializers.CharField(source='get_status_display', read_only=True)
+
+    class Meta:
+        model = AgentApplication
+        fields = '__all__'
+        read_only_fields = ['status', 'reviewed_by', 'review_notes', 'result_at', 'created_at']
+
+    def create(self, validated_data):
+        request = self.context.get('request')
+        if request and hasattr(request, 'user'):
+            profile = Profile.objects.get(user=request.user)
+            validated_data['applicant'] = profile
+        return super().create(validated_data)
+
+
+class SupplierApplicationSerializer(serializers.ModelSerializer):
+    applicant_name = serializers.CharField(source='applicant.user.get_full_name', read_only=True)
+    status_display = serializers.CharField(source='get_status_display', read_only=True)
+
+    class Meta:
+        model = SupplierApplication
+        fields = '__all__'
+        read_only_fields = ['status', 'reviewed_by', 'created_at']
+
+    def create(self, validated_data):
+        request = self.context.get('request')
+        if request and hasattr(request, 'user'):
+            profile = Profile.objects.get(user=request.user)
+            validated_data['applicant'] = profile
+        return super().create(validated_data)
+
+
+class ShopRegistrationSerializer(serializers.ModelSerializer):
+    owner_name = serializers.CharField(source='owner.user.get_full_name', read_only=True)
+
+    class Meta:
+        model = ShopRegistration
+        fields = '__all__'
+        read_only_fields = ['owner', 'created_at', 'updated_at', 'is_active']
+        
+    def create(self, validated_data):
+        request = self.context.get('request')
+        if request and hasattr(request, 'user'):
+            profile = Profile.objects.get(user=request.user)
+            validated_data['owner'] = profile
         return super().create(validated_data)

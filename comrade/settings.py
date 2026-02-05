@@ -58,6 +58,8 @@ INSTALLED_APPS = [
     'Verification',  # New verification system
     'Articles',  # Articles/Blog system
     'QomAI',  # AI Assistant
+    'Funding',  # Business Funding Hub
+    'Careers',  # Gigs & Career Opportunities
     
     # Authentication Support Apps
     'DeviceManagement',

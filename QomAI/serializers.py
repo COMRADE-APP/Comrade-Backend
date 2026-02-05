@@ -66,6 +66,45 @@ class ChatRequestSerializer(serializers.Serializer):
     )
     conversation_id = serializers.UUIDField(required=False, allow_null=True)
 
+    def validate_message(self, value):
+        """
+        Enforce word count limit:
+        - Free users (default): 250 words
+        - Staff/Premium: Higher limits (e.g. 1000+)
+        """
+        # Count words (simple split)
+        word_count = len(value.split())
+        
+        # Get request from context
+        request = self.context.get('request')
+        user = request.user if request else None
+        
+        # Determine limit
+        # TODO: Check for 'premium' group or subscription status
+        if user and (user.is_staff or user.groups.filter(name='Premium').exists()):
+            limit = 2000
+        else:
+            limit = 250
+            
+        if word_count > limit:
+            raise serializers.ValidationError(
+                f"Message too long ({word_count} words). Free tier limit is {limit} words."
+            )
+        return value
+
+    def validate_history(self, value):
+        """
+        Ensure history is a list of dicts.
+        Handle case where it might be a nested list due to parsing issues.
+        """
+        if isinstance(value, list):
+            # If item 0 is a list, maybe the whole thing is wrapped?
+            if len(value) > 0 and isinstance(value[0], list):
+                # Flatten or unwrap?
+                # If it's [[{...}, {...}]], return value[0]
+                return value[0]
+        return value
+
 
 class ChatResponseSerializer(serializers.Serializer):
     """Serializer for chat responses"""
