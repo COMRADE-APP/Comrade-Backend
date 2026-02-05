@@ -47,7 +47,7 @@ class Message(models.Model):
     
     # Optional metadata
     tokens_used = models.IntegerField(null=True, blank=True)
-    model_used = models.CharField(max_length=100, blank=True)
+    model_used = models.CharField(max_length=255, blank=True)
 
     class Meta:
         ordering = ['created_at']
@@ -60,7 +60,7 @@ class UserPreference(models.Model):
         on_delete=models.CASCADE,
         related_name='qomai_preferences'
     )
-    preferred_model = models.CharField(max_length=100, default='deepseek-chat')
+    preferred_model = models.CharField(max_length=255, default='qwen-7b')
     context_length = models.IntegerField(default=10)  # How many previous messages to include
     temperature = models.FloatField(default=0.7)
     created_at = models.DateTimeField(auto_now_add=True)

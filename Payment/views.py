@@ -17,7 +17,8 @@ from Payment.models import (
     TransactionToken, PaymentAuthorization, PaymentVerification,
     TransactionHistory, TransactionTracker, PaymentGroupMember,
     Contribution, StandingOrder, GroupInvitation, GroupTarget,
-    Product, UserSubscription, IndividualShare, Partner, PartnerApplication
+    Product, UserSubscription, IndividualShare, Partner, PartnerApplication,
+    AgentApplication, SupplierApplication, ShopRegistration
 )
 from Payment.serializers import (
     PaymentProfileSerializer, PaymentItemSerializer, PaymentLogSerializer,
@@ -27,8 +28,8 @@ from Payment.serializers import (
     PaymentGroupMemberSerializer, ContributionSerializer,
     StandingOrderSerializer, GroupInvitationSerializer, GroupTargetSerializer,
     PaymentGroupsCreateSerializer, CreateTransactionSerializer,
-    ProductSerializer, UserSubscriptionSerializer, PartnerSerializer, PartnerApplicationSerializer, PartnerApplicationCreateSerializer, 
-    
+    ProductSerializer, UserSubscriptionSerializer, PartnerSerializer, PartnerApplicationSerializer, PartnerApplicationCreateSerializer,
+    AgentApplicationSerializer, SupplierApplicationSerializer, ShopRegistrationSerializer
 )
 from Authentication.models import Profile, CustomUser
 
@@ -920,3 +921,88 @@ class PartnerApplicationViewSet(ModelViewSet):
         application.save()
         
         return Response({'message': 'Application rejected'})
+# Partner Registration Views
+class PartnerViewSet(ModelViewSet):
+    queryset = Partner.objects.all()
+    serializer_class = PartnerSerializer
+    permission_classes = [IsAuthenticated]
+    
+    @action(detail=False, methods=['get'])
+    def my_status(self, request):
+        """Check if user is a partner"""
+        try:
+            profile = Profile.objects.get(user=request.user)
+            partner = Partner.objects.get(user=profile)
+            return Response(self.get_serializer(partner).data)
+        except (Profile.DoesNotExist, Partner.DoesNotExist):
+            return Response({'is_partner': False}, status=status.HTTP_404_NOT_FOUND)
+
+class PartnerApplicationViewSet(ModelViewSet):
+    queryset = PartnerApplication.objects.all()
+    serializer_class = PartnerApplicationSerializer
+    permission_classes = [IsAuthenticated]
+    
+    def get_queryset(self):
+        # Users see their own, admins see all
+        user = self.request.user
+        if user.is_staff:
+            return PartnerApplication.objects.all().order_by('-created_at')
+        try:
+            profile = Profile.objects.get(user=user)
+            return PartnerApplication.objects.filter(applicant=profile)
+        except:
+            return PartnerApplication.objects.none()
+    
+    def get_serializer_class(self):
+        if self.action == 'create':
+            return PartnerApplicationCreateSerializer
+        return PartnerApplicationSerializer
+
+class AgentApplicationViewSet(ModelViewSet):
+    """Manage Agent Applications"""
+    queryset = AgentApplication.objects.all()
+    serializer_class = AgentApplicationSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        user = self.request.user
+        if user.is_staff:
+            return AgentApplication.objects.all().order_by('-created_at')
+        try:
+            profile = Profile.objects.get(user=user)
+            return AgentApplication.objects.filter(applicant=profile)
+        except:
+            return AgentApplication.objects.none()
+
+class SupplierApplicationViewSet(ModelViewSet):
+    """Manage Supplier Applications"""
+    queryset = SupplierApplication.objects.all()
+    serializer_class = SupplierApplicationSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        user = self.request.user
+        if user.is_staff:
+            return SupplierApplication.objects.all().order_by('-created_at')
+        try:
+            profile = Profile.objects.get(user=user)
+            return SupplierApplication.objects.filter(applicant=profile)
+        except:
+            return SupplierApplication.objects.none()
+
+class ShopRegistrationViewSet(ModelViewSet):
+    """Manage Shop Registrations"""
+    queryset = ShopRegistration.objects.all()
+    serializer_class = ShopRegistrationSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        user = self.request.user
+        # Admins see all, users see their own
+        if user.is_staff:
+             return ShopRegistration.objects.all()
+        try:
+            profile = Profile.objects.get(user=user)
+            return ShopRegistration.objects.filter(owner=profile)
+        except:
+            return ShopRegistration.objects.none()

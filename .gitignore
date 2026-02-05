@@ -7,7 +7,8 @@ env_rec/
 *.env
 .env
 .env.exit
-
+.env.example
+/.env
 
 # ignore .md files
 *.md

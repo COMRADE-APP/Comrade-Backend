@@ -523,3 +523,80 @@ class PartnerApplication(models.Model):
     def __str__(self):
         return f"{self.business_name} - {self.get_partner_type_display()} Application"
 
+
+class AgentApplication(models.Model):
+    """Application to become a specific type of Agent (e.g., Delivery)"""
+    AGENT_TYPES = (
+        ('delivery', 'Delivery Agent'),
+        ('sales', 'Sales Agent'),
+        ('support', 'Support Agent'),
+    )
+    
+    applicant = models.ForeignKey(Profile, on_delete=models.CASCADE, related_name='agent_applications')
+    agent_type = models.CharField(max_length=20, choices=AGENT_TYPES, default='delivery')
+    vehicle_type = models.CharField(max_length=50, blank=True)  # For delivery
+    license_plate = models.CharField(max_length=20, blank=True) # For delivery
+    
+    # Coverage
+    operating_zone = models.CharField(max_length=100)
+    availability = models.JSONField(default=dict) # e.g. {"mon": "9-5", "tue": "9-5"}
+    
+    # Documents
+    id_card = models.FileField(upload_to='agent_applications/ids/')
+    driving_license = models.FileField(upload_to='agent_applications/licenses/', null=True, blank=True)
+    
+    # Status
+    status = models.CharField(max_length=20, choices=PARTNER_STATUS, default='pending')
+    reviewed_by = models.ForeignKey(Profile, on_delete=models.SET_NULL, null=True, blank=True, related_name='reviewed_agent_apps')
+    review_notes = models.TextField(blank=True)
+    result_at = models.DateTimeField(null=True, blank=True)
+    
+    created_at = models.DateTimeField(default=datetime.now)
+    
+    def __str__(self):
+        return f"{self.applicant.user.username} - {self.get_agent_type_display()}"
+
+
+class SupplierApplication(models.Model):
+    """Application to become a Product/Service Supplier"""
+    applicant = models.ForeignKey(Profile, on_delete=models.CASCADE, related_name='supplier_applications')
+    business_name = models.CharField(max_length=200)
+    business_registration_number = models.CharField(max_length=100, blank=True)
+    
+    categories = models.JSONField(default=list) # e.g. ["Electronics", "Fashion"]
+    min_order_quantity = models.IntegerField(default=1)
+    wholesale_pricing_available = models.BooleanField(default=False)
+    
+    # Documents
+    catalog_sample = models.FileField(upload_to='supplier_applications/catalogs/', null=True, blank=True)
+    business_permit = models.FileField(upload_to='supplier_applications/permits/')
+    
+    status = models.CharField(max_length=20, choices=PARTNER_STATUS, default='pending')
+    reviewed_by = models.ForeignKey(Profile, on_delete=models.SET_NULL, null=True, blank=True, related_name='reviewed_supplier_apps')
+    
+    created_at = models.DateTimeField(default=datetime.now)
+    
+    def __str__(self):
+        return f"{self.business_name} - Supplier Application"
+
+
+class ShopRegistration(models.Model):
+    """Model for a User-created Shop (Storefront)"""
+    owner = models.ForeignKey(Profile, on_delete=models.CASCADE, related_name='shops')
+    name = models.CharField(max_length=200, unique=True)
+    slug = models.SlugField(max_length=200, unique=True)
+    description = models.TextField()
+    logo = models.ImageField(upload_to='shops/logos/', null=True, blank=True)
+    banner = models.ImageField(upload_to='shops/banners/', null=True, blank=True)
+    
+    # Configuration
+    currency = models.CharField(max_length=3, default='KES')
+    is_active = models.BooleanField(default=True)
+    
+    created_at = models.DateTimeField(default=datetime.now)
+    updated_at = models.DateTimeField(auto_now=True)
+    
+    def __str__(self):
+        return self.name
+
+
