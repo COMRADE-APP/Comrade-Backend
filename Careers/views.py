@@ -124,6 +124,16 @@ class CareerOpportunityViewSet(viewsets.ModelViewSet):
         is_remote = self.request.query_params.get('is_remote')
         if is_remote:
             qs = qs.filter(is_remote=is_remote.lower() == 'true')
+            
+        # Filter by Organization
+        org_id = self.request.query_params.get('organization_id')
+        if org_id:
+            qs = qs.filter(organization_id=org_id)
+            
+        # Filter by Institution
+        inst_id = self.request.query_params.get('institution_id')
+        if inst_id:
+            qs = qs.filter(institution_id=inst_id)
         
         return qs
 

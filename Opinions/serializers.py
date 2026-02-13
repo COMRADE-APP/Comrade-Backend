@@ -1,5 +1,5 @@
 from rest_framework import serializers
-from .models import Opinion, OpinionLike, OpinionComment, OpinionRepost, Follow, Bookmark, OpinionMedia
+from .models import Opinion, OpinionLike, OpinionComment, OpinionRepost, Follow, Bookmark, OpinionMedia, Story, StoryView
 from Authentication.models import CustomUser
 
 
@@ -62,6 +62,8 @@ class OpinionSerializer(serializers.ModelSerializer):
     media_files = OpinionMediaSerializer(many=True, read_only=True)
     reposted_by_user = serializers.SerializerMethodField()
     original_content = serializers.SerializerMethodField()
+    entity_author = serializers.SerializerMethodField()
+    user_type = serializers.SerializerMethodField()
     
     class Meta:
         model = Opinion
@@ -70,9 +72,55 @@ class OpinionSerializer(serializers.ModelSerializer):
             'likes_count', 'comments_count', 'reposts_count', 'shares_count', 'views_count',
             'is_liked', 'is_reposted', 'is_bookmarked',
             'quoted_opinion', 'is_pinned', 'is_repost', 'reposted_by_user', 'original_content',
-            'media_files', 'created_at', 'time_ago'
+            'media_files', 'created_at', 'time_ago', 'entity_author', 'is_anonymous', 'room', 'user_type'
         ]
         read_only_fields = ['id', 'user', 'likes_count', 'comments_count', 'reposts_count', 'created_at']
+    
+    def get_user_type(self, obj):
+        """Get the user type label for display (e.g., Student, Staff, Admin)"""
+        if obj.is_anonymous:
+            return None
+        if obj.user:
+            return obj.user.user_type
+        return None
+    
+    def to_representation(self, instance):
+        """Override to mask user info for anonymous opinions"""
+        data = super().to_representation(instance)
+        
+        # Mask user info if anonymous
+        if instance.is_anonymous:
+            data['user'] = {
+                'id': None,
+                'email': None,
+                'first_name': 'Anonymous',
+                'last_name': '',
+                'full_name': 'Anonymous',
+                'avatar_url': None,
+                'user_type': None,
+                'is_following': False,
+            }
+            data['user_type'] = None
+        
+        return data
+    
+    def get_entity_author(self, obj):
+        """Return entity author info if opinion was posted by an org or institution"""
+        if obj.organisation:
+            return {
+                'id': obj.organisation.id,
+                'name': obj.organisation.name,
+                'type': 'organisation',
+                'avatar': obj.organisation.logo.url if obj.organisation.logo else None,
+            }
+        if obj.institution:
+            return {
+                'id': obj.institution.id,
+                'name': obj.institution.name,
+                'type': 'institution',
+                'avatar': obj.institution.logo.url if obj.institution.logo else None,
+            }
+        return None
     
     def get_is_liked(self, obj):
         request = self.context.get('request')
@@ -146,7 +194,7 @@ class OpinionCreateSerializer(serializers.ModelSerializer):
     """Serializer for creating opinions"""
     class Meta:
         model = Opinion
-        fields = ['content', 'visibility', 'media_url', 'media_type', 'quoted_opinion']
+        fields = ['content', 'visibility', 'media_url', 'media_type', 'quoted_opinion', 'is_anonymous', 'room']
     
     def validate_content(self, value):
         if len(value.strip()) == 0:
@@ -268,3 +316,55 @@ class BookmarkSerializer(serializers.ModelSerializer):
         model = Bookmark
         fields = ['id', 'opinion', 'created_at']
         read_only_fields = ['id', 'created_at']
+
+
+class StorySerializer(serializers.ModelSerializer):
+    """Serializer for viewing stories"""
+    user = UserMiniSerializer(read_only=True)
+    media_url = serializers.SerializerMethodField()
+    has_viewed = serializers.SerializerMethodField()
+    time_ago = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Story
+        fields = [
+            'id', 'user', 'media_url', 'media_type', 'caption',
+            'background_color', 'views_count', 'has_viewed',
+            'is_active', 'created_at', 'expires_at', 'time_ago'
+        ]
+        read_only_fields = ['id', 'user', 'views_count', 'created_at', 'expires_at']
+
+    def get_media_url(self, obj):
+        if obj.media:
+            request = self.context.get('request')
+            if request:
+                return request.build_absolute_uri(obj.media.url)
+            return obj.media.url
+        return None
+
+    def get_has_viewed(self, obj):
+        request = self.context.get('request')
+        if request and request.user.is_authenticated:
+            return StoryView.objects.filter(story=obj, viewer=request.user).exists()
+        return False
+
+    def get_time_ago(self, obj):
+        from django.utils import timezone
+        from datetime import timedelta
+        now = timezone.now()
+        diff = now - obj.created_at
+        if diff < timedelta(minutes=1):
+            return 'just now'
+        elif diff < timedelta(hours=1):
+            return f'{int(diff.total_seconds() / 60)}m'
+        elif diff < timedelta(days=1):
+            return f'{int(diff.total_seconds() / 3600)}h'
+        return obj.created_at.strftime('%b %d')
+
+
+class StoryCreateSerializer(serializers.ModelSerializer):
+    """Serializer for creating stories"""
+    class Meta:
+        model = Story
+        fields = ['media', 'media_type', 'caption', 'background_color']
+

@@ -5,8 +5,9 @@ from django.shortcuts import get_object_or_404
 from django.db import transaction
 from .models import PaymentProfile, TransactionToken, TransactionHistory, PaymentLog
 from .serializers import TransactionTokenSerializer, PaymentProfileSerializer
-from .utils import check_purchase_limit, increment_purchase_count
+from .utils import check_purchase_limit, increment_purchase_count, get_or_create_payment_profile
 from Authentication.models import Profile
+from Payment.services.payment_service import PaymentService
 
 class VerifyAccountView(APIView):
     permission_classes = [permissions.IsAuthenticated]
@@ -25,21 +26,13 @@ class VerifyAccountView(APIView):
                 status=status.HTTP_400_BAD_REQUEST
             )
             
-        # Simulate API check
-        # For demo purposes, we return a mock name based on the number presence
-        if len(str(account_number)) < 5:
-             return Response(
-                {"detail": "Invalid account number."}, 
-                status=status.HTTP_400_BAD_REQUEST
-            )
+        # Call Payment Service to verify
+        response = PaymentService.verify_account(payment_method, account_number)
+        
+        if "error" in response:
+             return Response({"detail": response["error"]}, status=status.HTTP_400_BAD_REQUEST)
 
-        # Mock response
-        return Response({
-            "account_name": "JOHN DOE",
-            "account_number": account_number,
-            "provider": payment_method,
-            "verified": True
-        })
+        return Response(response)
 
 
 class DepositView(APIView):
@@ -57,8 +50,13 @@ class DepositView(APIView):
         if not amount or float(amount) <= 0:
              return Response({"detail": "Invalid amount."}, status=status.HTTP_400_BAD_REQUEST)
 
+        # Ensure profile exists and lock it
+        payment_profile = get_or_create_payment_profile(request.user)
+        if not payment_profile:
+             return Response({"detail": "Could not create payment profile."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
         try:
-            profile = PaymentProfile.objects.select_for_update().get(user=request.user.profile)
+            profile = PaymentProfile.objects.select_for_update().get(id=payment_profile.id)
         except PaymentProfile.DoesNotExist:
              return Response({"detail": "Payment profile not found."}, status=status.HTTP_404_NOT_FOUND)
 
@@ -72,27 +70,20 @@ class DepositView(APIView):
             description=f"Deposit via {payment_method}"
         )
 
-        # 1. Trigger STK Push or Payment Gateway Request here (Simulated success)
-        # In real world: Wait for callback. For demo: Immediate success.
+        # Call Payment Service
+        details = {'phone_number': phone_number, 'transaction_code': str(token.transaction_code)}
+        response = PaymentService.initiate_deposit(profile, amount, payment_method, details)
         
-        # Update Balance
-        profile.comrade_balance += float(amount)
-        profile.save()
+        if "error" in response:
+             return Response({"detail": response["error"]}, status=status.HTTP_400_BAD_REQUEST)
 
-        # Log History
-        TransactionHistory.objects.create(
-            payment_profile=profile,
-            transaction_token=token,
-            transaction_category='deposit',
-            payment_type='individual',
-            status='completed',
-            amount=amount
-        )
+        # For async payments (M-Pesa, Stripe), status remains 'pending' until callback
+        # For demo/sync, we might auto-complete if service returns success immediately
         
         return Response({
-            "detail": "Deposit successful.",
-            "new_balance": profile.comrade_balance,
-            "transaction_code": token.transaction_code
+            "detail": "Deposit initiated. Check your phone/email for instructions.",
+            "transaction_code": token.transaction_code,
+            "provider_response": response
         })
 
 
@@ -111,8 +102,13 @@ class WithdrawView(APIView):
         if not amount or float(amount) <= 0:
              return Response({"detail": "Invalid amount."}, status=status.HTTP_400_BAD_REQUEST)
 
+        # Ensure profile exists and lock it
+        payment_profile = get_or_create_payment_profile(request.user)
+        if not payment_profile:
+             return Response({"detail": "Could not create payment profile."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
         try:
-            profile = PaymentProfile.objects.select_for_update().get(user=request.user.profile)
+            profile = PaymentProfile.objects.select_for_update().get(id=payment_profile.id)
         except PaymentProfile.DoesNotExist:
              return Response({"detail": "Payment profile not found."}, status=status.HTTP_404_NOT_FOUND)
 
@@ -129,6 +125,13 @@ class WithdrawView(APIView):
             description=f"Withdrawal to {payment_method} - {account_number}"
         )
 
+        # Call Payment Service
+        details = {'account_number': account_number, 'transaction_code': str(token.transaction_code)}
+        response = PaymentService.initiate_withdrawal(profile, amount, payment_method, details)
+        
+        if "error" in response:
+            return Response({"detail": response["error"]}, status=status.HTTP_400_BAD_REQUEST)
+
         # Deduct Balance
         profile.comrade_balance -= float(amount)
         profile.save()
@@ -139,7 +142,7 @@ class WithdrawView(APIView):
             transaction_token=token,
             transaction_category='withdrawal',
             payment_type='individual',
-            status='completed',
+            status='completed', # Assuming synchronous or manual processing for now
             amount=amount
         )
 
@@ -167,17 +170,29 @@ class TransferView(APIView):
         if not recipient_email:
              return Response({"detail": "Recipient email required."}, status=status.HTTP_400_BAD_REQUEST)
              
-        sender_profile = get_object_or_404(PaymentProfile.objects.select_for_update(), user=request.user.profile)
+        # Ensure sender profile exists
+        sender_profile_obj = get_or_create_payment_profile(request.user)
+        if not sender_profile_obj:
+            return Response({"detail": "Could not create sender profile."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        
+        sender_profile = PaymentProfile.objects.select_for_update().get(id=sender_profile_obj.id)
         
         if sender_profile.comrade_balance < float(amount):
             return Response({"detail": "Insufficient balance."}, status=status.HTTP_400_BAD_REQUEST)
             
         # Find recipient
         try:
-            recipient_user = Profile.objects.get(user__email=recipient_email)
-            recipient_profile = PaymentProfile.objects.select_for_update().get(user=recipient_user)
-        except (Profile.DoesNotExist, PaymentProfile.DoesNotExist):
-            return Response({"detail": "Recipient not found."}, status=status.HTTP_404_NOT_FOUND)
+            from Authentication.models import CustomUser
+            recipient_user = CustomUser.objects.get(email=recipient_email)
+            recipient_profile_obj = get_or_create_payment_profile(recipient_user)
+            if not recipient_profile_obj:
+                return Response({"detail": "Could not create recipient profile."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+                
+            recipient_profile = PaymentProfile.objects.select_for_update().get(id=recipient_profile_obj.id)
+        except CustomUser.DoesNotExist:
+            return Response({"detail": "Recipient user not found."}, status=status.HTTP_404_NOT_FOUND)
+        except Exception as e:
+            return Response({"detail": f"Error finding recipient: {str(e)}"}, status=status.HTTP_400_BAD_REQUEST)
             
         if sender_profile == recipient_profile:
              return Response({"detail": "Cannot transfer to self."}, status=status.HTTP_400_BAD_REQUEST)

@@ -8,7 +8,7 @@ from rest_framework.decorators import action
 from rest_framework.response import Response
 from Resources.models import Resource, ResourceVisibility 
 from Resources.serializers import ResourceSerializer, ResourceVisibilitySerializer
-from Rooms.models import Room, DefaultRoom, DirectMessage, DirectMessageRoom, ForwadingLog, RoomSettings, RoomChat, RoomChatFile
+from Rooms.models import Room, DefaultRoom, DirectMessage, DirectMessageRoom, ForwadingLog, RoomSettings, RoomChat, RoomChatFile, RoomTyping
 from Rooms.serializers import (
     RoomSerializer, RoomListSerializer, RoomRecommendationSerializer,
     DefaultRoomSerializer, DirectMessageSerializer, DirectMessageCreateSerializer,
@@ -28,7 +28,7 @@ from Events.serializers import EventSerializer
 from Events.models import Event
 from rest_framework.permissions import IsAuthenticated
 from Resources.views import VISIBILITY_MAP
-from datetime import datetime
+from datetime import datetime, timedelta
 
 
 
@@ -798,10 +798,76 @@ class RoomViewSet(ModelViewSet):
         
         if not created:
             follow.delete()
-            return Response({'message': 'Unfollowed user', 'is_following': False})
+            return Response({'message': f'Unfollowed {target_user.first_name}'})
+            
+        return Response({'message': f'Now following {target_user.first_name}'})
+
+
+class TypingView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def post(self, request, pk=None):
+        """
+        Update typing status for a user in a room or DM room.
+        Expects `type`: 'room' or 'dm' in body.
+        pk is the room/dm_room ID.
+        """
+        typing_type = request.data.get('type', 'room')
+        user = request.user
         
-        return Response({'message': 'Now following user', 'is_following': True})
-    
+        # Calculate expiry (e.g. 5 seconds from now)
+        expires_at = datetime.now() + timedelta(seconds=5)
+        
+        if typing_type == 'room':
+            room = get_object_or_404(Room, id=pk)
+            RoomTyping.objects.update_or_create(
+                room=room, user=user,
+                defaults={'expires_at': expires_at, 'dm_room': None}
+            )
+        elif typing_type == 'dm':
+            dm_room = get_object_or_404(DirectMessageRoom, id=pk)
+            RoomTyping.objects.update_or_create(
+                dm_room=dm_room, user=user,
+                defaults={'expires_at': expires_at, 'room': None}
+            )
+            
+        return Response({'status': 'updated'})
+
+    def get(self, request, pk=None):
+        """
+        Get currently typing users in a room.
+        pk is the room/dm_room ID.
+        Expects `type`: 'room' or 'dm' in query params.
+        """
+        typing_type = request.query_params.get('type', 'room')
+        now = datetime.now()
+        
+        users_data = []
+        
+        if typing_type == 'room':
+            typing_users = RoomTyping.objects.filter(
+                room_id=pk, 
+                expires_at__gt=now
+            ).exclude(user=request.user).select_related('user', 'user_profile')
+        else:
+            typing_users = RoomTyping.objects.filter(
+                dm_room_id=pk, 
+                expires_at__gt=now
+            ).exclude(user=request.user).select_related('user', 'user_profile')
+            
+        for t in typing_users:
+            avatar_url = None
+            if hasattr(t.user, 'user_profile') and t.user.user_profile.avatar:
+                avatar_url = request.build_absolute_uri(t.user.user_profile.avatar.url)
+                
+            users_data.append({
+                'id': t.user.id,
+                'first_name': t.user.first_name,
+                'avatar_url': avatar_url
+            })
+            
+        return Response(users_data)
+
 
 class DefaultRoomViewSet(ModelViewSet):
     queryset = DefaultRoom.objects.all()

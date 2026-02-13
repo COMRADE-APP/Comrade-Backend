@@ -107,7 +107,10 @@ class Institution(models.Model):
     require_email_domain = models.BooleanField(default=False)
     
     # Logo
-    logo_url = models.URLField(blank=True, null=True)
+    # Logo/Media
+    logo_url = models.URLField(blank=True, null=True) # Keep for backward compatibility or external logos
+    profile_picture = models.ImageField(upload_to='institution_profiles/', null=True, blank=True)
+    cover_picture = models.ImageField(upload_to='institution_covers/', null=True, blank=True)
     
     class Meta:
         indexes = [
@@ -167,6 +170,7 @@ class InstitutionMember(models.Model):
     user = models.ForeignKey('Authentication.CustomUser', on_delete=models.CASCADE)
     
     role = models.CharField(max_length=20, choices=MEMBER_ROLE, default='member')
+    title = models.CharField(max_length=200, blank=True, help_text="Custom editable title (e.g. 'Dean of Faculty')")
     
     # Custom permissions (JSON)
     permissions = models.JSONField(default=dict, blank=True)

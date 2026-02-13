@@ -21,6 +21,21 @@ class Article(models.Model):
         on_delete=models.CASCADE, 
         related_name='articles'
     )
+    # Entity Authorship
+    institution = models.ForeignKey(
+        'Institution.Institution',
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name='articles'
+    )
+    organisation = models.ForeignKey(
+        'Organisation.Organisation',
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name='articles'
+    )
     
     category = models.CharField(max_length=100, default='Technology')
     tags = models.JSONField(default=list, blank=True)

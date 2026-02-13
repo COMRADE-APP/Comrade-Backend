@@ -1,5 +1,6 @@
 from django.db import models
 from django.utils import timezone
+from datetime import timedelta
 from Authentication.models import CustomUser
 
 
@@ -36,6 +37,22 @@ class Opinion(models.Model):
     user = models.ForeignKey(
         CustomUser, 
         on_delete=models.CASCADE, 
+        related_name='opinions'
+    )
+    # Entity Authorship (Optional)
+    # If set, the opinion is authored by the entity, but 'user' remains the poster/admin
+    institution = models.ForeignKey(
+        'Institution.Institution',
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name='opinions'
+    )
+    organisation = models.ForeignKey(
+        'Organisation.Organisation',
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
         related_name='opinions'
     )
     content = models.TextField(max_length=5000)  # Increased for premium users
@@ -86,6 +103,18 @@ class Opinion(models.Model):
         blank=True,
         related_name='reposted_opinions'
     )
+    
+    # Room-scoped opinions
+    room = models.ForeignKey(
+        'Rooms.Room',
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name='opinions'
+    )
+    
+    # Anonymous posting - hides user identity publicly but tracks internally
+    is_anonymous = models.BooleanField(default=False)
     
     is_pinned = models.BooleanField(default=False)
     is_deleted = models.BooleanField(default=False)
@@ -352,4 +381,82 @@ class HiddenContent(models.Model):
     
     def __str__(self):
         return f"{self.user.email} hid opinion {self.opinion.id}"
+
+
+STORY_MEDIA_CHOICES = (
+    ('image', 'Image'),
+    ('video', 'Video'),
+    ('text', 'Text Only'),
+)
+
+
+class Story(models.Model):
+    """
+    Instagram/WhatsApp-style ephemeral stories.
+    Auto-expire after 24 hours.
+    """
+    user = models.ForeignKey(
+        CustomUser,
+        on_delete=models.CASCADE,
+        related_name='stories'
+    )
+    media = models.FileField(upload_to='stories/media/%Y/%m/', blank=True, null=True)
+    media_type = models.CharField(
+        max_length=10,
+        choices=STORY_MEDIA_CHOICES,
+        default='image'
+    )
+    caption = models.CharField(max_length=200, blank=True)
+    background_color = models.CharField(
+        max_length=7,
+        default='#1a1a2e',
+        help_text='Hex color for text-only stories'
+    )
+    views_count = models.PositiveIntegerField(default=0)
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(default=timezone.now)
+    expires_at = models.DateTimeField(blank=True, null=True)
+
+    class Meta:
+        ordering = ['-created_at']
+        verbose_name_plural = 'Stories'
+        indexes = [
+            models.Index(fields=['-created_at']),
+            models.Index(fields=['user', '-created_at']),
+            models.Index(fields=['expires_at']),
+        ]
+
+    def save(self, *args, **kwargs):
+        if not self.expires_at:
+            self.expires_at = (self.created_at or timezone.now()) + timedelta(hours=24)
+        super().save(*args, **kwargs)
+
+    @property
+    def is_expired(self):
+        return timezone.now() > self.expires_at
+
+    def __str__(self):
+        return f"Story by {self.user.email} at {self.created_at}"
+
+
+class StoryView(models.Model):
+    """Track who has viewed each story"""
+    story = models.ForeignKey(
+        Story,
+        on_delete=models.CASCADE,
+        related_name='story_views'
+    )
+    viewer = models.ForeignKey(
+        CustomUser,
+        on_delete=models.CASCADE,
+        related_name='viewed_stories'
+    )
+    viewed_at = models.DateTimeField(default=timezone.now)
+
+    class Meta:
+        unique_together = ('story', 'viewer')
+        ordering = ['-viewed_at']
+
+    def __str__(self):
+        return f"{self.viewer.email} viewed story {self.story.id}"
 

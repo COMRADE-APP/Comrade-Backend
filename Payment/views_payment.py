@@ -12,6 +12,8 @@ import stripe
 import json
 from Payment.models import TransactionToken, TransactionHistory, PaymentProfile, PaymentLog
 from Payment.serializers import TransactionTokenSerializer, TransactionHistorySerializer
+from Payment.services.payment_service import PaymentService
+from Payment.utils import get_or_create_payment_profile
 from datetime import datetime
 
 
@@ -57,67 +59,48 @@ class ProcessPaymentView(APIView):
             )
         
         try:
-            if payment_method == 'stripe':
-                # Process Stripe payment
-                intent = stripe.PaymentIntent.create(
-                    amount=int(float(amount) * 100),  # Convert to cents
-                    currency=currency.lower(),
-                    payment_method=payment_method_id,
-                    confirm=True,
-                    description=description,
-                   automatic_payment_methods={'enabled': True, 'allow_redirects': 'never'}
-                )
-                
-                # Create transaction token record
-                transaction_token = TransactionToken.objects.create(
-                    payment_profile=request.user.payment_profile if hasattr(request.user, 'payment_profile') else None,
-                    transaction_code=intent.id,
-                    amount=amount,
-                    transaction_type='payment',
-                    notes=description
-                )
-                
-                # Create transaction history
-                transaction_history = TransactionHistory.objects.create(
-                    transaction_token=transaction_token,
-                    status='completed' if intent.status == 'succeeded' else 'pending',
-                    timestamp=datetime.now()
-                )
-                
-                serializer = TransactionTokenSerializer(transaction_token)
-                
-                return Response({
-                    'message': 'Payment processed successfully',
-                    'transaction': serializer.data,
-                    'stripe_intent': {
-                        'id': intent.id,
-                        'status': intent.status
-                    }
-                })
+            # Prepare details for service
+            details = {
+                'description': description,
+                'payment_method_id': payment_method_id
+            }
             
-            elif payment_method == 'paypal':
-                # TODO: Implement PayPal payment processing
-                return Response({
-                    'error': 'PayPal processing not yet implemented'
-                }, status=status.HTTP_501_NOT_IMPLEMENTED)
+            # Call Payment Service
+            response = PaymentService.process_payment(amount, currency, payment_method, details)
             
-            elif payment_method == 'mpesa':
-                # TODO: Implement M-Pesa STK Push
-                return Response({
-                    'error': 'M-Pesa processing not yet implemented'
-                }, status=status.HTTP_501_NOT_IMPLEMENTED)
+            if "error" in response:
+                return Response({'error': response['error']}, status=status.HTTP_400_BAD_REQUEST)
+                
+            # Ensure payment profile exists
+            payment_profile = get_or_create_payment_profile(request.user)
             
-            else:
-                return Response(
-                    {'error': 'Unsupported payment method'},
-                    status=status.HTTP_400_BAD_REQUEST
-                )
-        
-        except stripe.error.CardError as e:
-            return Response(
-                {'error': f'Card error: {str(e)}'},
-                status=status.HTTP_400_BAD_REQUEST
+            # Create transaction token record (Generalized)
+            transaction_token = TransactionToken.objects.create(
+                payment_profile=payment_profile,
+                transaction_code=response.get('id', f'txn_{datetime.now().timestamp()}'),
+                amount=amount,
+                transaction_type='payment',
+                notes=description
             )
+            
+            # Create transaction history
+            # Status depends on provider response
+            txn_status = 'completed' if response.get('status') == 'succeeded' else 'pending'
+            
+            TransactionHistory.objects.create(
+                transaction_token=transaction_token,
+                status=txn_status,
+                timestamp=datetime.now()
+            )
+            
+            serializer = TransactionTokenSerializer(transaction_token)
+            
+            return Response({
+                'message': 'Payment processed successfully',
+                'transaction': serializer.data,
+                'provider_response': response
+            })
+        
         except Exception as e:
             return Response(
                 {'error': f'Payment failed: {str(e)}'},

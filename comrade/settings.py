@@ -41,6 +41,7 @@ INSTALLED_APPS = [
     # Custom Apps
     'Authentication',
     'rest_framework',
+    'django_filters',
     'UserManagement',
     'Rooms',
     'Announcements',
@@ -85,6 +86,7 @@ MIDDLEWARE = [
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
     'django.contrib.auth.middleware.AuthenticationMiddleware',
+    'Authentication.middleware.ActiveUserMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
     "allauth.account.middleware.AccountMiddleware",

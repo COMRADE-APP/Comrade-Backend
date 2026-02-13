@@ -164,6 +164,45 @@ class InstitutionViewSet(ModelViewSet):
         logs = institution.verification_logs.all()
         serializer = InstitutionVerificationLogSerializer(logs, many=True)
         return Response(serializer.data)
+    
+    @action(detail=False, methods=['get'], permission_classes=[IsAuthenticated])
+    def my_institutions(self, request):
+        """Get institutions where current user is a member (for account switching)"""
+        user = request.user
+        # Get institutions where user is a member
+        memberships = InstitutionMember.objects.filter(user=user).select_related('institution')
+        # Also include institutions created by the user
+        created_institutions = Institution.objects.filter(created_by=user)
+        
+        accounts = []
+        seen_ids = set()
+        
+        # Add memberships
+        for membership in memberships:
+            inst = membership.institution
+            if inst.id not in seen_ids:
+                accounts.append({
+                    'id': str(inst.id),
+                    'name': inst.name,
+                    'type': 'institution',
+                    'avatar': inst.logo_url,
+                    'role': membership.role
+                })
+                seen_ids.add(inst.id)
+        
+        # Add created institutions
+        for inst in created_institutions:
+            if inst.id not in seen_ids:
+                accounts.append({
+                    'id': str(inst.id),
+                    'name': inst.name,
+                    'type': 'institution',
+                    'avatar': inst.logo_url,
+                    'role': 'creator'
+                })
+                seen_ids.add(inst.id)
+        
+        return Response(accounts)
 
 
 class InstitutionMemberViewSet(ModelViewSet):

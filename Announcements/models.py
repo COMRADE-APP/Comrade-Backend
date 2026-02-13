@@ -51,6 +51,9 @@ VIS_TYPES = (
 """Admins and Moderator's models implemetations inside and outside rooms"""
 class Announcements(models.Model):
     user = models.ForeignKey(CustomUser, on_delete=models.DO_NOTHING)
+    # Entity Authorship
+    institution = models.ForeignKey('Institution.Institution', on_delete=models.CASCADE, null=True, blank=True, related_name='announcements')
+    organisation = models.ForeignKey('Organisation.Organisation', on_delete=models.CASCADE, null=True, blank=True, related_name='announcements')
     heading = models.CharField(max_length=200, null=False)
     content = models.TextField(max_length=5000, null=False)
     visibility = models.CharField(max_length=200, null=False, choices=VIS_TYPES, default='private')
@@ -76,6 +79,9 @@ class AnnouncementsRequest(models.Model):
 
 class Task(models.Model):
     user = models.ForeignKey(CustomUser, on_delete=models.DO_NOTHING)
+    # Entity Authorship
+    institution = models.ForeignKey('Institution.Institution', on_delete=models.CASCADE, null=True, blank=True, related_name='tasks')
+    organisation = models.ForeignKey('Organisation.Organisation', on_delete=models.CASCADE, null=True, blank=True, related_name='tasks')
     heading = models.CharField(max_length=200, null=False)
     description = models.TextField(max_length=5000, null=False)
     visibility = models.CharField(max_length=200, null=False, choices=VIS_TYPES, default='private')

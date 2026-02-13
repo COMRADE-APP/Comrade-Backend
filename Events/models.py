@@ -131,6 +131,9 @@ class Event(models.Model):
     scheduled_time = models.DateTimeField(default=datetime.now)
     time_stamp = models.DateTimeField(auto_now_add=True)
     created_by = models.ForeignKey(CustomUser, null=False, on_delete=models.DO_NOTHING)
+    # Entity Authorship
+    institution = models.ForeignKey(Institution, on_delete=models.CASCADE, null=True, blank=True, related_name='events')
+    organisation = models.ForeignKey(Organisation, on_delete=models.CASCADE, null=True, blank=True, related_name='events')
 
     def __str__(self):
         return self.name

@@ -25,6 +25,16 @@ router.register(r'agent-applications', views.AgentApplicationViewSet, basename='
 router.register(r'supplier-applications', views.SupplierApplicationViewSet, basename='supplier-application')
 router.register(r'shop-registrations', views.ShopRegistrationViewSet, basename='shop-registration')
 
+# Marketplace routes
+router.register(r'establishments', views.EstablishmentViewSet, basename='establishment')
+router.register(r'menu-items', views.MenuItemViewSet, basename='menu-item')
+router.register(r'hotel-rooms', views.HotelRoomViewSet, basename='hotel-room')
+router.register(r'bookings', views.BookingViewSet, basename='booking')
+router.register(r'services', views.ServiceOfferingViewSet, basename='service-offering')
+router.register(r'time-slots', views.ServiceTimeSlotViewSet, basename='time-slot')
+router.register(r'orders', views.OrderViewSet, basename='order')
+router.register(r'reviews', views.ReviewViewSet, basename='review')
+
 urlpatterns = [
     path('', include(router.urls)),
     

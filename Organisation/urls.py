@@ -1,5 +1,5 @@
 from rest_framework.routers import DefaultRouter
-from Organisation.views import OrganisationViewSet, OrgBranchViewSet, DivisionViewSet, DepartmentViewSet, SectionViewSet, TeamViewSet, ProjectViewSet, CentreViewSet, CommitteeViewSet, BoardViewSet, UnitViewSet, InstituteViewSet, ProgramViewSet, OtherOrgUnitViewSet
+from Organisation.views import OrganisationViewSet, OrgBranchViewSet, DivisionViewSet, DepartmentViewSet, SectionViewSet, TeamViewSet, ProjectViewSet, CentreViewSet, CommitteeViewSet, BoardViewSet, UnitViewSet, InstituteViewSet, ProgramViewSet, OtherOrgUnitViewSet, OrganisationMemberViewSet
 
 router = DefaultRouter()
 router.register(r'organisation', OrganisationViewSet, basename='organisation')
@@ -16,6 +16,7 @@ router.register(r'unit', UnitViewSet, basename='unit')
 router.register(r'institute', InstituteViewSet, basename='institute')
 router.register(r'program', ProgramViewSet, basename='program')
 router.register(r'other_org_unit', OtherOrgUnitViewSet, basename='other_org_unit')
+router.register(r'organisation_members', OrganisationMemberViewSet, basename='organisation_members')
 
 urlpatterns = [
 

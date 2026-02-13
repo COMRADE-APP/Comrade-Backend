@@ -1,4 +1,5 @@
-from Organisation.models import Organisation, OrgBranch, Division, Department, Section, Team, Project, Centre, Committee, Board, Unit, Institute, Program, OtherOrgUnit
+from Organisation.models import Organisation, OrgBranch, Division, Department, Section, Team, Project, Centre, Committee, Board, Unit, Institute, Program, OtherOrgUnit, OrganisationMember
+from rest_framework import serializers
 from rest_framework.serializers import ModelSerializer
 
 
@@ -85,4 +86,34 @@ class OtherOrgUnitSerializer(ModelSerializer):
         model = OtherOrgUnit
         fields = '__all__'
         read_only_fields = ['created_on']
+
+
+# ============================================================================
+# MEMBER MANAGEMENT SERIALIZER
+# ============================================================================
+
+class OrganisationMemberSerializer(ModelSerializer):
+    """Serializer for OrganisationMember with user details"""
+    user_email = serializers.EmailField(source='user.email', read_only=True)
+    user_name = serializers.SerializerMethodField()
+    user_avatar = serializers.SerializerMethodField()
+    
+    class Meta:
+        model = OrganisationMember
+        fields = [
+            'id', 'organisation', 'user', 'user_email', 'user_name', 'user_avatar',
+            'role', 'title', 'joined_at', 'is_active'
+        ]
+        read_only_fields = ['joined_at']
+    
+    def get_user_name(self, obj):
+        if obj.user.first_name:
+            return f"{obj.user.first_name} {obj.user.last_name or ''}".strip()
+        return obj.user.email
+    
+    def get_user_avatar(self, obj):
+        if hasattr(obj.user, 'profile') and obj.user.profile and obj.user.profile.avatar:
+            return obj.user.profile.avatar.url
+        return None
+
 

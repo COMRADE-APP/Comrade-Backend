@@ -52,6 +52,9 @@ class ResearchProject(models.Model):
     # Researchers
     principal_investigator = models.ForeignKey(CustomUser, on_delete=models.CASCADE, related_name='led_research')
     co_investigators = models.ManyToManyField(CustomUser, related_name='co_research', blank=True)
+    # Entity Authorship
+    institution = models.ForeignKey('Institution.Institution', on_delete=models.CASCADE, null=True, blank=True, related_name='research_projects')
+    organisation = models.ForeignKey('Organisation.Organisation', on_delete=models.CASCADE, null=True, blank=True, related_name='research_projects')
     
     # Status and timeline
     status = models.CharField(max_length=50, choices=RESEARCH_STATUS, default='draft')

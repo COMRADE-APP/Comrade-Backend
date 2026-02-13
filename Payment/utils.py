@@ -319,3 +319,110 @@ def calculate_individual_share(target, member, quantity=1):
     )
     
     return share
+
+def get_or_create_payment_profile(user):
+    """
+    Safely get or create a PaymentProfile for a user.
+    Handles missing Profile logic as well.
+    """
+    try:
+        from Authentication.models import Profile
+        from Payment.models import PaymentProfile
+        import uuid
+        
+        # Ensure Profile exists
+        profile, created = Profile.objects.get_or_create(user=user)
+        
+        # Ensure PaymentProfile exists
+        payment_profile, created = PaymentProfile.objects.get_or_create(
+            user=profile,
+            defaults={
+                'tier': 'free',
+                'comrade_balance': 0.00,
+                'profile_token': f"PAY-{uuid.uuid4().hex[:12].upper()}",
+                'payment_option': 'comrade_balance'
+            }
+        )
+        return payment_profile
+    except Exception as e:
+        print(f"Error getting/creating payment profile: {e}")
+        return None
+
+from django.core.mail import send_mail
+from django.conf import settings
+import logging
+
+logger = logging.getLogger(__name__)
+
+def send_group_invitation_email(email, group_name, inviter_name, invite_url, is_existing_user=True):
+    """
+    Send a styled invitation email matching the OTP style.
+    """
+    subject = f'Comrade - Invitation to join {group_name}'
+    
+    action_text = "Group Invitation"
+    
+    if is_existing_user:
+        message_body = f"""
+            <p>Hello,</p>
+            <p><strong>{inviter_name}</strong> has invited you to join the payment group <strong>"{group_name}"</strong> on Comrade.</p>
+            <p>To accept the invitation, please click the button below:</p>
+            <div style="text-align: center; margin: 30px 0;">
+                <a href="{invite_url}" style="background-color: #667eea; color: white; padding: 12px 24px; text-decoration: none; border-radius: 5px; font-weight: bold;">Accept Invitation</a>
+            </div>
+            <p style="font-size: 12px; color: #999;">Or copy this link: {invite_url}</p>
+        """
+    else:
+        message_body = f"""
+            <p>Hello,</p>
+            <p><strong>{inviter_name}</strong> has invited you to join the payment group <strong>"{group_name}"</strong> on Comrade.</p>
+            <p>You don't seem to have an account yet. Please register to join the group.</p>
+            <div style="text-align: center; margin: 30px 0;">
+                <a href="{invite_url}" style="background-color: #667eea; color: white; padding: 12px 24px; text-decoration: none; border-radius: 5px; font-weight: bold;">Join Group</a>
+            </div>
+            <p style="font-size: 12px; color: #999;">Or copy this link: {invite_url}</p>
+        """
+
+    html_message = f"""
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <style>
+            body {{ font-family: Arial, sans-serif; line-height: 1.6; color: #333; }}
+            .container {{ max-width: 600px; margin: 0 auto; padding: 20px; }}
+            .header {{ background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 30px; text-align: center; border-radius: 10px 10px 0 0; }}
+            .content {{ background: #f9f9f9; padding: 30px; border-radius: 0 0 10px 10px; }}
+            .footer {{ text-align: center; margin-top: 20px; color: #666; font-size: 12px; }}
+        </style>
+    </head>
+    <body>
+        <div class="container">
+            <div class="header">
+                <h1>Comrade</h1>
+                <p>{action_text}</p>
+            </div>
+            <div class="content">
+                {message_body}
+            </div>
+            <div class="footer">
+                <p>&copy; 2025 Comrade. All rights reserved.</p>
+            </div>
+        </div>
+    </body>
+    </html>
+    """
+    
+    try:
+        send_mail(
+            subject,
+            f'You have been invited to join {group_name}. Link: {invite_url}',
+            settings.DEFAULT_FROM_EMAIL,
+            [email],
+            html_message=html_message,
+            fail_silently=False,
+        )
+        return True
+    except Exception as e:
+        logger.error(f"Failed to send invitation email to {email}: {str(e)}")
+        print(f"Error sending email: {e}")
+        return False

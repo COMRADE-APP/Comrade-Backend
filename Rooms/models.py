@@ -292,3 +292,20 @@ class RoomChat(models.Model):
     
     def __str__(self):
         return f"{self.sender.first_name} in {self.room.name}: {self.content[:50]}..."
+
+class RoomTyping(models.Model):
+    """Ephemeral typing status for rooms"""
+    room = models.ForeignKey(Room, on_delete=models.CASCADE, related_name='typing_users', null=True, blank=True)
+    dm_room = models.ForeignKey(DirectMessageRoom, on_delete=models.CASCADE, related_name='typing_users', null=True, blank=True)
+    user = models.ForeignKey(CustomUser, on_delete=models.CASCADE)
+    started_at = models.DateTimeField(default=datetime.now)
+    expires_at = models.DateTimeField()
+
+    class Meta:
+        indexes = [
+            models.Index(fields=['room', 'expires_at']),
+            models.Index(fields=['dm_room', 'expires_at']),
+        ]
+
+    def __str__(self):
+        return f"{self.user.username} typing in {self.room or self.dm_room}"

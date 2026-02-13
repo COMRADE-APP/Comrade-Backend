@@ -25,7 +25,7 @@ import secrets
 
 from Authentication.models import (
     CustomUser, Lecturer, OrgStaff, StudentAdmin, OrgAdmin, 
-    InstAdmin, InstStaff, Profile
+    InstAdmin, InstStaff, Profile, UserProfile
 )
 from Authentication.serializers import (
     LoginSerializer, CustomUserSerializer, LecturerSerializer, OrgStaffSerializer, 
@@ -198,8 +198,28 @@ class VerifyView(APIView):
             user.save()
             
             return Response({'detail': 'Email verified successfully. You can now login.'})
-        
         return Response({'detail': 'Invalid or expired token.'}, status=status.HTTP_400_BAD_REQUEST)
+
+
+class MeView(APIView):
+    """Get current authenticated user details"""
+    permission_classes = [IsAuthenticated]
+    
+    def get(self, request):
+        profile, created = UserProfile.objects.get_or_create(user=request.user)
+        serializer = UserProfileSerializer(profile, context={'request': request})
+        return Response(serializer.data)
+
+
+class HeartbeatView(APIView):
+    """
+    Simple endpoint to keep user status 'online'.
+    The ActiveUserMiddleware handles the actual status update.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        return Response({"status": "alive"}, status=status.HTTP_200_OK)
 
 
 @method_decorator(csrf_exempt, name='dispatch')
