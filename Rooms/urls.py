@@ -8,7 +8,8 @@ from .views import (
     ForwadingLogViewSet,
     RoomListCreateView, 
     RoomDetailView, 
-    JoinRoomView
+    JoinRoomView,
+    TypingView
 )
 
 routers = DefaultRouter()
@@ -18,4 +19,6 @@ routers.register(r'direct_messages', DirectMessageViewSet, basename='direct_mess
 routers.register(r'dm_rooms', DirectMessageRoomViewSet, basename='dm_rooms')
 routers.register(r'forwading_logs', ForwadingLogViewSet, basename='forwading_logs')
 
-urlpatterns = routers.urls
+urlpatterns = [
+    path('typing/<int:pk>/', TypingView.as_view(), name='typing'),
+] + routers.urls

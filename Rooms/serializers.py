@@ -6,13 +6,36 @@ from Authentication.models import CustomUser
 class UserMinimalSerializer(serializers.ModelSerializer):
     """Minimal user serializer for chat listings"""
     full_name = serializers.SerializerMethodField()
+    avatar_url = serializers.SerializerMethodField()
+    is_online = serializers.SerializerMethodField()
+    last_seen = serializers.SerializerMethodField()
     
     class Meta:
         model = CustomUser
-        fields = ['id', 'email', 'first_name', 'last_name', 'full_name']
+        fields = ['id', 'email', 'first_name', 'last_name', 'full_name', 'avatar_url', 'is_online', 'last_seen']
     
     def get_full_name(self, obj):
         return f"{obj.first_name} {obj.last_name}"
+
+    def get_avatar_url(self, obj):
+        if hasattr(obj, 'user_profile') and obj.user_profile and obj.user_profile.avatar:
+            request = self.context.get('request')
+            if request:
+                return request.build_absolute_uri(obj.user_profile.avatar.url)
+            return obj.user_profile.avatar.url
+        return None
+
+    def get_is_online(self, obj):
+        # Check privacy
+        if hasattr(obj, 'user_profile') and not obj.user_profile.show_activity_status:
+            return False
+        return obj.is_online
+
+    def get_last_seen(self, obj):
+        # Check privacy
+        if hasattr(obj, 'user_profile') and not obj.user_profile.show_activity_status:
+            return None
+        return obj.last_seen
 
 
 class RoomSerializer(serializers.ModelSerializer):
@@ -86,13 +109,20 @@ class DefaultRoomSerializer(serializers.ModelSerializer):
 class DirectMessageSerializer(serializers.ModelSerializer):
     sender_info = UserMinimalSerializer(source='sender', read_only=True)
     receiver_info = UserMinimalSerializer(source='receiver', read_only=True)
+    is_own = serializers.SerializerMethodField()
     
     class Meta:
         model = DirectMessage
         fields = ['id', 'sender', 'sender_info', 'receiver', 'receiver_info', 
                   'content', 'file', 'dm_room', 'status', 'message_type', 
-                  'message_origin', 'time_stamp', 'is_read', 'delivered_on', 'read_on']
+                  'message_origin', 'time_stamp', 'is_read', 'delivered_on', 'read_on', 'is_own']
         read_only_fields = ['id', 'sender', 'time_stamp', 'delivered_on', 'read_on']
+
+    def get_is_own(self, obj):
+        request = self.context.get('request')
+        if request and request.user.is_authenticated:
+            return obj.sender_id == request.user.id
+        return False
 
 
 class DirectMessageCreateSerializer(serializers.ModelSerializer):
@@ -161,7 +191,7 @@ class DirectMessageRoomSerializer(serializers.ModelSerializer):
         if request and request.user.is_authenticated:
             other = obj.participants.exclude(id=request.user.id).first()
             if other:
-                return UserMinimalSerializer(other).data
+                return UserMinimalSerializer(other, context=self.context).data
         return None
 
 
@@ -180,11 +210,8 @@ class DirectMessageRoomListSerializer(serializers.ModelSerializer):
         if request and request.user.is_authenticated:
             other = obj.participants.exclude(id=request.user.id).first()
             if other:
-                return {
-                    'id': other.id,
-                    'name': f"{other.first_name} {other.last_name}",
-                    'email': other.email
-                }
+                # Use UserMinimalSerializer to maintain consistency and privacy logic
+                return UserMinimalSerializer(other, context=self.context).data
         return None
     
     def get_last_message(self, obj):

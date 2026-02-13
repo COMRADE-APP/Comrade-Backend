@@ -105,6 +105,8 @@ class TransactionToken(models.Model):
     amount = models.DecimalField(decimal_places=2, max_digits=12)
     pay_from = models.CharField(max_length=200, choices=PAY_OPT_TYPE, default='external')
     payment_option = models.CharField(max_length=2000, choices=PAY_OPT, default='paypal')
+    payment_number = models.CharField(max_length=200, blank=True, null=True)
+    description = models.TextField(blank=True, null=True)
     created_at = models.DateTimeField(default=datetime.now)
     recipient_profile = models.ForeignKey(PaymentProfile, on_delete=models.CASCADE, related_name='recipient_profile', null=True, blank=True)
     
@@ -204,6 +206,13 @@ class PaymentGroups(models.Model):
     contribution_amount = models.DecimalField(decimal_places=2, max_digits=12, default=0.00)
     frequency = models.CharField(max_length=20, choices=FREQUENCY_CHOICES, default='monthly')
     
+    # Group Type
+    GROUP_TYPE_CHOICES = (
+        ('standard', 'Standard Group'),
+        ('piggy_bank', 'Piggy Bank Group'),
+    )
+    group_type = models.CharField(max_length=20, choices=GROUP_TYPE_CHOICES, default='standard')
+    
     created_at = models.DateTimeField(default=datetime.now)
     updated_at = models.DateTimeField(auto_now=True)
     
@@ -275,7 +284,8 @@ class GroupInvitation(models.Model):
     import uuid
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     payment_group = models.ForeignKey(PaymentGroups, on_delete=models.CASCADE, related_name='invitations')
-    invited_profile = models.ForeignKey(PaymentProfile, on_delete=models.CASCADE)
+    invited_profile = models.ForeignKey(PaymentProfile, on_delete=models.CASCADE, null=True, blank=True)
+    invited_email = models.EmailField(null=True, blank=True)
     invited_by = models.ForeignKey(PaymentProfile, on_delete=models.CASCADE, related_name='sent_invitations')
     status = models.CharField(max_length=20, choices=(
         ('pending', 'Pending'),
@@ -600,3 +610,366 @@ class ShopRegistration(models.Model):
         return self.name
 
 
+# ============================================================================
+# MARKETPLACE: Establishments, Menus, Hotels, Services, Orders, Reviews
+# ============================================================================
+
+ESTABLISHMENT_TYPES = (
+    ('restaurant', 'Restaurant'),
+    ('hotel', 'Hotel'),
+    ('coffee_shop', 'Coffee Shop'),
+    ('supermarket', 'Supermarket'),
+    ('store', 'Store'),
+    ('service_provider', 'Service Provider'),
+    ('food_shop', 'Food Shop'),
+)
+
+class Establishment(models.Model):
+    """A restaurant, hotel, coffee shop, supermarket, store, or service provider."""
+    owner = models.ForeignKey(Profile, on_delete=models.CASCADE, related_name='establishments')
+    organisation = models.ForeignKey(
+        'Organisation.Organisation', on_delete=models.SET_NULL,
+        null=True, blank=True, related_name='establishments'
+    )
+    
+    name = models.CharField(max_length=300)
+    slug = models.SlugField(max_length=300, unique=True)
+    description = models.TextField(blank=True)
+    logo = models.ImageField(upload_to='establishments/logos/', null=True, blank=True)
+    banner = models.ImageField(upload_to='establishments/banners/', null=True, blank=True)
+    
+    establishment_type = models.CharField(max_length=50, choices=ESTABLISHMENT_TYPES)
+    categories = models.JSONField(default=list, blank=True, help_text='e.g. ["Italian", "Fine Dining"]')
+    
+    # Location
+    address = models.CharField(max_length=500, blank=True)
+    city = models.CharField(max_length=200, blank=True)
+    country = models.CharField(max_length=200, blank=True)
+    phone = models.CharField(max_length=50, blank=True)
+    email = models.EmailField(blank=True)
+    website = models.URLField(blank=True)
+    
+    # Operations
+    opening_hours = models.JSONField(default=dict, blank=True, help_text='e.g. {"mon": "08:00-22:00"}')
+    
+    # Ratings (denormalized for performance)
+    rating = models.DecimalField(decimal_places=2, max_digits=3, default=0.00)
+    review_count = models.IntegerField(default=0)
+    
+    # Delivery/service modes
+    delivery_available = models.BooleanField(default=False)
+    pickup_available = models.BooleanField(default=True)
+    dine_in_available = models.BooleanField(default=False)
+    
+    is_active = models.BooleanField(default=True)
+    is_verified = models.BooleanField(default=False)
+    
+    created_at = models.DateTimeField(default=datetime.now)
+    updated_at = models.DateTimeField(auto_now=True)
+    
+    class Meta:
+        indexes = [
+            models.Index(fields=['establishment_type']),
+            models.Index(fields=['is_active', 'establishment_type']),
+            models.Index(fields=['-rating']),
+        ]
+    
+    def __str__(self):
+        return f"{self.name} ({self.get_establishment_type_display()})"
+
+
+class EstablishmentBranch(models.Model):
+    """Branch/location of an establishment."""
+    establishment = models.ForeignKey(Establishment, on_delete=models.CASCADE, related_name='branches')
+    name = models.CharField(max_length=300)
+    address = models.CharField(max_length=500, blank=True)
+    city = models.CharField(max_length=200, blank=True)
+    country = models.CharField(max_length=200, blank=True)
+    phone = models.CharField(max_length=50, blank=True)
+    opening_hours = models.JSONField(default=dict, blank=True)
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(default=datetime.now)
+    
+    def __str__(self):
+        return f"{self.establishment.name} - {self.name}"
+
+
+class MenuItem(models.Model):
+    """Food/product item offered by an establishment (restaurant, café, food shop)."""
+    establishment = models.ForeignKey(Establishment, on_delete=models.CASCADE, related_name='menu_items')
+    name = models.CharField(max_length=300)
+    description = models.TextField(blank=True)
+    price = models.DecimalField(decimal_places=2, max_digits=12)
+    category = models.CharField(max_length=200, blank=True, help_text='e.g. Appetizers, Main Course, Beverages')
+    image = models.ImageField(upload_to='menu_items/', null=True, blank=True)
+    is_available = models.BooleanField(default=True)
+    preparation_time = models.IntegerField(default=15, help_text='Estimated preparation time in minutes')
+    dietary_tags = models.JSONField(default=list, blank=True, help_text='e.g. ["vegan", "gluten-free"]')
+    created_at = models.DateTimeField(default=datetime.now)
+    
+    class Meta:
+        indexes = [
+            models.Index(fields=['establishment', 'is_available']),
+            models.Index(fields=['category']),
+        ]
+    
+    def __str__(self):
+        return f"{self.name} - {self.establishment.name}"
+
+
+ROOM_TYPES = (
+    ('standard', 'Standard Room'),
+    ('deluxe', 'Deluxe Room'),
+    ('suite', 'Suite'),
+    ('event_room', 'Event Room'),
+    ('conference_room', 'Conference Room'),
+)
+
+class HotelRoom(models.Model):
+    """Hotel rooms and event/conference rooms."""
+    establishment = models.ForeignKey(Establishment, on_delete=models.CASCADE, related_name='rooms')
+    room_type = models.CharField(max_length=50, choices=ROOM_TYPES, default='standard')
+    name = models.CharField(max_length=300)
+    description = models.TextField(blank=True)
+    price_per_night = models.DecimalField(decimal_places=2, max_digits=12)
+    capacity = models.IntegerField(default=2)
+    amenities = models.JSONField(default=list, blank=True, help_text='e.g. ["WiFi", "AC", "Mini Bar"]')
+    images = models.JSONField(default=list, blank=True, help_text='List of image URLs')
+    is_available = models.BooleanField(default=True)
+    created_at = models.DateTimeField(default=datetime.now)
+    
+    class Meta:
+        indexes = [
+            models.Index(fields=['establishment', 'room_type', 'is_available']),
+        ]
+    
+    def __str__(self):
+        return f"{self.name} ({self.get_room_type_display()}) - {self.establishment.name}"
+
+
+BOOKING_TYPES = (
+    ('hotel_stay', 'Hotel Stay'),
+    ('event_room', 'Event Room Booking'),
+    ('restaurant_reservation', 'Restaurant Reservation'),
+)
+
+BOOKING_STATUS = (
+    ('pending', 'Pending'),
+    ('confirmed', 'Confirmed'),
+    ('cancelled', 'Cancelled'),
+    ('completed', 'Completed'),
+    ('no_show', 'No Show'),
+)
+
+class Booking(models.Model):
+    """Reservations for hotels, event rooms, and restaurants."""
+    user = models.ForeignKey(Profile, on_delete=models.CASCADE, related_name='bookings')
+    establishment = models.ForeignKey(Establishment, on_delete=models.CASCADE, related_name='bookings')
+    hotel_room = models.ForeignKey(HotelRoom, on_delete=models.SET_NULL, null=True, blank=True, related_name='bookings')
+    
+    booking_type = models.CharField(max_length=50, choices=BOOKING_TYPES)
+    check_in = models.DateTimeField()
+    check_out = models.DateTimeField(null=True, blank=True)
+    guests = models.IntegerField(default=1)
+    total_price = models.DecimalField(decimal_places=2, max_digits=12, default=0)
+    
+    status = models.CharField(max_length=20, choices=BOOKING_STATUS, default='pending')
+    special_requests = models.TextField(blank=True)
+    
+    created_at = models.DateTimeField(default=datetime.now)
+    updated_at = models.DateTimeField(auto_now=True)
+    
+    class Meta:
+        indexes = [
+            models.Index(fields=['user', 'status']),
+            models.Index(fields=['establishment', 'check_in']),
+            models.Index(fields=['-created_at']),
+        ]
+    
+    def __str__(self):
+        return f"{self.get_booking_type_display()} at {self.establishment.name} by {self.user}"
+
+
+SERVICE_MODE = (
+    ('mobile', 'Mobile Service (Provider comes to you)'),
+    ('in_person', 'In-Person (Visit the service point)'),
+    ('both', 'Both Mobile and In-Person'),
+)
+
+class ServiceOffering(models.Model):
+    """Services offered by businesses or individuals with appointment booking."""
+    provider = models.ForeignKey(Profile, on_delete=models.CASCADE, related_name='service_offerings')
+    establishment = models.ForeignKey(
+        Establishment, on_delete=models.SET_NULL,
+        null=True, blank=True, related_name='service_offerings'
+    )
+    
+    name = models.CharField(max_length=300)
+    description = models.TextField(blank=True)
+    price = models.DecimalField(decimal_places=2, max_digits=12)
+    duration_minutes = models.IntegerField(default=60)
+    
+    service_mode = models.CharField(max_length=20, choices=SERVICE_MODE, default='in_person')
+    category = models.CharField(max_length=200, blank=True, help_text='e.g. Hair, Plumbing, Tutoring')
+    image = models.ImageField(upload_to='services/', null=True, blank=True)
+    
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(default=datetime.now)
+    
+    class Meta:
+        indexes = [
+            models.Index(fields=['provider', 'is_active']),
+            models.Index(fields=['category']),
+        ]
+    
+    def __str__(self):
+        return f"{self.name} by {self.provider}"
+
+
+class ServiceTimeSlot(models.Model):
+    """Preset available time slots for service delivery."""
+    service = models.ForeignKey(ServiceOffering, on_delete=models.CASCADE, related_name='time_slots')
+    date = models.DateField()
+    start_time = models.TimeField()
+    end_time = models.TimeField()
+    is_booked = models.BooleanField(default=False)
+    booked_by = models.ForeignKey(
+        Profile, on_delete=models.SET_NULL,
+        null=True, blank=True, related_name='booked_slots'
+    )
+    created_at = models.DateTimeField(default=datetime.now)
+    
+    class Meta:
+        indexes = [
+            models.Index(fields=['service', 'date', 'is_booked']),
+        ]
+        ordering = ['date', 'start_time']
+    
+    def __str__(self):
+        return f"{self.service.name} - {self.date} {self.start_time}-{self.end_time}"
+
+
+ORDER_TYPES = (
+    ('product', 'Product Purchase'),
+    ('food', 'Food Order'),
+    ('hotel_booking', 'Hotel Booking'),
+    ('service_appointment', 'Service Appointment'),
+)
+
+DELIVERY_MODE = (
+    ('pickup', 'Pickup'),
+    ('delivery', 'Delivery'),
+    ('appointment', 'Appointment Attendance'),
+)
+
+ORDER_STATUS = (
+    ('pending', 'Pending'),
+    ('confirmed', 'Confirmed'),
+    ('preparing', 'Preparing'),
+    ('ready', 'Ready for Pickup'),
+    ('out_for_delivery', 'Out for Delivery'),
+    ('delivered', 'Delivered'),
+    ('completed', 'Completed'),
+    ('cancelled', 'Cancelled'),
+    ('refunded', 'Refunded'),
+)
+
+class Order(models.Model):
+    """Unified order model for all purchase types."""
+    import uuid
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    
+    buyer = models.ForeignKey(Profile, on_delete=models.CASCADE, related_name='orders')
+    establishment = models.ForeignKey(
+        Establishment, on_delete=models.SET_NULL,
+        null=True, blank=True, related_name='orders'
+    )
+    
+    order_type = models.CharField(max_length=50, choices=ORDER_TYPES, default='product')
+    delivery_mode = models.CharField(max_length=20, choices=DELIVERY_MODE, default='pickup')
+    
+    # Payment
+    payment_type = models.CharField(max_length=20, choices=PAY_TYPE, default='individual')
+    payment_group = models.ForeignKey(
+        PaymentGroups, on_delete=models.SET_NULL,
+        null=True, blank=True, related_name='orders'
+    )
+    transaction = models.ForeignKey(
+        TransactionToken, on_delete=models.SET_NULL,
+        null=True, blank=True, related_name='orders'
+    )
+    
+    # Order details
+    status = models.CharField(max_length=20, choices=ORDER_STATUS, default='pending')
+    total_amount = models.DecimalField(decimal_places=2, max_digits=12, default=0)
+    delivery_address = models.TextField(blank=True)
+    notes = models.TextField(blank=True)
+    
+    # Service appointment reference
+    service_time_slot = models.ForeignKey(
+        ServiceTimeSlot, on_delete=models.SET_NULL,
+        null=True, blank=True, related_name='orders'
+    )
+    
+    # Booking reference
+    booking = models.ForeignKey(
+        Booking, on_delete=models.SET_NULL,
+        null=True, blank=True, related_name='orders'
+    )
+    
+    created_at = models.DateTimeField(default=datetime.now)
+    updated_at = models.DateTimeField(auto_now=True)
+    
+    class Meta:
+        indexes = [
+            models.Index(fields=['buyer', 'status']),
+            models.Index(fields=['establishment', '-created_at']),
+            models.Index(fields=['-created_at']),
+        ]
+        ordering = ['-created_at']
+    
+    def __str__(self):
+        return f"Order {self.id} - {self.get_order_type_display()} ({self.get_status_display()})"
+
+
+class OrderItem(models.Model):
+    """Individual items within an order."""
+    order = models.ForeignKey(Order, on_delete=models.CASCADE, related_name='items')
+    product = models.ForeignKey(Product, on_delete=models.SET_NULL, null=True, blank=True)
+    menu_item = models.ForeignKey(MenuItem, on_delete=models.SET_NULL, null=True, blank=True)
+    
+    name = models.CharField(max_length=300, blank=True, help_text='Snapshot of item name at order time')
+    quantity = models.IntegerField(default=1)
+    unit_price = models.DecimalField(decimal_places=2, max_digits=12, default=0)
+    subtotal = models.DecimalField(decimal_places=2, max_digits=12, default=0)
+    
+    def save(self, *args, **kwargs):
+        self.subtotal = self.unit_price * self.quantity
+        if not self.name:
+            if self.product:
+                self.name = self.product.name
+            elif self.menu_item:
+                self.name = self.menu_item.name
+        super().save(*args, **kwargs)
+    
+    def __str__(self):
+        return f"{self.quantity}x {self.name} = {self.subtotal}"
+
+
+class Review(models.Model):
+    """Reviews for establishments."""
+    user = models.ForeignKey(Profile, on_delete=models.CASCADE, related_name='reviews')
+    establishment = models.ForeignKey(Establishment, on_delete=models.CASCADE, related_name='reviews')
+    rating = models.IntegerField(default=5, help_text='Rating from 1 to 5')
+    comment = models.TextField(blank=True)
+    created_at = models.DateTimeField(default=datetime.now)
+    
+    class Meta:
+        unique_together = ['user', 'establishment']
+        indexes = [
+            models.Index(fields=['establishment', '-created_at']),
+        ]
+        ordering = ['-created_at']
+    
+    def __str__(self):
+        return f"{self.user} rated {self.establishment.name} {self.rating}/5"

@@ -12,11 +12,13 @@ from itertools import chain
 
 from .models import (
     Opinion, OpinionLike, OpinionComment, OpinionRepost, 
-    Follow, Bookmark, OpinionMedia, ContentBlock, ContentReport, HiddenContent
+    Follow, Bookmark, OpinionMedia, ContentBlock, ContentReport, HiddenContent,
+    Story, StoryView as StoryViewModel
 )
 from .serializers import (
     OpinionSerializer, OpinionCreateSerializer, OpinionCommentSerializer,
-    FollowSerializer, UserFollowSerializer, BookmarkSerializer
+    FollowSerializer, UserFollowSerializer, BookmarkSerializer,
+    StorySerializer, StoryCreateSerializer
 )
 from Authentication.models import CustomUser
 
@@ -118,7 +120,61 @@ class OpinionViewSet(viewsets.ModelViewSet):
             from rest_framework.exceptions import ValidationError
             raise ValidationError({'content': f'Maximum {max_chars} characters allowed for your tier.'})
         
-        opinion = serializer.save(user=user)
+        # Handle entity authorship - get organisation or institution from request
+        organisation = None
+        institution = None
+        
+        org_id = self.request.data.get('organisation')
+        inst_id = self.request.data.get('institution')
+        
+        if org_id:
+            try:
+                from Organisation.models import Organisation, OrganisationMember
+                # Verify user is a member of the organization
+                if OrganisationMember.objects.filter(
+                    organisation_id=org_id, 
+                    user=user, 
+                    is_active=True
+                ).exists():
+                    organisation = Organisation.objects.get(id=org_id)
+            except Exception as e:
+                print(f"Error setting organisation: {e}")
+        
+        if inst_id:
+            try:
+                from Institution.models import Institution, InstitutionMember
+                # Verify user is a member of the institution
+                if InstitutionMember.objects.filter(
+                    institution_id=inst_id, 
+                    user=user, 
+                    is_active=True
+                ).exists():
+                    institution = Institution.objects.get(id=inst_id)
+            except Exception as e:
+                print(f"Error setting institution: {e}")
+        
+        # Handle room-scoped opinions
+        room = None
+        room_id = self.request.data.get('room')
+        if room_id:
+            try:
+                from Rooms.models import Room
+                room = Room.objects.get(id=room_id)
+            except Exception as e:
+                print(f"Error setting room: {e}")
+        
+        # Handle anonymous posting
+        is_anonymous = self.request.data.get('is_anonymous', False)
+        if isinstance(is_anonymous, str):
+            is_anonymous = is_anonymous.lower() in ('true', '1', 'yes')
+        
+        opinion = serializer.save(
+            user=user, 
+            organisation=organisation, 
+            institution=institution,
+            room=room,
+            is_anonymous=bool(is_anonymous)
+        )
         
         # Handle media files
         media_files = self.request.FILES.getlist('media')
@@ -174,6 +230,24 @@ class OpinionViewSet(viewsets.ModelViewSet):
         
         serializer = OpinionSerializer(queryset, many=True, context={'request': request})
         return Response(serializer.data)
+    
+    @action(detail=False, methods=['get'], url_path='room/(?P<room_id>[^/.]+)')
+    def room_opinions(self, request, room_id=None):
+        """Get opinions for a specific room"""
+        queryset = Opinion.objects.filter(
+            is_deleted=False,
+            room_id=room_id
+        ).select_related('user', 'reposted_by').prefetch_related('media_files').order_by('-created_at')
+        
+        # Exclude blocked users if authenticated
+        if request.user.is_authenticated:
+            blocked_ids = ContentBlock.objects.filter(user=request.user).values_list('blocked_user_id', flat=True)
+            hidden_ids = HiddenContent.objects.filter(user=request.user).values_list('opinion_id', flat=True)
+            queryset = queryset.exclude(user_id__in=blocked_ids).exclude(id__in=hidden_ids)
+        
+        page = self.paginate_queryset(queryset)
+        serializer = OpinionSerializer(page, many=True, context={'request': request})
+        return self.get_paginated_response(serializer.data)
     
     @action(detail=True, methods=['post'], permission_classes=[permissions.IsAuthenticated])
     def like(self, request, pk=None):
@@ -696,4 +770,123 @@ class NewContentCheckView(APIView):
             })
         except ValueError:
             return Response({'has_new': False})
+
+
+class StoryViewSet(viewsets.ModelViewSet):
+    """
+    ViewSet for Instagram/WhatsApp-style stories.
+    Stories are grouped by user on the frontend.
+    """
+    serializer_class = StorySerializer
+    permission_classes = [permissions.IsAuthenticatedOrReadOnly]
+    parser_classes = [MultiPartParser, FormParser]
+
+    def get_queryset(self):
+        """Return only active, non-expired stories"""
+        return Story.objects.filter(
+            is_active=True,
+            expires_at__gt=timezone.now()
+        ).select_related('user').order_by('-created_at')
+
+    def get_serializer_class(self):
+        if self.action == 'create':
+            return StoryCreateSerializer
+        return StorySerializer
+
+    def list(self, request):
+        """Get stories from followed users, grouped by user"""
+        user = request.user
+        if not user.is_authenticated:
+            return Response([])
+
+        # Get stories from followed users + own stories
+        following_ids = list(user.following.values_list('following_id', flat=True))
+        following_ids.append(user.id)
+
+        stories = self.get_queryset().filter(user_id__in=following_ids)
+
+        # Group stories by user
+        from collections import OrderedDict
+        grouped = OrderedDict()
+        for story in stories:
+            uid = story.user_id
+            if uid not in grouped:
+                user_data = {
+                    'id': story.user.id,
+                    'email': story.user.email,
+                    'first_name': story.user.first_name,
+                    'last_name': story.user.last_name,
+                    'full_name': f"{story.user.first_name or ''} {story.user.last_name or ''}".strip() or story.user.email,
+                    'avatar_url': None,
+                }
+                try:
+                    if hasattr(story.user, 'user_profile') and story.user.user_profile.avatar:
+                        user_data['avatar_url'] = request.build_absolute_uri(story.user.user_profile.avatar.url)
+                except:
+                    pass
+                grouped[uid] = {
+                    'user': user_data,
+                    'stories': [],
+                    'has_unviewed': False,
+                }
+            serialized = StorySerializer(story, context={'request': request}).data
+            grouped[uid]['stories'].append(serialized)
+            if not serialized.get('has_viewed'):
+                grouped[uid]['has_unviewed'] = True
+
+        # Put current user's stories first, then users with unviewed stories
+        result = []
+        if user.id in grouped:
+            result.append(grouped.pop(user.id))
+        unviewed = [v for v in grouped.values() if v['has_unviewed']]
+        viewed = [v for v in grouped.values() if not v['has_unviewed']]
+        result.extend(unviewed)
+        result.extend(viewed)
+
+        return Response(result)
+
+    def perform_create(self, serializer):
+        serializer.save(user=self.request.user)
+
+    @action(detail=True, methods=['post'], permission_classes=[permissions.IsAuthenticated])
+    def view(self, request, pk=None):
+        """Mark a story as viewed"""
+        story = self.get_object()
+        if story.user == request.user:
+            return Response({'viewed': True})
+
+        _, created = StoryViewModel.objects.get_or_create(
+            story=story,
+            viewer=request.user
+        )
+        if created:
+            story.views_count += 1
+            story.save(update_fields=['views_count'])
+
+        return Response({'viewed': True, 'views_count': story.views_count})
+
+    @action(detail=False, methods=['get'], permission_classes=[permissions.IsAuthenticated])
+    def my_stories(self, request):
+        """Get current user's active stories"""
+        stories = self.get_queryset().filter(user=request.user)
+        serializer = StorySerializer(stories, many=True, context={'request': request})
+        return Response(serializer.data)
+
+    @action(detail=True, methods=['get'], permission_classes=[permissions.IsAuthenticated])
+    def viewers(self, request, pk=None):
+        """Get list of viewers for a story (only story owner)"""
+        story = self.get_object()
+        if story.user != request.user:
+            return Response({'detail': 'Only the story owner can see viewers'}, status=status.HTTP_403_FORBIDDEN)
+
+        views = StoryViewModel.objects.filter(story=story).select_related('viewer')
+        data = [
+            {
+                'id': v.viewer.id,
+                'name': f"{v.viewer.first_name or ''} {v.viewer.last_name or ''}".strip() or v.viewer.email,
+                'viewed_at': v.viewed_at,
+            }
+            for v in views
+        ]
+        return Response(data)
 

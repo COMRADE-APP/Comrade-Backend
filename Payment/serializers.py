@@ -182,7 +182,7 @@ class PaymentGroupsCreateSerializer(serializers.ModelSerializer):
         model = PaymentGroups
         fields = ['name', 'description', 'max_capacity', 'target_amount', 'expiry_date', 
                   'deadline', 'auto_purchase', 'requires_approval', 'is_public',
-                  'contribution_type', 'contribution_amount', 'frequency']
+                  'contribution_type', 'contribution_amount', 'frequency', 'group_type']
 
 class CreateTransactionSerializer(serializers.Serializer):
     recipient_email = serializers.EmailField()
@@ -306,3 +306,214 @@ class ShopRegistrationSerializer(serializers.ModelSerializer):
             profile = Profile.objects.get(user=request.user)
             validated_data['owner'] = profile
         return super().create(validated_data)
+
+
+# ============================================================================
+# MARKETPLACE SERIALIZERS
+# ============================================================================
+
+from Payment.models import (
+    Establishment, EstablishmentBranch, MenuItem, HotelRoom,
+    Booking, ServiceOffering, ServiceTimeSlot, Order, OrderItem, Review
+)
+
+
+class EstablishmentBranchSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = EstablishmentBranch
+        fields = '__all__'
+        read_only_fields = ['created_at']
+
+
+class MenuItemSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = MenuItem
+        fields = '__all__'
+        read_only_fields = ['created_at']
+
+
+class HotelRoomSerializer(serializers.ModelSerializer):
+    room_type_display = serializers.CharField(source='get_room_type_display', read_only=True)
+    
+    class Meta:
+        model = HotelRoom
+        fields = '__all__'
+        read_only_fields = ['created_at']
+
+
+class ReviewSerializer(serializers.ModelSerializer):
+    user_name = serializers.SerializerMethodField()
+    
+    class Meta:
+        model = Review
+        fields = '__all__'
+        read_only_fields = ['user', 'created_at']
+    
+    def get_user_name(self, obj):
+        return f"{obj.user.user.first_name} {obj.user.user.last_name}"
+    
+    def create(self, validated_data):
+        request = self.context.get('request')
+        if request and hasattr(request, 'user'):
+            profile = Profile.objects.get(user=request.user)
+            validated_data['user'] = profile
+        return super().create(validated_data)
+
+
+class EstablishmentSerializer(serializers.ModelSerializer):
+    owner_name = serializers.SerializerMethodField()
+    establishment_type_display = serializers.CharField(source='get_establishment_type_display', read_only=True)
+    branches = EstablishmentBranchSerializer(many=True, read_only=True)
+    branch_count = serializers.SerializerMethodField()
+    recent_reviews = serializers.SerializerMethodField()
+    
+    class Meta:
+        model = Establishment
+        fields = '__all__'
+        read_only_fields = ['owner', 'slug', 'rating', 'review_count', 'is_verified', 'created_at', 'updated_at']
+    
+    def get_owner_name(self, obj):
+        return f"{obj.owner.user.first_name} {obj.owner.user.last_name}"
+    
+    def get_branch_count(self, obj):
+        return obj.branches.filter(is_active=True).count()
+    
+    def get_recent_reviews(self, obj):
+        reviews = obj.reviews.all()[:3]
+        return ReviewSerializer(reviews, many=True).data
+    
+    def create(self, validated_data):
+        from django.utils.text import slugify
+        import uuid
+        request = self.context.get('request')
+        if request and hasattr(request, 'user'):
+            profile = Profile.objects.get(user=request.user)
+            validated_data['owner'] = profile
+        # Auto-generate slug
+        name = validated_data.get('name', '')
+        slug = slugify(name)
+        if Establishment.objects.filter(slug=slug).exists():
+            slug = f"{slug}-{str(uuid.uuid4())[:8]}"
+        validated_data['slug'] = slug
+        return super().create(validated_data)
+
+
+class EstablishmentListSerializer(serializers.ModelSerializer):
+    """Lighter serializer for list views."""
+    establishment_type_display = serializers.CharField(source='get_establishment_type_display', read_only=True)
+    branch_count = serializers.SerializerMethodField()
+    
+    class Meta:
+        model = Establishment
+        fields = [
+            'id', 'name', 'slug', 'description', 'logo', 'banner',
+            'establishment_type', 'establishment_type_display', 'categories',
+            'city', 'country', 'rating', 'review_count', 'branch_count',
+            'delivery_available', 'pickup_available', 'dine_in_available',
+            'is_active', 'is_verified'
+        ]
+    
+    def get_branch_count(self, obj):
+        return obj.branches.filter(is_active=True).count()
+
+
+class BookingSerializer(serializers.ModelSerializer):
+    establishment_name = serializers.CharField(source='establishment.name', read_only=True)
+    room_name = serializers.CharField(source='hotel_room.name', read_only=True)
+    booking_type_display = serializers.CharField(source='get_booking_type_display', read_only=True)
+    status_display = serializers.CharField(source='get_status_display', read_only=True)
+    
+    class Meta:
+        model = Booking
+        fields = '__all__'
+        read_only_fields = ['user', 'status', 'created_at', 'updated_at']
+    
+    def create(self, validated_data):
+        request = self.context.get('request')
+        if request and hasattr(request, 'user'):
+            profile = Profile.objects.get(user=request.user)
+            validated_data['user'] = profile
+        return super().create(validated_data)
+
+
+class ServiceOfferingSerializer(serializers.ModelSerializer):
+    provider_name = serializers.SerializerMethodField()
+    service_mode_display = serializers.CharField(source='get_service_mode_display', read_only=True)
+    establishment_name = serializers.CharField(source='establishment.name', read_only=True)
+    available_slots_count = serializers.SerializerMethodField()
+    
+    class Meta:
+        model = ServiceOffering
+        fields = '__all__'
+        read_only_fields = ['provider', 'created_at']
+    
+    def get_provider_name(self, obj):
+        return f"{obj.provider.user.first_name} {obj.provider.user.last_name}"
+    
+    def get_available_slots_count(self, obj):
+        from datetime import date
+        return obj.time_slots.filter(is_booked=False, date__gte=date.today()).count()
+    
+    def create(self, validated_data):
+        request = self.context.get('request')
+        if request and hasattr(request, 'user'):
+            profile = Profile.objects.get(user=request.user)
+            validated_data['provider'] = profile
+        return super().create(validated_data)
+
+
+class ServiceTimeSlotSerializer(serializers.ModelSerializer):
+    service_name = serializers.CharField(source='service.name', read_only=True)
+    
+    class Meta:
+        model = ServiceTimeSlot
+        fields = '__all__'
+        read_only_fields = ['is_booked', 'booked_by', 'created_at']
+
+
+class OrderItemSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = OrderItem
+        fields = '__all__'
+        read_only_fields = ['subtotal']
+
+
+class OrderSerializer(serializers.ModelSerializer):
+    items = OrderItemSerializer(many=True, read_only=True)
+    buyer_name = serializers.SerializerMethodField()
+    order_type_display = serializers.CharField(source='get_order_type_display', read_only=True)
+    delivery_mode_display = serializers.CharField(source='get_delivery_mode_display', read_only=True)
+    status_display = serializers.CharField(source='get_status_display', read_only=True)
+    establishment_name = serializers.CharField(source='establishment.name', read_only=True)
+    
+    class Meta:
+        model = Order
+        fields = '__all__'
+        read_only_fields = ['id', 'buyer', 'status', 'total_amount', 'created_at', 'updated_at']
+    
+    def get_buyer_name(self, obj):
+        return f"{obj.buyer.user.first_name} {obj.buyer.user.last_name}"
+
+
+class CreateOrderSerializer(serializers.Serializer):
+    """Serializer for creating orders with items."""
+    establishment_id = serializers.IntegerField(required=False)
+    order_type = serializers.ChoiceField(choices=['product', 'food', 'hotel_booking', 'service_appointment'])
+    delivery_mode = serializers.ChoiceField(choices=['pickup', 'delivery', 'appointment'])
+    payment_type = serializers.ChoiceField(choices=['individual', 'group'], default='individual')
+    payment_group_id = serializers.UUIDField(required=False)
+    delivery_address = serializers.CharField(required=False, allow_blank=True)
+    notes = serializers.CharField(required=False, allow_blank=True)
+    
+    # For service appointments
+    service_time_slot_id = serializers.IntegerField(required=False)
+    
+    # For bookings
+    booking_id = serializers.IntegerField(required=False)
+    
+    # Items
+    items = serializers.ListField(
+        child=serializers.DictField(),
+        required=False,
+        help_text='List of {product_id or menu_item_id, quantity}'
+    )

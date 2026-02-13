@@ -94,21 +94,30 @@ class FundingDocument(models.Model):
 
 class FundingRequest(models.Model):
     STATUS_CHOICES = [
-        ('open', 'Open for Funding'),
-        ('closing', 'Closing Soon'),
+        ('draft', 'Draft'),
+        ('submitted', 'Submitted'),
+        ('under_review', 'Under Review'),
+        ('due_diligence', 'Due Diligence'),
+        ('negotiating', 'Negotiating'),
+        ('approved', 'Approved'),
         ('funded', 'Fully Funded'),
+        ('rejected', 'Rejected'),
+        ('withdrawn', 'Withdrawn'),
         ('closed', 'Closed'),
     ]
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     business = models.ForeignKey(Business, on_delete=models.CASCADE, related_name='funding_requests')
+    target_venture = models.ForeignKey('CapitalVenture', on_delete=models.SET_NULL, null=True, blank=True, related_name='received_requests', help_text="Target funding organization")
     amount_needed = models.DecimalField(max_digits=15, decimal_places=2)
     equity_offered = models.DecimalField(max_digits=5, decimal_places=2, help_text="Percentage equity offered")
     use_of_funds = models.TextField(help_text="How will the funds be used?")
     min_investment = models.DecimalField(max_digits=12, decimal_places=2, default=0)
     
-    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='open')
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='draft')
+    negotiation_room = models.ForeignKey('Rooms.Room', on_delete=models.SET_NULL, null=True, blank=True, related_name='funding_requests', help_text="Room for negotiations")
     created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
     expires_at = models.DateTimeField(null=True, blank=True)
 
     def __str__(self):
@@ -122,9 +131,11 @@ class InvestmentOpportunity(models.Model):
     TYPE_CHOICES = [
         ('stock', 'Stock Market'),
         ('mmf', 'Money Market Fund'),
-        ('bond', 'Government/Corp Bond'),
+        ('bond_domestic', 'Domestic Bond'),
+        ('bond_foreign', 'Foreign Bond'),
         ('lending', 'P2P Lending'),
         ('crypto', 'Cryptocurrency'),
+        ('agency', 'Investment Agency'),
     ]
 
     RISK_CHOICES = [
@@ -249,23 +260,50 @@ class CapitalVenture(models.Model):
     name = models.CharField(max_length=255)
     description = models.TextField()
     
-    # Link to organization or institution (import these if available)
-    organization_id = models.UUIDField(null=True, blank=True)
-    institution_id = models.UUIDField(null=True, blank=True)
+    # Link to organization or institution
+    organisation = models.ForeignKey('Organisation.Organisation', on_delete=models.SET_NULL, null=True, blank=True, related_name='capital_ventures')
+    institution = models.ForeignKey('Institution.Institution', on_delete=models.SET_NULL, null=True, blank=True, related_name='capital_ventures')
+    created_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='created_ventures', null=True)
     
     total_fund = models.DecimalField(max_digits=15, decimal_places=2)
     available_fund = models.DecimalField(max_digits=15, decimal_places=2)
     investment_criteria = models.TextField(help_text="What types of businesses this fund invests in")
+    investment_focus = models.CharField(max_length=100, blank=True, help_text="e.g. Tech, Agriculture, Healthcare")
     
     min_investment = models.DecimalField(max_digits=12, decimal_places=2, default=0)
     max_investment = models.DecimalField(max_digits=15, decimal_places=2)
     
     is_active = models.BooleanField(default=True)
+    is_verified = models.BooleanField(default=False)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
     def __str__(self):
         return self.name
+
+
+class FundingRequestReview(models.Model):
+    """Track status changes and reviews on funding requests"""
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    funding_request = models.ForeignKey(FundingRequest, on_delete=models.CASCADE, related_name='reviews')
+    reviewer = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='funding_reviews')
+    venture = models.ForeignKey(CapitalVenture, on_delete=models.CASCADE, null=True, blank=True)
+    
+    from_status = models.CharField(max_length=20)
+    to_status = models.CharField(max_length=20)
+    notes = models.TextField(blank=True, help_text="Review notes or feedback")
+    
+    # Document review
+    documents_reviewed = models.ManyToManyField(FundingDocument, blank=True, related_name='reviews')
+    documents_requested = models.TextField(blank=True, help_text="Additional documents requested")
+    
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f"Review: {self.from_status} -> {self.to_status}"
 
 
 class VentureBid(models.Model):

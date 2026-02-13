@@ -10,13 +10,13 @@ from Authentication.views_totp import (
 )
 from Authentication.views import (
     RegisterView, VerifyView, LoginView, LogoutView, LoginVerifyView,
-    RegisterVerifyView,
+    RegisterVerifyView, HeartbeatView,
     PasswordResetRequestView, PasswordResetConfirmView,
     Setup2FAView, Confirm2FASetupView,
     ResendOTPView, VerifySMSOTPView, Verify2FAView,
     CustomUserViewSet, LecturerViewSet, OrgStaffViewSet,
     StudentAdminViewSet, OrgAdminViewSet, InstAdminViewSet,
-    InstStaffViewSet, ProfileViewSet
+    InstStaffViewSet, ProfileViewSet, MeView
 )
 from Authentication.views_extra import (
     ChangePasswordView, UpdateProfileView,
@@ -66,6 +66,8 @@ urlpatterns = [
     path('logout/', LogoutView.as_view(), name='logout'),
     path('resend-otp/', ResendOTPView.as_view(), name='resend-otp'),
     path('check-email/', CheckEmailView.as_view(), name='check-email'),
+    path('me/', MeView.as_view(), name='me'),
+    path('heartbeat/', HeartbeatView.as_view(), name='heartbeat'),
     
     # 2FA/OTP Verification
     path('verify-2fa/', Verify2FAView.as_view(), name='verify-2fa'),

@@ -106,6 +106,10 @@ class CustomUser(AbstractUser):
     deletion_reason = models.TextField(blank=True)
     deactivated_at = models.DateTimeField(null=True, blank=True)
 
+    # Online Status
+    last_seen = models.DateTimeField(null=True, blank=True)
+    is_online = models.BooleanField(default=False)
+
     
     USERNAME_FIELD = 'email'
     REQUIRED_FIELDS = ['first_name', 'last_name']
