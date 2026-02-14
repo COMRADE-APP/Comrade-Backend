@@ -136,8 +136,8 @@ class ResourceViewSet(ModelViewSet):
     # renderer_classes = [PDFRenderer]
 
     def perform_create(self, serializer):
-        """Create resource and optionally link to a room"""
-        instance = serializer.save()
+        """Create resource and optionally link to a room and handle visibility"""
+        instance = serializer.save(created_by=self.request.user)
         
         # Check if room parameter was provided
         room_id = self.request.data.get('room')
@@ -147,6 +147,41 @@ class ResourceViewSet(ModelViewSet):
                 room.resources.add(instance)
             except Room.DoesNotExist:
                 pass  # Silently ignore invalid room ID
+        
+        # Handle Advanced Visibility
+        visibility_data = self.request.data.get('visibility_settings')
+
+        import json
+        if visibility_data:
+            if isinstance(visibility_data, str):
+                try:
+                    visibility_data = json.loads(visibility_data)
+                except json.JSONDecodeError:
+                    visibility_data = None
+        
+        if visibility_data and isinstance(visibility_data, dict):
+            # Create ResourceVisibility
+            resource_visibility = ResourceVisibility.objects.create(resource=instance)
+            
+            for group_name, ids in visibility_data.items():
+                if group_name in VISIBILITY_MAP:
+                   model, field_name = VISIBILITY_MAP[group_name]
+                   # Skip special keys that don't map to models directly or handle differently if needed
+                   if model: 
+                       objects = model.objects.filter(id__in=ids)
+                       getattr(resource_visibility, field_name).add(*objects)
+            
+            resource_visibility.save()
+            
+            # Log it
+            try:
+                VisibilityLog.objects.create(
+                    resource=instance,
+                    new_visibility=resource_visibility,
+                    changed_by=self.request.user
+                )
+            except Exception as e:
+                print(f"Error logging visibility: {e}")
 
     @action(detail=True, methods=['get'], renderer_classes=[PDFRenderer])
     def view_resource(self, request, pk=None):

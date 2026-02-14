@@ -10,7 +10,18 @@ import uuid
 
 
 
+from Articles.models import Article
+from Opinions.models import Opinion
+from Research.models import ResearchProject
+
 # Resource types
+RESOURCE_STATUS = (
+    ('draft', 'Draft'),
+    ('published', 'Published'),
+    ('announcement_requested', 'Announcement Requested'),
+    ('archived', 'Archived'),
+)
+
 RESOURCE_TYPES = (
     ('media_link', 'Media Link'),
     ('text', 'Text'),
@@ -147,6 +158,15 @@ class Resource(models.Model):
     editors = models.ManyToManyField(Profile, related_name='edited_resources', blank=True)
     created_on = models.DateTimeField(default=datetime.now)
     
+    # New fields
+    status = models.CharField(max_length=50, choices=RESOURCE_STATUS, default='draft')
+    category = models.CharField(max_length=100, blank=True, null=True)
+    
+    # Linking fields
+    linked_opinion = models.ForeignKey(Opinion, on_delete=models.SET_NULL, null=True, blank=True, related_name='linked_resources')
+    linked_article = models.ForeignKey(Article, on_delete=models.SET_NULL, null=True, blank=True, related_name='linked_resources')
+    linked_research = models.ForeignKey(ResearchProject, on_delete=models.SET_NULL, null=True, blank=True, related_name='linked_resources')
+
 
     def clean(self):
         # Ensure content matches file_type

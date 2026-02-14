@@ -65,6 +65,11 @@ class Gig(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
+    # Tracking metrics
+    views_count = models.PositiveIntegerField(default=0)
+    shares_count = models.PositiveIntegerField(default=0)
+    clicks_count = models.PositiveIntegerField(default=0)
+
     def __str__(self):
         return f"{self.title} - {self.pay_amount}"
 
@@ -143,6 +148,11 @@ class CareerOpportunity(models.Model):
     
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
+
+    # Tracking metrics
+    views_count = models.PositiveIntegerField(default=0)
+    shares_count = models.PositiveIntegerField(default=0)
+    clicks_count = models.PositiveIntegerField(default=0)
 
     def __str__(self):
         return f"{self.title} at {self.company_name}"

@@ -22,6 +22,22 @@ class OrganisationViewSet(ModelViewSet):
         print(self.request.data)
         """Set created_by to the authenticated user"""
         serializer.save(created_by=self.request.user)
+
+    @action(detail=True, methods=['post'], permission_classes=[IsAuthenticated])
+    def follow(self, request, pk=None):
+        organisation = self.get_object()
+        if organisation.followers.filter(id=request.user.id).exists():
+             return Response({'detail': 'Already following'}, status=status.HTTP_400_BAD_REQUEST)
+        organisation.followers.add(request.user)
+        return Response({'status': 'followed', 'followers_count': organisation.followers.count()})
+
+    @action(detail=True, methods=['post'], permission_classes=[IsAuthenticated])
+    def unfollow(self, request, pk=None):
+        organisation = self.get_object()
+        if not organisation.followers.filter(id=request.user.id).exists():
+             return Response({'detail': 'Not following'}, status=status.HTTP_400_BAD_REQUEST)
+        organisation.followers.remove(request.user)
+        return Response({'status': 'unfollowed', 'followers_count': organisation.followers.count()})
     
     @action(detail=True, methods=['get'])
     def members(self, request, pk=None):

@@ -106,11 +106,13 @@ class Institution(models.Model):
     allow_public_signup = models.BooleanField(default=False)
     require_email_domain = models.BooleanField(default=False)
     
-    # Logo
     # Logo/Media
     logo_url = models.URLField(blank=True, null=True) # Keep for backward compatibility or external logos
     profile_picture = models.ImageField(upload_to='institution_profiles/', null=True, blank=True)
     cover_picture = models.ImageField(upload_to='institution_covers/', null=True, blank=True)
+
+    # Followers
+    followers = models.ManyToManyField('Authentication.CustomUser', blank=True, related_name='followed_institutions')
     
     class Meta:
         indexes = [

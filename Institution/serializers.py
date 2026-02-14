@@ -3,6 +3,7 @@ Institution App Serializers
 Includes serializers for verification system and hierarchical institutional structures
 """
 from rest_framework.serializers import ModelSerializer
+from rest_framework import serializers
 from Institution.models import (
     # Verification System Models
     Institution,
@@ -48,6 +49,32 @@ class InstitutionSerializer(ModelSerializer):
         model = Institution
         fields = '__all__'
         read_only_fields = ['created_at', 'updated_at', 'created_by', 'verified_at', 'submitted_at']
+
+    current_user_role = serializers.SerializerMethodField()
+
+    def get_current_user_role(self, obj):
+        request = self.context.get('request')
+        if request and request.user.is_authenticated:
+            if obj.created_by == request.user:
+                return 'creator'
+            try:
+                member = InstitutionMember.objects.get(institution=obj, user=request.user)
+                return member.role
+            except InstitutionMember.DoesNotExist:
+                return None
+        return None
+
+    is_following = serializers.SerializerMethodField()
+    followers_count = serializers.SerializerMethodField()
+
+    def get_is_following(self, obj):
+        request = self.context.get('request')
+        if request and request.user.is_authenticated:
+            return obj.followers.filter(id=request.user.id).exists()
+        return False
+
+    def get_followers_count(self, obj):
+        return obj.followers.count()
 
 
 class InstitutionVerificationDocumentSerializer(ModelSerializer):

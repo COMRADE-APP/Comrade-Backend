@@ -281,8 +281,12 @@ class UserFollowSerializer(serializers.ModelSerializer):
     
     def get_avatar_url(self, obj):
         try:
-            if hasattr(obj, 'profile') and obj.profile.avatar:
-                return obj.profile.avatar.url
+            profile = getattr(obj, 'user_profile', None) or getattr(obj, 'profile', None)
+            if profile and profile.avatar:
+                request = self.context.get('request')
+                if request:
+                    return request.build_absolute_uri(profile.avatar.url)
+                return profile.avatar.url
         except:
             pass
         return None
@@ -301,8 +305,9 @@ class UserFollowSerializer(serializers.ModelSerializer):
     
     def get_bio(self, obj):
         try:
-            if hasattr(obj, 'profile'):
-                return obj.profile.bio
+            profile = getattr(obj, 'user_profile', None) or getattr(obj, 'profile', None)
+            if profile:
+                return profile.bio
         except:
             pass
         return ""

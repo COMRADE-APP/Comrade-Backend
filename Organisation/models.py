@@ -40,6 +40,9 @@ class Organisation(models.Model):
     profile_picture = models.ImageField(upload_to='organisation_profiles/', null=True, blank=True)
     cover_picture = models.ImageField(upload_to='organisation_covers/', null=True, blank=True)
 
+    # Followers
+    followers = models.ManyToManyField('Authentication.CustomUser', blank=True, related_name='followed_organisations')
+
 
 
 class OrgBranch(models.Model):

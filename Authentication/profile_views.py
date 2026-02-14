@@ -22,6 +22,7 @@ from Authentication.serializers import (
     CustomUserSerializer
 )
 from Authentication.activity_logger import log_user_activity
+from Notifications.models import create_notification, Notification
 
 logger = logging.getLogger(__name__)
 
@@ -76,6 +77,29 @@ class UserProfileDetailView(APIView):
     def get(self, request, user_id):
         user = get_object_or_404(CustomUser, id=user_id, account_status='active')
         profile, created = UserProfile.objects.get_or_create(user=user)
+        
+        # Create profile view notification (once every 24h per viewer)
+        if request.user.is_authenticated and request.user.id != user.id:
+            try:
+                recent_view = Notification.objects.filter(
+                    recipient=user,
+                    actor=request.user,
+                    notification_type='profile_view',
+                    created_at__gte=timezone.now() - timedelta(hours=24)
+                ).exists()
+                
+                if not recent_view:
+                    create_notification(
+                        recipient=user,
+                        actor=request.user,
+                        notification_type='profile_view',
+                        title='Profile View',
+                        message=f'{request.user.first_name} viewed your profile',
+                        action_url=f'/profile/{request.user.id}'
+                    )
+            except Exception as e:
+                logger.error(f"Error creating profile view notification: {e}")
+
         serializer = UserProfileSerializer(profile, context={'request': request})
         return Response(serializer.data)
 

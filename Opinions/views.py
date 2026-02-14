@@ -3,7 +3,7 @@ from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.pagination import PageNumberPagination
 from rest_framework.views import APIView
-from rest_framework.parsers import MultiPartParser, FormParser
+from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
 from django.db.models import Q, Count
 from django.db import transaction, models
 from django.utils import timezone
@@ -66,7 +66,7 @@ class OpinionViewSet(viewsets.ModelViewSet):
     serializer_class = OpinionSerializer
     pagination_class = OpinionPagination
     permission_classes = [permissions.IsAuthenticatedOrReadOnly, IsOwnerOrReadOnly]
-    parser_classes = [MultiPartParser, FormParser]
+    parser_classes = [MultiPartParser, FormParser, JSONParser]
     
     def get_queryset(self):
         user = self.request.user
@@ -196,6 +196,24 @@ class OpinionViewSet(viewsets.ModelViewSet):
                 mime_type=file.content_type,
                 order=i
             )
+            
+        # Handle mentioned users notifications
+        mentioned_user_ids = self.request.data.getlist('mentioned_users')
+        if mentioned_user_ids:
+            # Deduplicate
+            mentioned_user_ids = list(set(mentioned_user_ids))
+            for user_id in mentioned_user_ids:
+                try:
+                    user_to_notify = CustomUser.objects.get(id=user_id)
+                    create_interaction_notification(
+                        user, 
+                        user_to_notify, 
+                        'mention', 
+                        opinion,
+                        f'{user.first_name} mentioned you in a post'
+                    )
+                except Exception as e:
+                    print(f"Error notifying mentioned user {user_id}: {e}")
     
     @action(detail=False, methods=['get'], permission_classes=[permissions.IsAuthenticated])
     def feed(self, request):
@@ -308,6 +326,28 @@ class OpinionViewSet(viewsets.ModelViewSet):
         
         return Response({'reposted': True, 'reposts_count': opinion.reposts_count})
     
+    @action(detail=True, methods=['get'])
+    def reposters(self, request, pk=None):
+        """Get users who reposted an opinion (filtered by following)"""
+        opinion = self.get_object()
+        
+        repost_users = OpinionRepost.objects.filter(opinion=opinion).values_list('user_id', flat=True)
+        
+        if request.user.is_authenticated:
+            following_ids = list(request.user.following.values_list('following_id', flat=True))
+            # Include self if I report it
+            following_ids.append(request.user.id)
+            
+            # Filter: only show reposters that I follow (or myself)
+            # Find intersection of reposters and following
+            valid_ids = list(set(repost_users) & set(following_ids))
+            users = CustomUser.objects.filter(id__in=valid_ids)
+        else:
+            return Response([])
+
+        serializer = UserFollowSerializer(users, many=True, context={'request': request})
+        return Response(serializer.data)
+
     @action(detail=True, methods=['post'], permission_classes=[permissions.IsAuthenticated])
     def share(self, request, pk=None):
         """Track share count"""

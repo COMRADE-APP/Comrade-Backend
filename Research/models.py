@@ -370,6 +370,10 @@ class ResearchPublication(models.Model):
     doi = models.CharField(max_length=200, blank=True, unique=True, null=True)
     isbn = models.CharField(max_length=20, blank=True)
     
+    # Financials
+    fee = models.DecimalField(max_digits=10, decimal_places=2, default=0.00, help_text="Publication access fee")
+    currency = models.CharField(max_length=3, default='USD')
+    
     # Metrics
     views = models.IntegerField(default=0)
     downloads = models.IntegerField(default=0)

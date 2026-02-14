@@ -71,7 +71,22 @@ class GigViewSet(viewsets.ModelViewSet):
         """Get recommended gigs based on user preferences"""
         recommendations = get_recommended_gigs(request.user)
         serializer = GigSerializer(recommendations, many=True)
+        serializer = GigSerializer(recommendations, many=True)
         return Response(serializer.data)
+
+    @action(detail=True, methods=['post'], permission_classes=[permissions.AllowAny])
+    def increment_view(self, request, pk=None):
+        gig = self.get_object()
+        gig.views_count += 1
+        gig.save()
+        return Response({'status': 'viewed', 'views': gig.views_count})
+
+    @action(detail=True, methods=['post'], permission_classes=[permissions.AllowAny])
+    def increment_share(self, request, pk=None):
+        gig = self.get_object()
+        gig.shares_count += 1
+        gig.save()
+        return Response({'status': 'shared', 'shares': gig.shares_count})
 
 
 class GigApplicationViewSet(viewsets.ModelViewSet):
@@ -152,7 +167,22 @@ class CareerOpportunityViewSet(viewsets.ModelViewSet):
         """Get recommended careers based on user preferences"""
         recommendations = get_recommended_careers(request.user)
         serializer = CareerOpportunitySerializer(recommendations, many=True)
+        serializer = CareerOpportunitySerializer(recommendations, many=True)
         return Response(serializer.data)
+
+    @action(detail=True, methods=['post'], permission_classes=[permissions.AllowAny])
+    def increment_view(self, request, pk=None):
+        career = self.get_object()
+        career.views_count += 1
+        career.save()
+        return Response({'status': 'viewed', 'views': career.views_count})
+
+    @action(detail=True, methods=['post'], permission_classes=[permissions.AllowAny])
+    def increment_share(self, request, pk=None):
+        career = self.get_object()
+        career.shares_count += 1
+        career.save()
+        return Response({'status': 'shared', 'shares': career.shares_count})
 
 
 class CareerApplicationViewSet(viewsets.ModelViewSet):
