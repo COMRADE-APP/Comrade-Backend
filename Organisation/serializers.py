@@ -4,10 +4,36 @@ from rest_framework.serializers import ModelSerializer
 
 
 class OrganisationSerializer(ModelSerializer):
+    current_user_role = serializers.SerializerMethodField()
+
     class Meta:
         model = Organisation
         fields = '__all__'
         read_only_fields = ['created_on']
+
+    def get_current_user_role(self, obj):
+        request = self.context.get('request')
+        if request and request.user.is_authenticated:
+            if obj.created_by == request.user:
+                return 'creator'
+            try:
+                member = OrganisationMember.objects.get(organisation=obj, user=request.user)
+                return member.role
+            except OrganisationMember.DoesNotExist:
+                return None
+        return None
+
+    is_following = serializers.SerializerMethodField()
+    followers_count = serializers.SerializerMethodField()
+
+    def get_is_following(self, obj):
+        request = self.context.get('request')
+        if request and request.user.is_authenticated:
+            return obj.followers.filter(id=request.user.id).exists()
+        return False
+
+    def get_followers_count(self, obj):
+        return obj.followers.count()
 
 class OrgBranchSerializer(ModelSerializer):
     class Meta:

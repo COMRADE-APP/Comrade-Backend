@@ -208,6 +208,7 @@ class UserProfileSerializer(serializers.ModelSerializer):
     following_count = serializers.SerializerMethodField()
     avatar_url = serializers.SerializerMethodField()
     cover_url = serializers.SerializerMethodField()
+    affiliations = serializers.SerializerMethodField()
     
     class Meta:
         model = UserProfile
@@ -219,9 +220,75 @@ class UserProfileSerializer(serializers.ModelSerializer):
             'show_email', 'show_phone', 'allow_messages', 
             'show_activity_status', 'show_read_receipts',
             'is_following', 'followers_count', 'following_count',
-            'created_at', 'updated_at'
+            'created_at', 'updated_at', 'affiliations'
         ]
         read_only_fields = ['user_id', 'created_at', 'updated_at']
+    
+    def get_affiliations(self, obj):
+        """Return user's institutional and organizational affiliations"""
+        affiliations = {
+            'institutions': [],
+            'organisations': []
+        }
+        user = obj.user
+        
+        # Check for Student affiliation
+        if hasattr(user, 'student'):
+            # Student model stores institution name as string, need to handle this
+            # ideally it should be ForeignKey but model shows CharField
+            # "institution = models.CharField(max_length=2000)"
+            # If so, we can't get ID easily unless we lookup Institution model by name
+            # For now, let's use what we have.
+            # Wait, InstStaff has ForeignKey.
+            pass
+
+        # Check for Lecturer
+        if hasattr(user, 'lecturer') and user.lecturer.institution:
+            inst = user.lecturer.institution
+            affiliations['institutions'].append({
+                'id': inst.id,
+                'name': inst.name,
+                'type': 'lecturer'
+            })
+            
+        # Check for InstStaff
+        if hasattr(user, 'inst_staff'):
+            # InstStaff has institution and inst_branch
+            staff = user.inst_staff
+            if staff.institution:
+                inst_data = {
+                    'id': staff.institution.id,
+                    'name': staff.institution.name,
+                    'type': 'staff',
+                    'role': staff.staff_role,
+                    'branches': []
+                }
+                if staff.inst_branch:
+                    inst_data['branches'].append({
+                        'id': staff.inst_branch.id,
+                        'name': staff.inst_branch.name
+                    })
+                affiliations['institutions'].append(inst_data)
+
+        # Check for OrgStaff
+        if hasattr(user, 'org_staff'):
+            staff = user.org_staff
+            if staff.current_organisation:
+                org_data = {
+                    'id': staff.current_organisation.id,
+                    'name': staff.current_organisation.name,
+                    'type': 'staff',
+                    'role': staff.staff_role,
+                    'branches': []
+                }
+                if staff.current_org_branch:
+                    org_data['branches'].append({
+                        'id': staff.current_org_branch.id,
+                        'name': staff.current_org_branch.name
+                    })
+                affiliations['organisations'].append(org_data)
+        
+        return affiliations
     
     def get_full_name(self, obj):
         return f"{obj.user.first_name} {obj.user.last_name}".strip()

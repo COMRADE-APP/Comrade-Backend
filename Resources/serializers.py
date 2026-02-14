@@ -5,9 +5,32 @@ from Resources.models import Resource, ResourceVisibility, VisibilityLog, Link, 
 
 
 class ResourceSerializer(serializers.ModelSerializer):
+    # Read-only nested fields for display
+    linked_opinion_details = serializers.SerializerMethodField()
+    linked_article_details = serializers.SerializerMethodField()
+    linked_research_details = serializers.SerializerMethodField()
+
     class Meta:
         fields = '__all__'
         model = Resource
+
+    def get_linked_opinion_details(self, obj):
+        from Opinions.serializers import OpinionSerializer
+        if obj.linked_opinion:
+            return OpinionSerializer(obj.linked_opinion).data
+        return None
+
+    def get_linked_article_details(self, obj):
+        from Articles.serializers import ArticleSerializer
+        if obj.linked_article:
+            return ArticleSerializer(obj.linked_article).data
+        return None
+
+    def get_linked_research_details(self, obj):
+        from Research.serializers import ResearchProjectSerializer
+        if obj.linked_research:
+            return ResearchProjectSerializer(obj.linked_research).data
+        return None
 
 class ResourceVisibilitySerializer(serializers.ModelSerializer):
     class Meta:

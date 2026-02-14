@@ -54,7 +54,8 @@ urlpatterns = [
     path('api/messages/', include('Messages.urls')),  # Direct Messaging
     path('api/qomai/', include('QomAI.urls')),  # QomAI AI Assistant
     path('api/funding/', include('Funding.urls')),  # Business Funding Hub
-    path('api/careers/', include('Careers.urls')),  # Gigs & Careers
+    path('api/careers/', include('Careers.urls')),  # Gigs & Career Opportunities
+    path('api/research/', include('Research.urls')),  # Research App
     path('api/', include(rest_framework.urls)),
 ]
 

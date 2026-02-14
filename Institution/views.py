@@ -95,6 +95,22 @@ class InstitutionViewSet(ModelViewSet):
     def perform_create(self, serializer):
         """Set created_by to the authenticated user"""
         serializer.save(created_by=self.request.user, is_active=True)
+
+    @action(detail=True, methods=['post'], permission_classes=[IsAuthenticated])
+    def follow(self, request, pk=None):
+        institution = self.get_object()
+        if institution.followers.filter(id=request.user.id).exists():
+             return Response({'detail': 'Already following'}, status=status.HTTP_400_BAD_REQUEST)
+        institution.followers.add(request.user)
+        return Response({'status': 'followed', 'followers_count': institution.followers.count()})
+
+    @action(detail=True, methods=['post'], permission_classes=[IsAuthenticated])
+    def unfollow(self, request, pk=None):
+        institution = self.get_object()
+        if not institution.followers.filter(id=request.user.id).exists():
+             return Response({'detail': 'Not following'}, status=status.HTTP_400_BAD_REQUEST)
+        institution.followers.remove(request.user)
+        return Response({'status': 'unfollowed', 'followers_count': institution.followers.count()})
     
     @action(detail=True, methods=['post'], permission_classes=[IsAuthenticated])
     def send_email_verification(self, request, pk=None):
