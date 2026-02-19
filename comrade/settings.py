@@ -90,6 +90,7 @@ MIDDLEWARE = [
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
     "allauth.account.middleware.AccountMiddleware",
+    'ActivityLog.tracking_middleware.ActivityTrackingMiddleware',
 ]
 
 # ALLOWED_HOSTS: Only hostnames, no protocols/ports
@@ -266,6 +267,39 @@ MEDIA_ROOT = BASE_DIR / 'media'
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
+# ============================================================================
+# PAYMENT PROVIDER CONFIGURATION
+# ============================================================================
+
+# Stripe
+STRIPE_SECRET_KEY = os.getenv('STRIPE_SECRET_KEY', '')
+STRIPE_PUBLISHABLE_KEY = os.getenv('STRIPE_PUBLISHABLE_KEY', '')
+STRIPE_WEBHOOK_SECRET = os.getenv('STRIPE_WEBHOOK_SECRET', '')
+
+# PayPal
+PAYPAL_CLIENT_ID = os.getenv('PAYPAL_CLIENT_ID', '')
+PAYPAL_CLIENT_SECRET = os.getenv('PAYPAL_CLIENT_SECRET', '')
+PAYPAL_MODE = os.getenv('PAYPAL_MODE', 'sandbox')  # 'sandbox' or 'live'
+PAYPAL_API_URL = 'https://api-m.sandbox.paypal.com' if PAYPAL_MODE == 'sandbox' else 'https://api-m.paypal.com'
+
+# M-Pesa (Safaricom)
+MPESA_CONSUMER_KEY = os.getenv('MPESA_CONSUMER_KEY', '')
+MPESA_CONSUMER_SECRET = os.getenv('MPESA_CONSUMER_SECRET', '')
+MPESA_BUSINESS_SHORTCODE = os.getenv('MPESA_BUSINESS_SHORTCODE', '')
+MPESA_PASSKEY = os.getenv('MPESA_PASSKEY', '')
+MPESA_API_URL = os.getenv('MPESA_API_URL', 'https://sandbox.safaricom.co.ke')
+MPESA_STK_PUSH_URL = os.getenv('MPESA_STK_PUSH_URL', f'{MPESA_API_URL}/mpesa/stkpush/v1/processrequest')
+MPESA_CALLBACK_URL = os.getenv('MPESA_CALLBACK_URL', 'https://yourdomain.com/api/payments/mpesa/callback/')
+
+# Equity Bank (Jenga API)
+EQUITY_API_KEY = os.getenv('EQUITY_API_KEY', '')
+EQUITY_MERCHANT_CODE = os.getenv('EQUITY_MERCHANT_CODE', '')
+EQUITY_API_URL = os.getenv('EQUITY_API_URL', 'https://uat.jengahq.io')  # UAT for testing
+EQUITY_CONSUMER_SECRET = os.getenv('EQUITY_CONSUMER_SECRET', '')
+
+# Default payment destination (where platform earnings are routed)
+PAYMENT_DESTINATION = os.getenv('PAYMENT_DESTINATION', 'stripe')  # stripe, paypal, mpesa, equity
+
 AUTHENTICATION_BACKENDS = [
     'django.contrib.auth.backends.ModelBackend',
     'allauth.account.auth_backends.AuthenticationBackend',
@@ -318,7 +352,7 @@ ACCOUNT_LOGIN_METHODS = {'email'}  # New v0.50+ syntax
 ACCOUNT_SIGNUP_FIELDS = ['email*', 'password1*', 'password2*']  # New v0.50+ syntax
 ACCOUNT_EMAIL_VERIFICATION = 'optional'  # Can be 'mandatory' for production
 ACCOUNT_UNIQUE_EMAIL = True
-ACCOUNT_EMAIL_SUBJECT_PREFIX = '[Comrade] '
+ACCOUNT_EMAIL_SUBJECT_PREFIX = '[Qomrade] '
 
 # Social account settings
 SOCIALACCOUNT_AUTO_SIGNUP = True

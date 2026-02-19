@@ -31,7 +31,7 @@ class TOTPSetupView(APIView):
         totp = pyotp.TOTP(secret)
         provisioning_uri = totp.provisioning_uri(
             name=user.email,
-            issuer_name='Comrade Platform'
+            issuer_name='Qomrade Platform'
         )
         
         # Generate QR code

@@ -7,7 +7,7 @@ from datetime import datetime
 
 
 USER_TYPE = (
-    ('admin', 'Administrator (Comrade)'),
+    ('admin', 'Administrator (Qomrade)'),
     ('staff', 'Staff'),
     ('lecturer', 'Lecturer'),
     ('student', 'Student'),
@@ -20,6 +20,7 @@ USER_TYPE = (
     ('organisational_staff', 'Organisational Staff'),
     ('author', 'Author'),
     ('editor', 'Editor'),
+    ('creator', 'Creator'),
 )
 
 

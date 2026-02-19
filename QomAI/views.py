@@ -230,7 +230,7 @@ class ChatView(APIView):
             return base + " You are a Deep Reasoning engine. Think step-by-step. Analyze complex problems thoroughly before answering. Show your logical process."
             
         search_instr = "Prioritize web search results for recent events." if has_search else ""
-        return f"{base} You are a helpful assistant for the Comrade platform. {search_instr} Use markdown."
+        return f"{base} You are a helpful assistant for the Qomrade platform. {search_instr} Use markdown."
 
 
 class ImageGenerationView(APIView):

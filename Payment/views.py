@@ -3,7 +3,7 @@ from rest_framework.response import Response
 from rest_framework.viewsets import ModelViewSet
 from rest_framework.views import APIView
 from rest_framework.decorators import action
-from rest_framework import status
+from rest_framework import status, serializers
 from rest_framework.permissions import IsAuthenticated
 from django.db import transaction as db_transaction
 from django.db.models import Q, Sum
@@ -32,6 +32,11 @@ from Payment.serializers import (
     AgentApplicationSerializer, SupplierApplicationSerializer, ShopRegistrationSerializer
 )
 from Authentication.models import Profile, CustomUser
+from Messages.models import Conversation, Message
+from Payment.services.payment_service import PaymentService, StripeProvider, MpesaProvider
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 class PaymentProfileViewSet(ModelViewSet):
@@ -165,7 +170,7 @@ class TransactionViewSet(ModelViewSet):
     @action(detail=False, methods=['post'])
     @db_transaction.atomic
     def deposit(self, request):
-        """Deposit funds to Comrade Balance"""
+        """Deposit funds to Qomrade Balance"""
         amount = request.data.get('amount')
         payment_method = request.data.get('payment_method', 'bank_transfer')
         
@@ -223,7 +228,7 @@ class TransactionViewSet(ModelViewSet):
     @action(detail=False, methods=['post'])
     @db_transaction.atomic
     def withdraw(self, request):
-        """Withdraw funds from Comrade Balance"""
+        """Withdraw funds from Qomrade Balance"""
         amount = request.data.get('amount')
         account_number = request.data.get('account_number', '')
         payment_method = request.data.get('payment_method', 'bank_transfer')
@@ -318,6 +323,8 @@ class PaymentGroupsViewSet(ModelViewSet):
         # Check Limits
         can_create, error_msg = check_group_creation_limit(payment_profile)
         if not can_create:
+            print(error_msg)
+            print(can_create)
             raise serializers.ValidationError(error_msg)
             
         # Set max capacity based on tier
@@ -342,7 +349,7 @@ class PaymentGroupsViewSet(ModelViewSet):
 
     @action(detail=True, methods=['post'])
     def join(self, request, pk=None):
-        """Join a payment group"""
+        """Join a payment group (optionally as anonymous)"""
         group = self.get_object()
         user = request.user
         payment_profile = get_or_create_payment_profile(user)
@@ -357,9 +364,18 @@ class PaymentGroupsViewSet(ModelViewSet):
         if PaymentGroupMember.objects.filter(payment_group=group, payment_profile=payment_profile).exists():
             return Response({'error': 'Already a member'}, status=status.HTTP_400_BAD_REQUEST)
         
+        # Anonymous membership
+        is_anonymous = request.data.get('is_anonymous', False)
+        anonymous_alias = request.data.get('anonymous_alias', '')
+        
+        if is_anonymous and not group.allow_anonymous:
+            return Response({'error': 'This group does not allow anonymous membership'}, status=status.HTTP_400_BAD_REQUEST)
+        
         member = PaymentGroupMember.objects.create(
             payment_group=group,
-            payment_profile=payment_profile
+            payment_profile=payment_profile,
+            is_anonymous=is_anonymous,
+            anonymous_alias=anonymous_alias  # auto-generated in model.save() if blank
         )
         
         return Response(PaymentGroupMemberSerializer(member).data, status=status.HTTP_201_CREATED)
@@ -381,18 +397,54 @@ class PaymentGroupsViewSet(ModelViewSet):
             return Response({'error': 'Not a member of this group'}, status=status.HTTP_403_FORBIDDEN)
         
         amount = request.data.get('amount')
+        payment_method = request.data.get('payment_method', 'wallet')  # wallet, stripe, mpesa
         if not amount:
             return Response({'error': 'Amount is required'}, status=status.HTTP_400_BAD_REQUEST)
         
         amount = float(amount)
-        if payment_profile.comrade_balance < amount:
-            return Response({'error': 'Insufficient balance'}, status=status.HTTP_400_BAD_REQUEST)
         
-        # Deduct from user
-        payment_profile.comrade_balance -= amount
-        payment_profile.save()
+        # Process payment based on method
+        if payment_method == 'wallet':
+            if payment_profile.comrade_balance < amount:
+                return Response({'error': 'Insufficient balance'}, status=status.HTTP_400_BAD_REQUEST)
+            # Deduct from wallet
+            payment_profile.comrade_balance -= amount
+            payment_profile.save()
+        elif payment_method == 'stripe':
+            # Create Stripe PaymentIntent - return client_secret for frontend to complete
+            result = StripeProvider.create_payment_intent(
+                amount, description=f'Group contribution: {group.name}'
+            )
+            if isinstance(result, dict) and 'error' in result:
+                return Response({'error': result['error']}, status=status.HTTP_400_BAD_REQUEST)
+            # Return client secret for client-side confirmation
+            return Response({
+                'requires_action': True,
+                'payment_method': 'stripe',
+                'client_secret': result.client_secret,
+                'group_id': str(group.id),
+                'amount': amount
+            })
+        elif payment_method == 'mpesa':
+            phone_number = request.data.get('phone_number', '')
+            if not phone_number:
+                return Response({'error': 'Phone number required for M-Pesa'}, status=status.HTTP_400_BAD_REQUEST)
+            result = MpesaProvider.stk_push(
+                phone_number, amount, f'Group-{group.name}', f'Contribution to {group.name}'
+            )
+            if 'error' in result:
+                return Response({'error': result['error']}, status=status.HTTP_400_BAD_REQUEST)
+            # M-Pesa callback will confirm payment; return pending status
+            return Response({
+                'requires_action': True,
+                'payment_method': 'mpesa',
+                'checkout_request_id': result.get('CheckoutRequestID', ''),
+                'message': 'STK push sent. Complete payment on your phone.'
+            })
+        else:
+            return Response({'error': f'Unsupported payment method: {payment_method}'}, status=status.HTTP_400_BAD_REQUEST)
         
-        # Add to group
+        # Add to group (wallet path)
         group.current_amount += amount
         group.save()
         
@@ -406,6 +458,15 @@ class PaymentGroupsViewSet(ModelViewSet):
             member=member,
             amount=amount,
             notes=request.data.get('notes', '')
+        )
+        
+        # Create audit trail
+        TransactionToken.objects.create(
+            payment_profile=payment_profile,
+            transaction_code=f'grp_contrib_{uuid.uuid4().hex[:12]}',
+            amount=amount,
+            transaction_type='contribution',
+            notes=f'Contribution to group: {group.name}'
         )
         
         # Check if target reached
@@ -473,11 +534,41 @@ class PaymentGroupsViewSet(ModelViewSet):
         
         # Send Email
         from Payment.utils import send_group_invitation_email
+        from django.conf import settings as django_settings
         
-        invite_url = f"http://localhost:3000/payments/groups/{group.id}/join?token={invitation_link}"
+        frontend_url = getattr(django_settings, 'FRONTEND_URL', 'http://localhost:3000').rstrip('/')
+        invite_url = f"{frontend_url}/payments/groups/{group.id}?token={invitation_link}"
         inviter_name = f"{payment_profile.user.user.first_name} {payment_profile.user.user.last_name}"
         
         send_group_invitation_email(invited_email, group.name, inviter_name, invite_url, is_existing_user=user_exists)
+        
+        # Send in-app chat notification if user exists on platform
+        if user_exists:
+            try:
+                invited_user_obj = CustomUser.objects.get(email=invited_email)
+                inviter_user_obj = user
+                
+                # Find or create DM conversation
+                shared_convos = Conversation.objects.filter(
+                    conversation_type='dm',
+                    participants=inviter_user_obj
+                ).filter(participants=invited_user_obj)
+                
+                if shared_convos.exists():
+                    conversation = shared_convos.first()
+                else:
+                    conversation = Conversation.objects.create(conversation_type='dm')
+                    conversation.participants.add(inviter_user_obj, invited_user_obj)
+                
+                # Send system message with invitation link
+                Message.objects.create(
+                    conversation=conversation,
+                    sender=inviter_user_obj,
+                    message_type='system',
+                    content=f"📩 You've been invited to join the payment group \"{group.name}\"! View and accept: {invite_url}"
+                )
+            except Exception as e:
+                logger.warning(f'Failed to send chat notification for group invite: {e}')
 
         return Response(GroupInvitationSerializer(invitation).data, status=status.HTTP_201_CREATED)
     
@@ -503,6 +594,145 @@ class PaymentGroupsViewSet(ModelViewSet):
         contributions = group.contributions.all().order_by('-contributed_at')
         serializer = ContributionSerializer(contributions, many=True)
         return Response(serializer.data)
+    
+    @action(detail=True, methods=['post'])
+    def extend_deadline(self, request, pk=None):
+        """Extend the group deadline (admin only)"""
+        group = self.get_object()
+        user = request.user
+        payment_profile = get_or_create_payment_profile(user)
+        if not payment_profile:
+            return Response({'error': 'Could not create payment profile'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        
+        # Check if admin
+        try:
+            member = PaymentGroupMember.objects.get(payment_group=group, payment_profile=payment_profile)
+            if not member.is_admin and group.creator != payment_profile:
+                return Response({'error': 'Only admins can extend deadlines'}, status=status.HTTP_403_FORBIDDEN)
+        except PaymentGroupMember.DoesNotExist:
+            return Response({'error': 'Not a member'}, status=status.HTTP_403_FORBIDDEN)
+        
+        new_deadline = request.data.get('new_deadline')
+        if not new_deadline:
+            return Response({'error': 'New deadline is required'}, status=status.HTTP_400_BAD_REQUEST)
+        
+        from django.utils.dateparse import parse_datetime
+        parsed_deadline = parse_datetime(new_deadline)
+        if not parsed_deadline:
+            return Response({'error': 'Invalid date format. Use ISO 8601 (YYYY-MM-DDTHH:MM:SS)'}, status=status.HTTP_400_BAD_REQUEST)
+        
+        # Make timezone-aware if naive
+        if parsed_deadline.tzinfo is None:
+            from django.utils import timezone as tz
+            parsed_deadline = tz.make_aware(parsed_deadline)
+        
+        # New deadline must be in the future
+        if parsed_deadline <= timezone.now():
+            return Response({'error': 'New deadline must be in the future'}, status=status.HTTP_400_BAD_REQUEST)
+        
+        # Update both deadline and expiry_date
+        group.deadline = parsed_deadline
+        group.expiry_date = parsed_deadline
+        group.is_matured = False  # Reset maturation since deadline extended
+        group.save()
+        
+        return Response({
+            'message': 'Deadline extended successfully',
+            'new_deadline': parsed_deadline.isoformat()
+        })
+    
+    @action(detail=True, methods=['post'])
+    def request_termination(self, request, pk=None):
+        """Request group termination (requires mutual agreement after deadline)"""
+        group = self.get_object()
+        user = request.user
+        payment_profile = get_or_create_payment_profile(user)
+        if not payment_profile:
+            return Response({'error': 'Could not create payment profile'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        
+        # Must be a member
+        if not PaymentGroupMember.objects.filter(payment_group=group, payment_profile=payment_profile).exists():
+            return Response({'error': 'Not a member of this group'}, status=status.HTTP_403_FORBIDDEN)
+        
+        # Deadline must have passed
+        effective_deadline = group.deadline or group.expiry_date
+        if effective_deadline and effective_deadline > timezone.now():
+            return Response({'error': 'Cannot terminate before the deadline'}, status=status.HTTP_400_BAD_REQUEST)
+        
+        # Add this member to termination_requested_by
+        group.termination_requested_by.add(payment_profile)
+        
+        # Check if all members have agreed
+        total_members = group.members.count()
+        agreed_count = group.termination_requested_by.count()
+        
+        if agreed_count >= total_members:
+            group.is_terminated = True
+            group.is_active = False
+            group.save()
+            return Response({
+                'message': 'All members agreed. Group has been terminated.',
+                'is_terminated': True,
+                'agreed': agreed_count,
+                'total': total_members
+            })
+        
+        group.save()
+        return Response({
+            'message': 'Your termination request has been recorded.',
+            'is_terminated': False,
+            'agreed': agreed_count,
+            'total': total_members
+        })
+    
+    @action(detail=True, methods=['get'])
+    def group_status(self, request, pk=None):
+        """Get group maturation and termination status"""
+        group = self.get_object()
+        
+        # Auto-check maturation
+        effective_deadline = group.deadline or group.expiry_date
+        if effective_deadline and effective_deadline <= timezone.now() and not group.is_matured:
+            group.is_matured = True
+            group.save()
+        
+        total_members = group.members.count()
+        agreed_count = group.termination_requested_by.count()
+        
+        return Response({
+            'is_matured': group.is_matured,
+            'is_terminated': group.is_terminated,
+            'is_active': group.is_active,
+            'deadline': (effective_deadline.isoformat() if effective_deadline else None),
+            'termination_agreed': agreed_count,
+            'termination_total': total_members,
+        })
+    
+    def destroy(self, request, *args, **kwargs):
+        """Block group deletion before deadline unless terminated by mutual agreement"""
+        group = self.get_object()
+        user = request.user
+        payment_profile = get_or_create_payment_profile(user)
+        
+        # Only creator/admin can delete
+        if group.creator != payment_profile:
+            return Response({'error': 'Only the group creator can delete'}, status=status.HTTP_403_FORBIDDEN)
+        
+        effective_deadline = group.deadline or group.expiry_date
+        if effective_deadline and effective_deadline > timezone.now():
+            return Response(
+                {'error': 'Cannot delete group before the deadline. Extend or wait until the deadline passes.'},
+                status=status.HTTP_403_FORBIDDEN
+            )
+        
+        if not group.is_terminated:
+            return Response(
+                {'error': 'All members must agree to terminate before the group can be deleted.'},
+                status=status.HTTP_403_FORBIDDEN
+            )
+        
+        return super().destroy(request, *args, **kwargs)
+
 
 class GroupInvitationViewSet(ModelViewSet):
     """ViewSet for handling group invitations"""
@@ -747,8 +977,22 @@ class GroupTargetViewSet(ModelViewSet):
             
         target.save()
         
+        # Determine contributor display name (anonymous-aware)
+        contributor_name = None
+        if target.payment_group:
+            try:
+                member = PaymentGroupMember.objects.get(
+                    payment_group=target.payment_group, payment_profile=payment_profile
+                )
+                contributor_name = member.anonymous_alias if member.is_anonymous else f"{payment_profile.user.user.first_name} {payment_profile.user.user.last_name}"
+            except PaymentGroupMember.DoesNotExist:
+                contributor_name = f"{payment_profile.user.user.first_name} {payment_profile.user.user.last_name}"
+        else:
+            contributor_name = f"{payment_profile.user.user.first_name} {payment_profile.user.user.last_name}"
+        
         return Response({
             'status': 'Contribution successful',
+            'contributor': contributor_name,
             'amount_contributed': amount,
             'current_amount': float(target.current_amount),
             'target_amount': float(target.target_amount),

@@ -92,7 +92,7 @@ VIS_TYPES = (
 
 # Visibility main entity options
 VIS_OPT_TYPES = (
-    ('comrade', 'Comrade'),
+    ('comrade', 'Qomrade'),
     ('creator', 'Creator'),
     ('admins', 'Entity Admins'),
     ('admins_moderators', 'Admins and Moderators'),

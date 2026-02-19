@@ -18,7 +18,7 @@ class EmailVerifier:
     @staticmethod
     def send_verification_email(email_verification):
         """Send verification email with code"""
-        subject = 'Verify Your Email - Comrade Platform'
+        subject = 'Verify Your Email - Qomrade Platform'
         
         context = {
             'verification_code': email_verification.verification_code,
@@ -27,7 +27,7 @@ class EmailVerifier:
         }
         
         message = f"""
-        Welcome to Comrade!
+        Welcome to Qomrade!
         
         Your verification code is: {email_verification.verification_code}
         
