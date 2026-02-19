@@ -4,7 +4,7 @@ from Payment.models import (
     TransactionToken, PaymentAuthorization, PaymentVerification,
     TransactionHistory, TransactionTracker, PaymentGroupMember,
     Contribution, StandingOrder, GroupInvitation, GroupTarget,
-    Product, UserSubscription
+    Product, UserSubscription, SavedPaymentMethod
 )
 from Payment.models import TRANSACTION_CATEGORY, PAY_OPT
 from Authentication.models import Profile, CustomUser
@@ -79,15 +79,22 @@ class TransactionHistorySerializer(serializers.ModelSerializer):
 
 # Payment Group Serializers
 class PaymentGroupMemberSerializer(serializers.ModelSerializer):
-    user_email = serializers.EmailField(source='payment_profile.user.user.email', read_only=True)
+    user_email = serializers.SerializerMethodField()
     user_name = serializers.SerializerMethodField()
     
     class Meta:
         model = PaymentGroupMember
         fields = '__all__'
-        read_only_fields = ['total_contributed', 'joined_at']
+        read_only_fields = ['total_contributed', 'joined_at', 'anonymous_alias']
+    
+    def get_user_email(self, obj):
+        if obj.is_anonymous:
+            return None
+        return obj.payment_profile.user.user.email
     
     def get_user_name(self, obj):
+        if obj.is_anonymous:
+            return obj.anonymous_alias or 'Anonymous Member'
         return f"{obj.payment_profile.user.user.first_name} {obj.payment_profile.user.user.last_name}"
 
 class ContributionSerializer(serializers.ModelSerializer):
@@ -99,6 +106,8 @@ class ContributionSerializer(serializers.ModelSerializer):
         read_only_fields = ['contributed_at']
     
     def get_member_name(self, obj):
+        if obj.member.is_anonymous:
+            return obj.member.anonymous_alias or 'Anonymous Member'
         return f"{obj.member.payment_profile.user.user.first_name} {obj.member.payment_profile.user.user.last_name}"
 
 class StandingOrderSerializer(serializers.ModelSerializer):
@@ -167,7 +176,7 @@ class PaymentGroupsSerializer(serializers.ModelSerializer):
     
     def get_progress_percentage(self, obj):
         if obj.target_amount and obj.target_amount > 0:
-            return round((obj.current_amount / obj.target_amount) * 100, 2)
+            return round((float(obj.current_amount) / float(obj.target_amount)) * 100, 2)
         return 0.0
     
     def get_contributions_summary(self, obj):
@@ -182,7 +191,8 @@ class PaymentGroupsCreateSerializer(serializers.ModelSerializer):
         model = PaymentGroups
         fields = ['name', 'description', 'max_capacity', 'target_amount', 'expiry_date', 
                   'deadline', 'auto_purchase', 'requires_approval', 'is_public',
-                  'contribution_type', 'contribution_amount', 'frequency', 'group_type']
+                  'contribution_type', 'contribution_amount', 'frequency', 'group_type',
+                  'allow_anonymous']
 
 class CreateTransactionSerializer(serializers.Serializer):
     recipient_email = serializers.EmailField()
@@ -517,3 +527,100 @@ class CreateOrderSerializer(serializers.Serializer):
         required=False,
         help_text='List of {product_id or menu_item_id, quantity}'
     )
+
+
+# ============================================================================
+# SAVED PAYMENT METHOD SERIALIZERS
+# ============================================================================
+
+class SavedPaymentMethodSerializer(serializers.ModelSerializer):
+    display_name = serializers.SerializerMethodField()
+    
+    class Meta:
+        model = SavedPaymentMethod
+        fields = '__all__'
+        read_only_fields = ['id', 'payment_profile', 'card_brand', 'provider_token', 
+                           'provider', 'is_verified', 'created_at', 'updated_at']
+    
+    def get_display_name(self, obj):
+        return str(obj)
+
+
+class SavedPaymentMethodCreateSerializer(serializers.Serializer):
+    """Serializer for creating a saved payment method with validation."""
+    method_type = serializers.ChoiceField(choices=['card', 'mpesa', 'paypal', 'bank_transfer', 'equity'])
+    
+    # Card fields
+    card_number = serializers.CharField(required=False, max_length=19, help_text='Full card number (will be tokenized)')
+    expiry_month = serializers.IntegerField(required=False, min_value=1, max_value=12)
+    expiry_year = serializers.IntegerField(required=False, min_value=2024)
+    cvc = serializers.CharField(required=False, max_length=4)
+    billing_zip = serializers.CharField(required=False, max_length=20)
+    
+    # M-Pesa fields
+    phone_number = serializers.CharField(required=False, max_length=20)
+    
+    # PayPal fields
+    paypal_email = serializers.EmailField(required=False)
+    
+    # Bank fields
+    bank_name = serializers.CharField(required=False, max_length=100)
+    account_number = serializers.CharField(required=False, max_length=20)
+    
+    # Common
+    nickname = serializers.CharField(required=False, max_length=100, allow_blank=True)
+    is_default = serializers.BooleanField(required=False, default=False)
+    save_details = serializers.BooleanField(required=False, default=True)
+    
+    def validate_card_number(self, value):
+        """Validate card number using Luhn algorithm."""
+        if not value:
+            return value
+        digits = value.replace(' ', '').replace('-', '')
+        if not digits.isdigit():
+            raise serializers.ValidationError("Card number must contain only digits.")
+        if len(digits) < 13 or len(digits) > 19:
+            raise serializers.ValidationError("Card number must be between 13 and 19 digits.")
+        # Luhn check
+        total = 0
+        reverse_digits = digits[::-1]
+        for i, d in enumerate(reverse_digits):
+            n = int(d)
+            if i % 2 == 1:
+                n *= 2
+                if n > 9:
+                    n -= 9
+            total += n
+        if total % 10 != 0:
+            raise serializers.ValidationError("Invalid card number.")
+        return digits
+    
+    def validate_phone_number(self, value):
+        """Validate phone number for M-Pesa."""
+        if not value:
+            return value
+        digits = value.replace(' ', '').replace('+', '').replace('-', '')
+        if not digits.isdigit():
+            raise serializers.ValidationError("Phone number must contain only digits.")
+        if len(digits) < 9 or len(digits) > 15:
+            raise serializers.ValidationError("Invalid phone number length.")
+        return value
+    
+    def validate(self, data):
+        method_type = data.get('method_type')
+        if method_type == 'card':
+            required = ['card_number', 'expiry_month', 'expiry_year', 'cvc']
+            missing = [f for f in required if not data.get(f)]
+            if missing:
+                raise serializers.ValidationError({f: 'This field is required for card payments.' for f in missing})
+        elif method_type == 'mpesa':
+            if not data.get('phone_number'):
+                raise serializers.ValidationError({'phone_number': 'Phone number is required for M-Pesa.'})
+        elif method_type == 'paypal':
+            if not data.get('paypal_email'):
+                raise serializers.ValidationError({'paypal_email': 'PayPal email is required.'})
+        elif method_type in ('bank_transfer', 'equity'):
+            if not data.get('account_number'):
+                raise serializers.ValidationError({'account_number': 'Account number is required for bank transfers.'})
+        return data
+

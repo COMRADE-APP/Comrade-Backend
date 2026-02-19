@@ -14,8 +14,8 @@ from Payment.models import Product
 SAMPLE_PRODUCTS = [
     # Physical Products
     {
-        'name': 'Comrade Branded Notebook',
-        'description': 'Premium quality notebook with the Comrade logo. Perfect for taking notes during lectures.',
+        'name': 'Qomrade Branded Notebook',
+        'description': 'Premium quality notebook with the Qomrade logo. Perfect for taking notes during lectures.',
         'price': 12.99,
         'product_type': 'physical',
         'is_sharable': True,
@@ -28,8 +28,8 @@ SAMPLE_PRODUCTS = [
         'is_sharable': True,
     },
     {
-        'name': 'Comrade T-Shirt',
-        'description': 'Comfortable cotton t-shirt with Comrade branding. Available in multiple sizes.',
+        'name': 'Qomrade T-Shirt',
+        'description': 'Comfortable cotton t-shirt with Qomrade branding. Available in multiple sizes.',
         'price': 24.99,
         'product_type': 'physical',
         'is_sharable': False,

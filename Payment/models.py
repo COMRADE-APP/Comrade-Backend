@@ -1,6 +1,7 @@
 from django.db import models
 from Authentication.models import Profile
 from datetime import datetime
+from django.utils import timezone
 
 # Create your models here.
 PAY_OPT = (
@@ -27,7 +28,7 @@ PAY_OPT = (
     ('visa', 'Visa'),
     ('venmo', 'Venmo'),
     ('gcash', 'G-Cash'),
-    ('comrade_balance', 'Comrade Balance'),
+    ('comrade_balance', 'Qomrade Balance'),
 )
 PAY_TYPE = (
     ('individual', 'Individual Purchase'),
@@ -72,7 +73,7 @@ TRANSACTION_STATUS = (
 
 PAY_OPT_TYPE = (
     ('external', 'External Payment Option'),
-    ('internal', 'Internal Payment Option (Comrade Balance)'),
+    ('internal', 'Internal Payment Option (Qomrade Balance)'),
 )
 
 class PaymentProfile(models.Model):
@@ -107,7 +108,7 @@ class TransactionToken(models.Model):
     payment_option = models.CharField(max_length=2000, choices=PAY_OPT, default='paypal')
     payment_number = models.CharField(max_length=200, blank=True, null=True)
     description = models.TextField(blank=True, null=True)
-    created_at = models.DateTimeField(default=datetime.now)
+    created_at = models.DateTimeField(default=timezone.now)
     recipient_profile = models.ForeignKey(PaymentProfile, on_delete=models.CASCADE, related_name='recipient_profile', null=True, blank=True)
     
     class Meta:
@@ -120,19 +121,19 @@ class TransactionToken(models.Model):
 class PaymentAuthorization(models.Model):
     payment_profile = models.ForeignKey(PaymentProfile, on_delete=models.CASCADE)
     authorization_code = models.CharField(max_length=10000, unique=True)
-    created_at = models.DateTimeField(default=datetime.now)
+    created_at = models.DateTimeField(default=timezone.now)
 
 class PaymentVerification(models.Model):
     payment_profile = models.ForeignKey(PaymentProfile, on_delete=models.CASCADE)
     verification_code = models.CharField(max_length=10000, unique=True)
-    created_at = models.DateTimeField(default=datetime.now)
+    created_at = models.DateTimeField(default=timezone.now)
 
 class TransactionTracker(models.Model):
     transaction_token = models.ForeignKey(TransactionToken, on_delete=models.CASCADE)
     authorization_token = models.ForeignKey(PaymentAuthorization, on_delete=models.CASCADE, null=True, blank=True)
     verification_token = models.ForeignKey(PaymentVerification, on_delete=models.CASCADE, null=True, blank=True)
     status = models.CharField(max_length=200, choices=TRANSACTION_STATUS, default='pending')
-    updated_at = models.DateTimeField(default=datetime.now)
+    updated_at = models.DateTimeField(default=timezone.now)
 
 class TransactionHistory(models.Model):
     payment_profile = models.ForeignKey(PaymentProfile, on_delete=models.CASCADE)
@@ -141,7 +142,7 @@ class TransactionHistory(models.Model):
     verification_token = models.ForeignKey(PaymentVerification, on_delete=models.CASCADE)
     payment_type = models.CharField(max_length=200, choices=PAY_TYPE, default='individual')
     status = models.CharField(max_length=200, choices=TRANSACTION_STATUS, default='pending')
-    created_at = models.DateTimeField(default=datetime.now)
+    created_at = models.DateTimeField(default=timezone.now)
 
 class PaymentItem(models.Model):
     name = models.CharField(max_length=2000)
@@ -149,7 +150,7 @@ class PaymentItem(models.Model):
     quantity = models.FloatField()
     total_cost = models.DecimalField(decimal_places=2, max_digits=12)
     description = models.TextField(blank=True)
-    created_at = models.DateTimeField(default=datetime.now)
+    created_at = models.DateTimeField(default=timezone.now)
     
     def save(self, *args, **kwargs):
         self.total_cost = self.cost * self.quantity
@@ -160,7 +161,7 @@ class PaymentLog(models.Model):
     amount = models.DecimalField(decimal_places=2, max_digits=12)
     purchase_item = models.ManyToManyField(PaymentItem, blank=True)
     payment_type = models.CharField(max_length=2000, choices=PAY_TYPE, default='individual')
-    payment_date = models.DateTimeField(default=datetime.now)
+    payment_date = models.DateTimeField(default=timezone.now)
     recipient = models.ForeignKey(PaymentProfile, on_delete=models.CASCADE, related_name='sale_profile')
     notes = models.TextField(blank=True)
 
@@ -200,6 +201,7 @@ class PaymentGroups(models.Model):
     is_public = models.BooleanField(default=True)  # Visibility setting
     auto_purchase = models.BooleanField(default=False)
     requires_approval = models.BooleanField(default=True)
+    allow_anonymous = models.BooleanField(default=False)  # Allow anonymous membership
     
     # Contribution settings
     contribution_type = models.CharField(max_length=20, choices=CONTRIBUTION_TYPE_CHOICES, default='flexible')
@@ -213,7 +215,14 @@ class PaymentGroups(models.Model):
     )
     group_type = models.CharField(max_length=20, choices=GROUP_TYPE_CHOICES, default='standard')
     
-    created_at = models.DateTimeField(default=datetime.now)
+    # Group lifecycle / maturation
+    is_matured = models.BooleanField(default=False)  # True when deadline has passed
+    termination_requested_by = models.ManyToManyField(
+        PaymentProfile, blank=True, related_name='termination_requests'
+    )  # Members who agreed to terminate
+    is_terminated = models.BooleanField(default=False)
+    
+    created_at = models.DateTimeField(default=timezone.now)
     updated_at = models.DateTimeField(auto_now=True)
     
     class Meta:
@@ -232,9 +241,11 @@ class PaymentGroupMember(models.Model):
     payment_group = models.ForeignKey(PaymentGroups, on_delete=models.CASCADE, related_name='members')
     payment_profile = models.ForeignKey(PaymentProfile, on_delete=models.CASCADE)
     is_admin = models.BooleanField(default=False)
+    is_anonymous = models.BooleanField(default=False)  # Anonymous membership
+    anonymous_alias = models.CharField(max_length=100, blank=True)  # e.g. "Member-A3F2"
     contribution_percentage = models.DecimalField(decimal_places=2, max_digits=5, default=0.00)
     total_contributed = models.DecimalField(decimal_places=2, max_digits=12, default=0.00)
-    joined_at = models.DateTimeField(default=datetime.now)
+    joined_at = models.DateTimeField(default=timezone.now)
     
     class Meta:
         unique_together = ['payment_group', 'payment_profile']
@@ -242,6 +253,12 @@ class PaymentGroupMember(models.Model):
             models.Index(fields=['payment_group']),
             models.Index(fields=['payment_profile']),
         ]
+    
+    def save(self, *args, **kwargs):
+        if self.is_anonymous and not self.anonymous_alias:
+            import secrets
+            self.anonymous_alias = f"Member-{secrets.token_hex(2).upper()}"
+        super().save(*args, **kwargs)
 
 # Contribution tracking
 class Contribution(models.Model):
@@ -251,7 +268,7 @@ class Contribution(models.Model):
     member = models.ForeignKey(PaymentGroupMember, on_delete=models.CASCADE)
     amount = models.DecimalField(decimal_places=2, max_digits=12)
     transaction = models.ForeignKey(TransactionToken, on_delete=models.SET_NULL, null=True, blank=True)
-    contributed_at = models.DateTimeField(default=datetime.now)
+    contributed_at = models.DateTimeField(default=timezone.now)
     notes = models.TextField(blank=True)
     
     class Meta:
@@ -272,7 +289,7 @@ class StandingOrder(models.Model):
     ))
     next_contribution_date = models.DateTimeField()
     is_active = models.BooleanField(default=True)
-    created_at = models.DateTimeField(default=datetime.now)
+    created_at = models.DateTimeField(default=timezone.now)
     
     class Meta:
         indexes = [
@@ -294,7 +311,7 @@ class GroupInvitation(models.Model):
         ('expired', 'Expired'),
     ), default='pending')
     invitation_link = models.CharField(max_length=500, unique=True)
-    created_at = models.DateTimeField(default=datetime.now)
+    created_at = models.DateTimeField(default=timezone.now)
     expires_at = models.DateTimeField()
     
     class Meta:
@@ -384,7 +401,7 @@ class GroupTarget(models.Model):
     
     achieved = models.BooleanField(default=False)
     achieved_at = models.DateTimeField(null=True, blank=True)
-    created_at = models.DateTimeField(default=datetime.now)
+    created_at = models.DateTimeField(default=timezone.now)
     
     class Meta:
         indexes = [
@@ -468,7 +485,7 @@ class Partner(models.Model):
     description = models.TextField(blank=True)
     logo = models.ImageField(upload_to='partners/logos/', null=True, blank=True)
     
-    created_at = models.DateTimeField(default=datetime.now)
+    created_at = models.DateTimeField(default=timezone.now)
     updated_at = models.DateTimeField(auto_now=True)
     
     class Meta:
@@ -520,7 +537,7 @@ class PartnerApplication(models.Model):
     # Resulting Partner
     partner = models.OneToOneField(Partner, on_delete=models.SET_NULL, null=True, blank=True, related_name='application')
     
-    created_at = models.DateTimeField(default=datetime.now)
+    created_at = models.DateTimeField(default=timezone.now)
     updated_at = models.DateTimeField(auto_now=True)
     
     class Meta:
@@ -561,7 +578,7 @@ class AgentApplication(models.Model):
     review_notes = models.TextField(blank=True)
     result_at = models.DateTimeField(null=True, blank=True)
     
-    created_at = models.DateTimeField(default=datetime.now)
+    created_at = models.DateTimeField(default=timezone.now)
     
     def __str__(self):
         return f"{self.applicant.user.username} - {self.get_agent_type_display()}"
@@ -584,7 +601,7 @@ class SupplierApplication(models.Model):
     status = models.CharField(max_length=20, choices=PARTNER_STATUS, default='pending')
     reviewed_by = models.ForeignKey(Profile, on_delete=models.SET_NULL, null=True, blank=True, related_name='reviewed_supplier_apps')
     
-    created_at = models.DateTimeField(default=datetime.now)
+    created_at = models.DateTimeField(default=timezone.now)
     
     def __str__(self):
         return f"{self.business_name} - Supplier Application"
@@ -603,7 +620,7 @@ class ShopRegistration(models.Model):
     currency = models.CharField(max_length=3, default='KES')
     is_active = models.BooleanField(default=True)
     
-    created_at = models.DateTimeField(default=datetime.now)
+    created_at = models.DateTimeField(default=timezone.now)
     updated_at = models.DateTimeField(auto_now=True)
     
     def __str__(self):
@@ -664,7 +681,7 @@ class Establishment(models.Model):
     is_active = models.BooleanField(default=True)
     is_verified = models.BooleanField(default=False)
     
-    created_at = models.DateTimeField(default=datetime.now)
+    created_at = models.DateTimeField(default=timezone.now)
     updated_at = models.DateTimeField(auto_now=True)
     
     class Meta:
@@ -688,7 +705,7 @@ class EstablishmentBranch(models.Model):
     phone = models.CharField(max_length=50, blank=True)
     opening_hours = models.JSONField(default=dict, blank=True)
     is_active = models.BooleanField(default=True)
-    created_at = models.DateTimeField(default=datetime.now)
+    created_at = models.DateTimeField(default=timezone.now)
     
     def __str__(self):
         return f"{self.establishment.name} - {self.name}"
@@ -705,7 +722,7 @@ class MenuItem(models.Model):
     is_available = models.BooleanField(default=True)
     preparation_time = models.IntegerField(default=15, help_text='Estimated preparation time in minutes')
     dietary_tags = models.JSONField(default=list, blank=True, help_text='e.g. ["vegan", "gluten-free"]')
-    created_at = models.DateTimeField(default=datetime.now)
+    created_at = models.DateTimeField(default=timezone.now)
     
     class Meta:
         indexes = [
@@ -736,7 +753,7 @@ class HotelRoom(models.Model):
     amenities = models.JSONField(default=list, blank=True, help_text='e.g. ["WiFi", "AC", "Mini Bar"]')
     images = models.JSONField(default=list, blank=True, help_text='List of image URLs')
     is_available = models.BooleanField(default=True)
-    created_at = models.DateTimeField(default=datetime.now)
+    created_at = models.DateTimeField(default=timezone.now)
     
     class Meta:
         indexes = [
@@ -776,7 +793,7 @@ class Booking(models.Model):
     status = models.CharField(max_length=20, choices=BOOKING_STATUS, default='pending')
     special_requests = models.TextField(blank=True)
     
-    created_at = models.DateTimeField(default=datetime.now)
+    created_at = models.DateTimeField(default=timezone.now)
     updated_at = models.DateTimeField(auto_now=True)
     
     class Meta:
@@ -814,7 +831,7 @@ class ServiceOffering(models.Model):
     image = models.ImageField(upload_to='services/', null=True, blank=True)
     
     is_active = models.BooleanField(default=True)
-    created_at = models.DateTimeField(default=datetime.now)
+    created_at = models.DateTimeField(default=timezone.now)
     
     class Meta:
         indexes = [
@@ -837,7 +854,7 @@ class ServiceTimeSlot(models.Model):
         Profile, on_delete=models.SET_NULL,
         null=True, blank=True, related_name='booked_slots'
     )
-    created_at = models.DateTimeField(default=datetime.now)
+    created_at = models.DateTimeField(default=timezone.now)
     
     class Meta:
         indexes = [
@@ -917,7 +934,7 @@ class Order(models.Model):
         null=True, blank=True, related_name='orders'
     )
     
-    created_at = models.DateTimeField(default=datetime.now)
+    created_at = models.DateTimeField(default=timezone.now)
     updated_at = models.DateTimeField(auto_now=True)
     
     class Meta:
@@ -962,7 +979,7 @@ class Review(models.Model):
     establishment = models.ForeignKey(Establishment, on_delete=models.CASCADE, related_name='reviews')
     rating = models.IntegerField(default=5, help_text='Rating from 1 to 5')
     comment = models.TextField(blank=True)
-    created_at = models.DateTimeField(default=datetime.now)
+    created_at = models.DateTimeField(default=timezone.now)
     
     class Meta:
         unique_together = ['user', 'establishment']
@@ -973,3 +990,94 @@ class Review(models.Model):
     
     def __str__(self):
         return f"{self.user} rated {self.establishment.name} {self.rating}/5"
+
+
+# ============================================================================
+# SAVED PAYMENT METHODS
+# ============================================================================
+
+PAYMENT_METHOD_TYPE = (
+    ('card', 'Credit/Debit Card'),
+    ('mpesa', 'M-Pesa'),
+    ('paypal', 'PayPal'),
+    ('bank_transfer', 'Bank Transfer'),
+    ('equity', 'Equity Bank'),
+)
+
+CARD_BRAND = (
+    ('visa', 'Visa'),
+    ('mastercard', 'Mastercard'),
+    ('amex', 'American Express'),
+    ('discover', 'Discover'),
+    ('jcb', 'JCB'),
+    ('diners_club', "Diner's Club"),
+    ('unionpay', 'UnionPay'),
+    ('maestro', 'Maestro'),
+    ('unknown', 'Unknown'),
+)
+
+class SavedPaymentMethod(models.Model):
+    """Stores tokenized payment method references — no raw card numbers."""
+    import uuid
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    payment_profile = models.ForeignKey(PaymentProfile, on_delete=models.CASCADE, related_name='saved_methods')
+    
+    # Method type
+    method_type = models.CharField(max_length=20, choices=PAYMENT_METHOD_TYPE, default='card')
+    
+    # Card-specific fields (only for method_type='card')
+    last_four = models.CharField(max_length=4, blank=True)
+    card_brand = models.CharField(max_length=20, choices=CARD_BRAND, default='unknown', blank=True)
+    expiry_month = models.IntegerField(null=True, blank=True)
+    expiry_year = models.IntegerField(null=True, blank=True)
+    billing_zip = models.CharField(max_length=20, blank=True)
+    
+    # M-Pesa specific
+    phone_number = models.CharField(max_length=20, blank=True)
+    
+    # PayPal specific
+    paypal_email = models.EmailField(blank=True)
+    
+    # Bank-specific
+    bank_account_last_four = models.CharField(max_length=4, blank=True)
+    bank_name = models.CharField(max_length=100, blank=True)
+    
+    # Provider token (encrypted reference from Stripe/PayPal/etc.)
+    provider_token = models.CharField(max_length=500, blank=True)
+    provider = models.CharField(max_length=50, blank=True)  # e.g., 'stripe', 'paypal'
+    
+    # Display
+    nickname = models.CharField(max_length=100, blank=True)  # e.g., "My Visa ending 4242"
+    is_default = models.BooleanField(default=False)
+    is_verified = models.BooleanField(default=False)
+    
+    created_at = models.DateTimeField(default=timezone.now)
+    updated_at = models.DateTimeField(auto_now=True)
+    
+    class Meta:
+        indexes = [
+            models.Index(fields=['payment_profile', 'is_default']),
+            models.Index(fields=['method_type']),
+        ]
+        ordering = ['-is_default', '-created_at']
+    
+    def __str__(self):
+        if self.method_type == 'card':
+            return f"{self.get_card_brand_display()} ending {self.last_four}"
+        elif self.method_type == 'mpesa':
+            return f"M-Pesa {self.phone_number}"
+        elif self.method_type == 'paypal':
+            return f"PayPal {self.paypal_email}"
+        return f"{self.get_method_type_display()} - {self.nickname or self.id}"
+    
+    def save(self, *args, **kwargs):
+        # Auto-generate nickname if empty
+        if not self.nickname:
+            self.nickname = str(self)
+        # Ensure only one default per user
+        if self.is_default:
+            SavedPaymentMethod.objects.filter(
+                payment_profile=self.payment_profile, is_default=True
+            ).exclude(pk=self.pk).update(is_default=False)
+        super().save(*args, **kwargs)
+

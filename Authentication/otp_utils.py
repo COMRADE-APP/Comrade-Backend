@@ -43,7 +43,7 @@ def generate_qr_code(secret, email):
     """
     totp_uri = pyotp.totp.TOTP(secret).provisioning_uri(
         name=email,
-        issuer_name='Comrade'
+        issuer_name='Qomrade'
     )
     
     qr = qrcode.QRCode(version=1, box_size=10, border=5)
@@ -72,7 +72,7 @@ def send_email_otp(email, otp, action='login'):
         'registration': 'Email Verification'
     }.get(action, 'Verification')
     
-    subject = f'Comrade - {action_text} Code'
+    subject = f'Qomrade - {action_text} Code'
     
     html_message = f"""
     <!DOCTYPE html>
@@ -90,7 +90,7 @@ def send_email_otp(email, otp, action='login'):
     <body>
         <div class="container">
             <div class="header">
-                <h1>Comrade</h1>
+                <h1>Qomrade</h1>
                 <p>{action_text}</p>
             </div>
             <div class="content">
@@ -101,7 +101,7 @@ def send_email_otp(email, otp, action='login'):
                 <p>If you didn't request this code, please ignore this email.</p>
             </div>
             <div class="footer">
-                <p>&copy; 2025 Comrade. All rights reserved.</p>
+                <p>&copy; 2025 Qomrade. All rights reserved.</p>
             </div>
         </div>
     </body>
@@ -129,7 +129,7 @@ def send_sms_otp(phone_number, otp, action='login'):
     try:
         client = Client(settings.TWILIO_ACCOUNT_SID, settings.TWILIO_AUTH_TOKEN)
         
-        message_body = f"Your Comrade verification code is: {otp}. Valid for {OTP_EXPIRY_MINUTES} minutes."
+        message_body = f"Your Qomrade verification code is: {otp}. Valid for {OTP_EXPIRY_MINUTES} minutes."
         
         message = client.messages.create(
             body=message_body,
@@ -146,7 +146,7 @@ def send_sms_otp(phone_number, otp, action='login'):
 
 def send_2fa_qr_code(email, secret, qr_code_data):
     """Send 2FA QR code via email"""
-    subject = 'Comrade - 2FA Setup QR Code'
+    subject = 'Qomrade - 2FA Setup QR Code'
     
     html_message = f"""
     <!DOCTYPE html>
@@ -161,7 +161,7 @@ def send_2fa_qr_code(email, secret, qr_code_data):
     </head>
     <body>
         <div class="container">
-            <h2>2FA Setup for Comrade</h2>
+            <h2>2FA Setup for Qomrade</h2>
             <p>Scan this QR code with your authenticator app:</p>
             <div class="qr-container">
                 <img src="{qr_code_data}" alt="QR Code" />

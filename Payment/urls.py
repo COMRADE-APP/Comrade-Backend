@@ -3,7 +3,8 @@ from rest_framework.routers import DefaultRouter
 from Payment import views
 from Payment.views_payment import (
     PaymentMethodViewSet, ProcessPaymentView, RefundPaymentView,
-    StripeWebhookView, PayPalWebhookView, MpesaCallbackView
+    StripeWebhookView, PayPalWebhookView, MpesaCallbackView,
+    DetectPaymentMethodView
 )
 from Payment.views_transactions import (
     DepositView, WithdrawView, TransferView, VerifyAccountView
@@ -41,6 +42,7 @@ urlpatterns = [
     # Payment processing
     path('process/', ProcessPaymentView.as_view(), name='process-payment'),
     path('refund/', RefundPaymentView.as_view(), name='refund-payment'),
+    path('detect-method/', DetectPaymentMethodView.as_view(), name='detect-payment-method'),
     
     # Transaction Actions
     path('deposit/', DepositView.as_view(), name='deposit'),
@@ -53,3 +55,4 @@ urlpatterns = [
     path('paypal/webhook/', PayPalWebhookView.as_view(), name='paypal-webhook'),
     path('mpesa/callback/', MpesaCallbackView.as_view(), name='mpesa-callback'),
 ]
+

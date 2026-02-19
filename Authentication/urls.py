@@ -35,6 +35,21 @@ from Authentication.profile_views import (
     RequestDeletionView, CancelDeletionView,
     DeletionRequestViewSet, ArchivedUserViewSet, UserSearchView
 )
+from Authentication.admin_views import (
+    AdminDashboardStatsView, AdminUserManagementView,
+    AdminToggleUserActiveView, AdminUpdateUserRoleView,
+    AdminContentModerationView, AdminContentDeleteView,
+    AdminAnalyticsView, AdminSystemInfoView
+)
+from Authentication.role_portal_views import (
+    StaffPortalDashboardView, StaffUserAssistView,
+    AuthorPortalDashboardView,
+    ModeratorPortalDashboardView, ModeratorContentReviewView,
+    LecturerPortalDashboardView,
+    InstitutionPortalDashboardView,
+    OrganisationPortalDashboardView,
+    PartnerPortalDashboardView
+)
 
 router = DefaultRouter()
 router.register(r'users', CustomUserViewSet)
@@ -127,5 +142,26 @@ urlpatterns = [
     path('twitter/callback/', TwitterLoginCallbackView.as_view(), name='twitter-callback'),
     path('linkedin/callback/', LinkedInLoginCallbackView.as_view(), name='linkedin-callback'),
     path('microsoft/callback/', MicrosoftLoginCallbackView.as_view(), name='microsoft-callback'),
+    
+    # Admin Portal API
+    path('admin/dashboard-stats/', AdminDashboardStatsView.as_view(), name='admin-dashboard-stats'),
+    path('admin/users-management/', AdminUserManagementView.as_view(), name='admin-users-management'),
+    path('admin/users/<int:user_id>/toggle-active/', AdminToggleUserActiveView.as_view(), name='admin-toggle-user'),
+    path('admin/users/<int:user_id>/update-role/', AdminUpdateUserRoleView.as_view(), name='admin-update-role'),
+    path('admin/content/', AdminContentModerationView.as_view(), name='admin-content-moderation'),
+    path('admin/content/delete/', AdminContentDeleteView.as_view(), name='admin-content-delete'),
+    path('admin/analytics/', AdminAnalyticsView.as_view(), name='admin-analytics'),
+    path('admin/system-info/', AdminSystemInfoView.as_view(), name='admin-system-info'),
+
+    # Role-Specific Portal APIs
+    path('portal/staff/dashboard/', StaffPortalDashboardView.as_view(), name='staff-portal-dashboard'),
+    path('portal/staff/users/', StaffUserAssistView.as_view(), name='staff-user-assist'),
+    path('portal/author/dashboard/', AuthorPortalDashboardView.as_view(), name='author-portal-dashboard'),
+    path('portal/moderator/dashboard/', ModeratorPortalDashboardView.as_view(), name='moderator-portal-dashboard'),
+    path('portal/moderator/content/', ModeratorContentReviewView.as_view(), name='moderator-content-review'),
+    path('portal/lecturer/dashboard/', LecturerPortalDashboardView.as_view(), name='lecturer-portal-dashboard'),
+    path('portal/institution/dashboard/', InstitutionPortalDashboardView.as_view(), name='institution-portal-dashboard'),
+    path('portal/organisation/dashboard/', OrganisationPortalDashboardView.as_view(), name='organisation-portal-dashboard'),
+    path('portal/partner/dashboard/', PartnerPortalDashboardView.as_view(), name='partner-portal-dashboard'),
 ]
 
