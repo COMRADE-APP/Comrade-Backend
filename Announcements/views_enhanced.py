@@ -26,7 +26,11 @@ class AnnouncementViewSet(ModelViewSet):
     filterset_fields = ['user', 'status', 'visibility']
     search_fields = ['heading', 'content']
     ordering_fields = ['-time_stamp']
-    
+
+    def perform_create(self, serializer):
+        """Auto-set user to the authenticated user"""
+        serializer.save(user=self.request.user)
+
     @action(detail=True, methods=['post'])
     def grant_permission(self, request, pk=None):
         """Grant announcement permissions to a user"""

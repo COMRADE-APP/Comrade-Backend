@@ -27,8 +27,7 @@ def create_event_room(sender, instance, created, **kwargs):
             description=f"Discussion room for the event: {instance.name}",
             avatar=None,
             cover_image=None,
-            creator=instance.created_by,
-            is_public=instance.event_type == 'public',
+            created_by=instance.created_by,
         )
         
         # Calculate room expiry based on event end date

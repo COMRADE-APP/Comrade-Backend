@@ -72,7 +72,8 @@ class OpinionSerializer(serializers.ModelSerializer):
             'likes_count', 'comments_count', 'reposts_count', 'shares_count', 'views_count',
             'is_liked', 'is_reposted', 'is_bookmarked',
             'quoted_opinion', 'is_pinned', 'is_repost', 'reposted_by_user', 'original_content',
-            'media_files', 'created_at', 'time_ago', 'entity_author', 'is_anonymous', 'room', 'user_type'
+            'media_files', 'created_at', 'time_ago', 'entity_author', 'poster_role',
+            'is_anonymous', 'room', 'user_type'
         ]
         read_only_fields = ['id', 'user', 'likes_count', 'comments_count', 'reposts_count', 'created_at']
     
@@ -105,22 +106,41 @@ class OpinionSerializer(serializers.ModelSerializer):
         return data
     
     def get_entity_author(self, obj):
-        """Return entity author info if opinion was posted by an org or institution"""
+        """Return entity author info if opinion was posted by an org, institution, or establishment"""
+        entity = None
         if obj.organisation:
-            return {
+            entity = {
                 'id': obj.organisation.id,
                 'name': obj.organisation.name,
                 'type': 'organisation',
-                'avatar': obj.organisation.logo.url if obj.organisation.logo else None,
+                'avatar': obj.organisation.profile_picture.url if obj.organisation.profile_picture else None,
             }
-        if obj.institution:
-            return {
+        elif obj.institution:
+            entity = {
                 'id': obj.institution.id,
                 'name': obj.institution.name,
                 'type': 'institution',
-                'avatar': obj.institution.logo.url if obj.institution.logo else None,
+                'avatar': obj.institution.profile_picture.url if obj.institution.profile_picture else (obj.institution.logo_url or None),
             }
-        return None
+        elif obj.establishment:
+            entity = {
+                'id': obj.establishment.id,
+                'name': obj.establishment.name,
+                'type': 'establishment',
+                'avatar': obj.establishment.logo.url if obj.establishment.logo else None,
+            }
+        
+        if entity and obj.poster_role:
+            role_labels = {
+                'owner': {'label': 'Owner', 'icon': '👑'},
+                'admin': {'label': 'Admin', 'icon': '🛡️'},
+                'moderator': {'label': 'Moderator', 'icon': '🔧'},
+                'member': {'label': 'Member', 'icon': '👤'},
+            }
+            entity['poster_role'] = obj.poster_role
+            entity['poster_role_display'] = role_labels.get(obj.poster_role, {'label': obj.poster_role, 'icon': ''})
+        
+        return entity
     
     def get_is_liked(self, obj):
         request = self.context.get('request')
@@ -194,7 +214,8 @@ class OpinionCreateSerializer(serializers.ModelSerializer):
     """Serializer for creating opinions"""
     class Meta:
         model = Opinion
-        fields = ['content', 'visibility', 'media_url', 'media_type', 'quoted_opinion', 'is_anonymous', 'room']
+        fields = ['content', 'visibility', 'media_url', 'media_type', 'quoted_opinion', 'is_anonymous', 'room',
+                  'organisation', 'institution', 'establishment', 'poster_role']
     
     def validate_content(self, value):
         if len(value.strip()) == 0:

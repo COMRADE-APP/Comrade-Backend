@@ -3,7 +3,7 @@ Announcements URL Configuration with Enhanced Features
 """
 from django.urls import path, include
 from rest_framework.routers import DefaultRouter
-from Announcements.views import AnnouncementsViewSet
+from Announcements.views import AnnouncementsViewSet, TaskViewSet
 from Announcements.views_enhanced import (
     AnnouncementViewSet as EnhancedAnnouncementViewSet,
     ServiceConversionView,
@@ -13,6 +13,7 @@ from Announcements.views_enhanced import (
 router = DefaultRouter()
 # Use enhanced viewset for main announcements
 router.register(r'', EnhancedAnnouncementViewSet, basename='announcement')
+router.register(r'tasks', TaskViewSet, basename='tasks')
 router.register(r'notifications', OfflineNotificationViewSet, basename='offline-notification')
 
 urlpatterns = [

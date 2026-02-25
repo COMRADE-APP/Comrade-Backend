@@ -71,6 +71,67 @@ class OrganisationViewSet(ModelViewSet):
         }
         return Response(hierarchy)
     
+    @action(detail=True, methods=['post'], permission_classes=[IsAuthenticated])
+    def set_portal_password(self, request, pk=None):
+        """Set or update portal password for entity account switching"""
+        organisation = self.get_object()
+        user = request.user
+        
+        # Only creator or admin can set portal password
+        is_authorized = (organisation.created_by == user or
+            OrganisationMember.objects.filter(
+                organisation=organisation, user=user, role='admin', is_active=True
+            ).exists())
+        
+        if not is_authorized:
+            return Response({'error': 'Only the creator or admin can set the portal password'}, 
+                          status=status.HTTP_403_FORBIDDEN)
+        
+        password = request.data.get('password')
+        password_type = request.data.get('password_type', 'pin')
+        
+        if not password:
+            return Response({'error': 'Password is required'}, status=status.HTTP_400_BAD_REQUEST)
+        
+        if password_type == 'pin' and (not password.isdigit() or len(password) < 4):
+            return Response({'error': 'PIN must be at least 4 digits'}, status=status.HTTP_400_BAD_REQUEST)
+        
+        if password_type == 'password' and len(password) < 6:
+            return Response({'error': 'Password must be at least 6 characters'}, status=status.HTTP_400_BAD_REQUEST)
+        
+        organisation.portal_password_type = password_type
+        organisation.set_portal_password(password)
+        return Response({'message': 'Portal password set successfully'})
+    
+    @action(detail=True, methods=['post'], permission_classes=[IsAuthenticated])
+    def verify_portal_password(self, request, pk=None):
+        """Verify portal password for account switching"""
+        organisation = self.get_object()
+        user = request.user
+        
+        # Must be a member or creator
+        is_member = (organisation.created_by == user or
+            OrganisationMember.objects.filter(
+                organisation=organisation, user=user, is_active=True
+            ).exists())
+        
+        if not is_member:
+            return Response({'error': 'You are not a member of this organisation'}, 
+                          status=status.HTTP_403_FORBIDDEN)
+        
+        if not organisation.has_portal_password():
+            return Response({'verified': True, 'message': 'No portal password set'})
+        
+        password = request.data.get('password')
+        if not password:
+            return Response({'error': 'Password is required'}, status=status.HTTP_400_BAD_REQUEST)
+        
+        if organisation.check_portal_password(password):
+            return Response({'verified': True, 'message': 'Password verified'})
+        else:
+            return Response({'verified': False, 'error': 'Incorrect password'}, 
+                          status=status.HTTP_401_UNAUTHORIZED)
+
     @action(detail=False, methods=['get'], permission_classes=[IsAuthenticated])
     def my_organizations(self, request):
         """Get organizations where current user is a member (for account switching)"""
@@ -91,8 +152,9 @@ class OrganisationViewSet(ModelViewSet):
                     'id': str(org.id),
                     'name': org.name,
                     'type': 'organisation',
-                    'avatar': org.logo_url if hasattr(org, 'logo_url') else None,
-                    'role': membership.role
+                    'avatar': org.profile_picture.url if org.profile_picture else None,
+                    'role': membership.role,
+                    'has_portal_password': org.has_portal_password(),
                 })
                 seen_ids.add(org.id)
         
@@ -103,8 +165,9 @@ class OrganisationViewSet(ModelViewSet):
                     'id': str(org.id),
                     'name': org.name,
                     'type': 'organisation',
-                    'avatar': org.logo_url if hasattr(org, 'logo_url') else None,
-                    'role': 'creator'
+                    'avatar': org.profile_picture.url if org.profile_picture else None,
+                    'role': 'creator',
+                    'has_portal_password': org.has_portal_password(),
                 })
                 seen_ids.add(org.id)
         

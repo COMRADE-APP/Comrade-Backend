@@ -27,6 +27,13 @@ REPORT_REASON_CHOICES = (
     ('other', 'Other'),
 )
 
+POSTER_ROLE_CHOICES = (
+    ('owner', 'Owner/Creator'),
+    ('admin', 'Administrator'),
+    ('moderator', 'Moderator'),
+    ('member', 'Member'),
+)
+
 
 class Opinion(models.Model):
     """
@@ -54,6 +61,21 @@ class Opinion(models.Model):
         null=True,
         blank=True,
         related_name='opinions'
+    )
+    establishment = models.ForeignKey(
+        'Payment.Establishment',
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name='opinions'
+    )
+    # Role of the poster at time of posting (displayed as badge on opinions & room content)
+    poster_role = models.CharField(
+        max_length=20,
+        choices=POSTER_ROLE_CHOICES,
+        blank=True,
+        null=True,
+        help_text='Role of poster within the entity at time of posting'
     )
     content = models.TextField(max_length=5000)  # Increased for premium users
     visibility = models.CharField(

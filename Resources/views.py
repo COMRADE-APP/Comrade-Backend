@@ -137,7 +137,9 @@ class ResourceViewSet(ModelViewSet):
 
     def perform_create(self, serializer):
         """Create resource and optionally link to a room and handle visibility"""
-        instance = serializer.save(created_by=self.request.user)
+        from Authentication.models import Profile
+        profile, _ = Profile.objects.get_or_create(user=self.request.user)
+        instance = serializer.save(created_by=profile)
         
         # Check if room parameter was provided
         room_id = self.request.data.get('room')
