@@ -12,17 +12,28 @@ from Opinions.models import Follow
 
 class BaseUserSerializer(serializers.ModelSerializer):
     confirm_password = serializers.CharField(write_only=True)
+    browser_locale = serializers.CharField(write_only=True, required=False, allow_blank=True)
 
     class Meta:
         model = CustomUser
-        fields = ['first_name', 'last_name', 'other_names', 'email', 'password', 'confirm_password', 'phone_number', 'user_type']
+        fields = [
+            'first_name', 'last_name', 'other_names', 'email',
+            'password', 'confirm_password', 'phone_number', 'user_type',
+            'date_of_birth', 'preferred_currency', 'preferred_language',
+            'browser_locale',
+        ]
+        extra_kwargs = {
+            'date_of_birth': {'required': False},
+            'preferred_currency': {'required': False},
+            'preferred_language': {'required': False},
+        }
     
     def validate(self, data):
         password = data['password']
         if len(password) < 8:
             raise serializers.ValidationError({"password": "Password too short. Use 8 characters or more."})
         if (not re.search(r'[A-Z]', password) or not re.search(r'[a-z]', password) or 
-            not re.search(r'[0-9]', password) or not re.search(r'[!@#$%^&*(),.?\":{}|<>]', password)):
+            not re.search(r'[0-9]', password) or not re.search(r'[!@#$%^&*(),.?\\":{}|<>]', password)):
             raise serializers.ValidationError({"password": "Password must contain at least one uppercase, lowercase, numeric, and special character."})
         if not data.get('confirm_password'):
             raise serializers.ValidationError({'confirm_password': 'The password should be confirmed'})
@@ -36,6 +47,7 @@ class BaseUserSerializer(serializers.ModelSerializer):
 
     def create(self, validated_data):
         validated_data.pop('confirm_password', None)
+        validated_data.pop('browser_locale', None)  # Not a model field, handled in the view
         password = validated_data.pop('password', None)
         if password is not None:
             user = CustomUser.objects.create_user(password=password, is_active=False, **validated_data)
@@ -46,14 +58,19 @@ class BaseUserSerializer(serializers.ModelSerializer):
         UserProfile.objects.create(user=user)
         
         return user
+
     
 
 
 class CustomUserSerializer(serializers.ModelSerializer):
     class Meta:
         model = CustomUser
-        fields = ['id', 'email', 'first_name', 'last_name', 'other_names', 'phone_number', 'user_type', 'is_active']
-        read_only_fields = ['id', 'is_active'] 
+        fields = [
+            'id', 'email', 'first_name', 'last_name', 'other_names',
+            'phone_number', 'user_type', 'is_active',
+            'date_of_birth', 'preferred_currency', 'preferred_language',
+        ]
+        read_only_fields = ['id', 'is_active']
 
 
 class LoginSerializer(serializers.Serializer):
@@ -201,6 +218,9 @@ class UserProfileSerializer(serializers.ModelSerializer):
     last_name = serializers.CharField(source='user.last_name', read_only=True)
     other_names = serializers.CharField(source='user.other_names', read_only=True)
     user_type = serializers.CharField(source='user.user_type', read_only=True)
+    date_of_birth = serializers.DateField(source='user.date_of_birth', read_only=True)
+    preferred_currency = serializers.CharField(source='user.preferred_currency', read_only=True)
+    preferred_language = serializers.CharField(source='user.preferred_language', read_only=True)
     full_name = serializers.SerializerMethodField()
     is_owner = serializers.SerializerMethodField()
     is_following = serializers.SerializerMethodField()
@@ -215,6 +235,7 @@ class UserProfileSerializer(serializers.ModelSerializer):
         fields = [
             'user_id', 'email', 'phone_number', 'first_name', 'last_name', 
             'other_names', 'user_type', 'full_name', 'is_owner',
+            'date_of_birth', 'preferred_currency', 'preferred_language',
             'avatar', 'avatar_url', 'cover_image', 'cover_url',
             'bio', 'location', 'occupation', 'website', 'interests',
             'show_email', 'show_phone', 'allow_messages', 

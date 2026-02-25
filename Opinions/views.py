@@ -123,35 +123,68 @@ class OpinionViewSet(viewsets.ModelViewSet):
         # Handle entity authorship - get organisation or institution from request
         organisation = None
         institution = None
+        establishment = None
+        poster_role = None
         
         org_id = self.request.data.get('organisation')
         inst_id = self.request.data.get('institution')
+        estab_id = self.request.data.get('establishment')
         
         if org_id:
             try:
                 from Organisation.models import Organisation, OrganisationMember
-                # Verify user is a member of the organization
-                if OrganisationMember.objects.filter(
+                membership = OrganisationMember.objects.filter(
                     organisation_id=org_id, 
                     user=user, 
                     is_active=True
-                ).exists():
-                    organisation = Organisation.objects.get(id=org_id)
+                ).first()
+                org = Organisation.objects.get(id=org_id)
+                if membership:
+                    organisation = org
+                    poster_role = membership.role
+                elif org.created_by == user:
+                    organisation = org
+                    poster_role = 'owner'
             except Exception as e:
                 print(f"Error setting organisation: {e}")
         
         if inst_id:
             try:
                 from Institution.models import Institution, InstitutionMember
-                # Verify user is a member of the institution
-                if InstitutionMember.objects.filter(
+                membership = InstitutionMember.objects.filter(
                     institution_id=inst_id, 
                     user=user, 
                     is_active=True
-                ).exists():
-                    institution = Institution.objects.get(id=inst_id)
+                ).first()
+                inst = Institution.objects.get(id=inst_id)
+                if membership:
+                    institution = inst
+                    # Map institution roles to poster_role
+                    role_map = {'creator': 'owner', 'admin': 'admin', 'moderator': 'moderator', 'member': 'member', 'subscriber': 'member'}
+                    poster_role = role_map.get(membership.role, 'member')
+                elif inst.created_by == user:
+                    institution = inst
+                    poster_role = 'owner'
             except Exception as e:
                 print(f"Error setting institution: {e}")
+        
+        if estab_id:
+            try:
+                from Payment.models import Establishment
+                estab = Establishment.objects.get(id=estab_id)
+                if estab.owner.user == user:
+                    establishment = estab
+                    poster_role = 'owner'
+                # Check if user is linked via the org that owns it
+                elif estab.organisation and organisation and estab.organisation == organisation:
+                    establishment = estab
+            except Exception as e:
+                print(f"Error setting establishment: {e}")
+        
+        # Allow manual poster_role override (if provided explicitly)
+        explicit_role = self.request.data.get('poster_role')
+        if explicit_role and explicit_role in ['owner', 'admin', 'moderator', 'member']:
+            poster_role = explicit_role
         
         # Handle room-scoped opinions
         room = None
@@ -172,6 +205,8 @@ class OpinionViewSet(viewsets.ModelViewSet):
             user=user, 
             organisation=organisation, 
             institution=institution,
+            establishment=establishment,
+            poster_role=poster_role,
             room=room,
             is_anonymous=bool(is_anonymous)
         )

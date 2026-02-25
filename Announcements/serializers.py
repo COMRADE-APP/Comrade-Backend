@@ -6,7 +6,7 @@ class AnnouncementsSerializer(serializers.ModelSerializer):
     class Meta:
         model = Announcements
         fields = '__all__'  
-        read_only_fields = ['time_stamp', 'status']
+        read_only_fields = ['user', 'time_stamp', 'status']
         
 class TextSerializer(serializers.ModelSerializer):
     class Meta:

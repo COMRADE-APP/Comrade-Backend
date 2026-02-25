@@ -58,6 +58,10 @@ class RegisterView(APIView):
         if serializer.is_valid():
             user = serializer.save()
             
+            # Infer currency and language from email TLD / browser locale
+            browser_locale = request.data.get('browser_locale', '')
+            self._infer_preferences(user, browser_locale)
+            
             # Log registration
             log_user_activity(user, 'register', request, "User registered")
             
@@ -86,6 +90,39 @@ class RegisterView(APIView):
         print('-------------------', serializer.errors, '-------------------')
         
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+    
+    def _infer_preferences(self, user, browser_locale):
+        """Infer and set currency/language from email TLD and browser locale."""
+        from Authentication.currency_utils import (
+            infer_currency_from_email, infer_currency_from_locale,
+            infer_language_from_email, infer_language_from_locale,
+        )
+        changed = False
+        
+        # Currency: email TLD first, then browser locale, then keep default (USD)
+        if user.preferred_currency == 'USD':  # Only if not explicitly set
+            currency = infer_currency_from_email(user.email)
+            if not currency:
+                currency = infer_currency_from_locale(browser_locale)
+            if currency:
+                user.preferred_currency = currency
+                changed = True
+        
+        # Language: browser locale first, then email TLD, then keep default (en)
+        if user.preferred_language == 'en':  # Only if not explicitly set
+            language = infer_language_from_locale(browser_locale)
+            if language == 'en':
+                # Try email TLD as fallback
+                email_lang = infer_language_from_email(user.email)
+                if email_lang:
+                    language = email_lang
+            if language and language != 'en':
+                user.preferred_language = language
+                changed = True
+        
+        if changed:
+            user.save(update_fields=['preferred_currency', 'preferred_language'])
+
 
 
 @method_decorator(csrf_exempt, name='dispatch')

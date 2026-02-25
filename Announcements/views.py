@@ -24,7 +24,7 @@ class AnnouncementsViewSet(ModelViewSet):
 
     def perform_create(self, serializer):
         """Create announcement and optionally link to a room"""
-        instance = serializer.save()
+        instance = serializer.save(user=self.request.user)
         
         # Check if room parameter was provided
         room_id = self.request.data.get('room')

@@ -10,9 +10,22 @@ class ResourceSerializer(serializers.ModelSerializer):
     linked_article_details = serializers.SerializerMethodField()
     linked_research_details = serializers.SerializerMethodField()
 
+    # Accept frontend field names and map to model fields
+    name = serializers.CharField(write_only=True, required=False, source='title')
+    description = serializers.CharField(write_only=True, required=False, source='desc')
+    resource_type = serializers.CharField(write_only=True, required=False, source='file_type')
+    external_link = serializers.URLField(write_only=True, required=False, source='res_link')
+
     class Meta:
         fields = '__all__'
         model = Resource
+        read_only_fields = ['created_by', 'created_on']
+        extra_kwargs = {
+            'title': {'required': False},
+            'desc': {'required': False},
+            'file_type': {'required': False},
+            'res_link': {'required': False},
+        }
 
     def get_linked_opinion_details(self, obj):
         from Opinions.serializers import OpinionSerializer

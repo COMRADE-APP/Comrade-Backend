@@ -111,7 +111,11 @@ class CustomUser(AbstractUser):
     last_seen = models.DateTimeField(null=True, blank=True)
     is_online = models.BooleanField(default=False)
 
-    
+    # User Preferences
+    date_of_birth = models.DateField(null=True, blank=True)
+    preferred_currency = models.CharField(max_length=3, default='USD')  # ISO 4217
+    preferred_language = models.CharField(max_length=10, default='en')  # BCP 47 (e.g. 'en', 'sw', 'fr')
+
     USERNAME_FIELD = 'email'
     REQUIRED_FIELDS = ['first_name', 'last_name']
 

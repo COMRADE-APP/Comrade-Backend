@@ -1,4 +1,5 @@
 from django.db import models
+from django.contrib.auth.hashers import make_password, check_password
 from datetime import datetime
 
 # Create your models here.
@@ -42,6 +43,25 @@ class Organisation(models.Model):
 
     # Followers
     followers = models.ManyToManyField('Authentication.CustomUser', blank=True, related_name='followed_organisations')
+
+    # Portal Password (for account switching / entity portal access)
+    portal_password = models.CharField(max_length=255, blank=True, null=True, help_text='Hashed portal password for entity account switching')
+    portal_password_type = models.CharField(max_length=10, choices=(
+        ('pin', 'PIN (numeric)'),
+        ('password', 'Password'),
+    ), default='pin', blank=True)
+
+    def set_portal_password(self, raw_password):
+        self.portal_password = make_password(raw_password)
+        self.save(update_fields=['portal_password'])
+
+    def check_portal_password(self, raw_password):
+        if not self.portal_password:
+            return False
+        return check_password(raw_password, self.portal_password)
+
+    def has_portal_password(self):
+        return bool(self.portal_password)
 
 
 
