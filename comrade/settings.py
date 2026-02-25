@@ -28,6 +28,7 @@ ALLOWED_HOSTS = [
     "http://localhost:5173",
     "http://localhost:8080",
     "https://comrade-frontend-ochre.vercel.app",
+    "https://qomrade.onrender.com",
 ]
 
 # Application definition
@@ -99,7 +100,8 @@ ALLOWED_HOSTS = [
     "localhost",
     "127.0.0.1",
     "[::1]",
-    "https://comrade-frontend-ochre.vercel.app"
+    "https://comrade-frontend-ochre.vercel.app",
+    "https://qomrade.onrender.com",
 ]
 
 # CORS settings - FIX THESE
@@ -109,6 +111,7 @@ CORS_ALLOWED_ORIGINS = [
     "http://localhost:5173",
     "http://127.0.0.1:5173",
     "https://comrade-frontend-ochre.vercel.app",
+    "https://qomrade.onrender.com",
 ]
 
 # CRITICAL: This must be True for cookies/session auth
@@ -122,6 +125,7 @@ CSRF_TRUSTED_ORIGINS = [
     "http://localhost:5173",
     "http://127.0.0.1:5173",
     "https://comrade-frontend-ochre.vercel.app",
+    "https://qomrade.onrender.com",
 ]
 
 # Additional CORS headers needed
@@ -154,6 +158,7 @@ CORS_ALLOWED_ORIGIN_REGEXES = [
     r"^https?://localhost:8080$",
     r"^https?://localhost:5173$",
     r"^https?://comrade-frontend-ochre.vercel.app$",
+    r"^https?://qomrade.onrender.com$",
 ]
 
 # CSRF_COOKIE_SECURE = False
