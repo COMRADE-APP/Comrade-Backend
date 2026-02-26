@@ -27,8 +27,8 @@ ALLOWED_HOSTS = [
     "http://localhost:3000",
     "http://localhost:5173",
     "http://localhost:8080",
-    "https://comrade-frontend-ochre.vercel.app",
-    "https://qomrade.onrender.com",
+    "comrade-frontend-ochre.vercel.app",
+    "qomrade.onrender.com",
 ]
 
 # Application definition
@@ -100,8 +100,8 @@ ALLOWED_HOSTS = [
     "localhost",
     "127.0.0.1",
     "[::1]",
-    "https://comrade-frontend-ochre.vercel.app",
-    "https://qomrade.onrender.com",
+    "comrade-frontend-ochre.vercel.app",
+    "qomrade.onrender.com",
 ]
 
 # CORS settings - FIX THESE
