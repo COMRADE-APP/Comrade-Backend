@@ -6,6 +6,7 @@ from pathlib import Path
 from datetime import timedelta
 import os
 from dotenv import load_dotenv
+import dj_database_url
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -23,12 +24,6 @@ ALLOWED_HOSTS = [
     "localhost",
     "127.0.0.1",
     "[::1]",
-    "http://localhost:8000",
-    "http://localhost:3000",
-    "http://localhost:5173",
-    "http://localhost:8080",
-    "comrade-frontend-ochre.vercel.app",
-    "qomrade.onrender.com",
 ]
 
 # Application definition
@@ -83,6 +78,7 @@ INSTALLED_APPS = [
 
 MIDDLEWARE = [
     'corsheaders.middleware.CorsMiddleware',
+    'whitenoise.middleware.WhiteNoiseMiddleware',
     'django.middleware.security.SecurityMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
@@ -96,37 +92,30 @@ MIDDLEWARE = [
 ]
 
 # ALLOWED_HOSTS: Only hostnames, no protocols/ports
-ALLOWED_HOSTS = [
-    "localhost",
-    "127.0.0.1",
-    "[::1]",
-    "comrade-frontend-ochre.vercel.app",
-    "qomrade.onrender.com",
-]
+# ALLOWED_HOSTS = [
+#     "localhost",
+#     "127.0.0.1",
+#     "[::1]",
+# ]
+
+ALLOWED_HOSTS = os.getenv("ALLOWED_HOSTS", "").split(",")
 
 # CORS settings - FIX THESE
-CORS_ALLOWED_ORIGINS = [
-    "http://localhost:3000",
-    "http://127.0.0.1:3000",
-    "http://localhost:5173",
-    "http://127.0.0.1:5173",
-    "https://comrade-frontend-ochre.vercel.app",
-    "https://qomrade.onrender.com",
-]
+# CORS_ALLOWED_ORIGINS = [
+#     "http://localhost:3000",
+#     "http://127.0.0.1:3000",
+#     "http://localhost:5173",
+#     "http://127.0.0.1:5173",
+# ]
+
+CORS_ALLOWED_ORIGINS = os.getenv("CORS_ALLOWED_ORIGINS", "").split(",")
 
 # CRITICAL: This must be True for cookies/session auth
 # CORS_ALLOW_CREDENTIALS = True
 
 
 # CSRF settings - CRITICAL for POST requests
-CSRF_TRUSTED_ORIGINS = [
-    "http://localhost:3000",
-    "http://127.0.0.1:3000",
-    "http://localhost:5173",
-    "http://127.0.0.1:5173",
-    "https://comrade-frontend-ochre.vercel.app",
-    "https://qomrade.onrender.com",
-]
+CSRF_TRUSTED_ORIGINS = os.getenv("CSRF_TRUSTED_ORIGINS", "").split(",")
 
 # Additional CORS headers needed
 CORS_ALLOW_HEADERS = [
@@ -157,14 +146,17 @@ CORS_ALLOWED_ORIGIN_REGEXES = [
     r"^https?://localhost:8000$",
     r"^https?://localhost:8080$",
     r"^https?://localhost:5173$",
-    r"^https?://comrade-frontend-ochre.vercel.app$",
-    r"^https?://qomrade.onrender.com$",
 ]
 
 # CSRF_COOKIE_SECURE = False
 # SESSION_COOKIE_SECURE = False
 
-# CORS_ALLOW_CREDENTIALS = True
+SECURE_SSL_REDIRECT = True
+SESSION_COOKIE_SECURE = True
+CSRF_COOKIE_SECURE = True
+
+CORS_ALLOW_CREDENTIALS = os.getenv("CORS_ALLOW_CREDENTIALS", "True") == "True"
+CSRF_TRUSTED_ORIGINS = os.getenv("CSRF_TRUSTED_ORIGINS", "").split(",")
 
 
 
@@ -225,16 +217,26 @@ WSGI_APPLICATION = 'comrade.wsgi.application'
 #     }
 # }
 
+# Accurate database configuration for Render
 DATABASES = {
-    'default': {
-        'ENGINE': 'django.contrib.gis.db.backends.postgis',
-        'NAME': 'qomradebd',
-        'USER': 'qomradebd_user',
-        'PASSWORD': os.getenv('DB_PASSWORD'),
-        'HOST': os.getenv('DB_EXTERNAL_URL'),
-        'PORT': '5432',
-    }
+    "default": dj_database_url.parse(
+        os.environ.get("DATABASE_URL"),
+        conn_max_age=600,
+        ssl_require=True
+    )
 }
+
+# Postgis db configurations
+# DATABASES = {
+#     'default': {
+#         'ENGINE': 'django.db.backends.postgresql',
+#         'NAME': 'qomradebd',
+#         'USER': 'qomradebd_user',
+#         'PASSWORD': os.getenv('DB_PASSWORD'),
+#         'HOST': os.getenv('DB_EXTERNAL_URL'),
+#         'PORT': '5432',
+#     }
+# }
 
 AUTH_PASSWORD_VALIDATORS = [
     {'NAME': 'django.contrib.auth.password_validation.UserAttributeSimilarityValidator'},
@@ -307,7 +309,7 @@ MPESA_BUSINESS_SHORTCODE = os.getenv('MPESA_BUSINESS_SHORTCODE', '')
 MPESA_PASSKEY = os.getenv('MPESA_PASSKEY', '')
 MPESA_API_URL = os.getenv('MPESA_API_URL', 'https://sandbox.safaricom.co.ke')
 MPESA_STK_PUSH_URL = os.getenv('MPESA_STK_PUSH_URL', f'{MPESA_API_URL}/mpesa/stkpush/v1/processrequest')
-MPESA_CALLBACK_URL = os.getenv('MPESA_CALLBACK_URL', 'https://yourdomain.com/api/payments/mpesa/callback/')
+MPESA_CALLBACK_URL = os.getenv('MPESA_CALLBACK_URL')
 
 # Equity Bank (Jenga API)
 EQUITY_API_KEY = os.getenv('EQUITY_API_KEY', '')
@@ -382,8 +384,8 @@ SOCIALACCOUNT_QUERY_EMAIL = True
 SOCIALACCOUNT_STORE_TOKENS = True
 
 # Redirect URLs - Point to frontend
-# NOTE: Frontend runs on port 5173 (Vite) by default, ensure FRONTEND_URL has trailing slash
-FRONTEND_URL = os.getenv('FRONTEND_URL', 'http://localhost:5173/')
+# NOTE: Frontend runs on port 3000 by default, ensure FRONTEND_URL has trailing slash
+FRONTEND_URL = os.getenv('FRONTEND_URL', 'http://localhost:3000/')
 
 # Dashboard is at root '/' in frontend
 FRONTEND_DASHBOARD = FRONTEND_URL  # Frontend dashboard is at '/'
