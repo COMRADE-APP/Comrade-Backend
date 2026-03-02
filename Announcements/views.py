@@ -318,6 +318,50 @@ class AnnouncementsViewSet(ModelViewSet):
 
         return Response({'message': f'Announcement will be sent as SMS in {notice_minutes} minute(s).'}, status=status.HTTP_200_OK)
 
+    @action(detail=True, methods=['post'])
+    def react(self, request, pk=None):
+        announcement = self.get_object()
+        user = request.user
+        reaction_type = request.data.get('reaction_type', 'like')
+
+        # Check if already reacted
+        existing_reaction = Reaction.objects.filter(user=user, announcement=announcement, reaction_type=reaction_type).first()
+        
+        if existing_reaction:
+            # Toggle reaction off
+            existing_reaction.delete()
+            return Response({'message': 'Reaction removed'}, status=status.HTTP_200_OK)
+        else:
+            # Add reaction
+            Reaction.objects.create(user=user, announcement=announcement, reaction_type=reaction_type)
+            return Response({'message': 'Reaction added'}, status=status.HTTP_201_CREATED)
+
+    @action(detail=True, methods=['post'])
+    def view(self, request, pk=None):
+        announcement = self.get_object()
+        announcement.views += 1
+        announcement.save(update_fields=['views'])
+        return Response({'message': 'View recorded', 'views': announcement.views}, status=status.HTTP_200_OK)
+
+    @action(detail=True, methods=['get', 'post'])
+    def comments(self, request, pk=None):
+        announcement = self.get_object()
+        if request.method == 'GET':
+            comments = Comment.objects.filter(announcement=announcement).order_by('-time_stamp')
+            serializer = CommentSerializer(comments, many=True)
+            return Response(serializer.data, status=status.HTTP_200_OK)
+        elif request.method == 'POST':
+            content = request.data.get('content', '').strip()
+            if not content:
+                return Response({'error': 'Content is required'}, status=status.HTTP_400_BAD_REQUEST)
+            comment = Comment.objects.create(
+                user=request.user,
+                announcement=announcement,
+                content=content,
+            )
+            serializer = CommentSerializer(comment)
+            return Response(serializer.data, status=status.HTTP_201_CREATED)
+
     # @action(detail=False, methods=['post', 'get'])
     # def repost_announcement(self, request):
     #     repost_serializer = RepostsSerializer(data=request.data)
@@ -340,16 +384,56 @@ class TaskViewSet(ModelViewSet):
 
     def perform_create(self, serializer):
         """Create task and optionally link to a room"""
-        instance = serializer.save()
+        instance = serializer.save(user=self.request.user)
         
         # Check if room parameter was provided
         room_id = self.request.data.get('room')
         if room_id:
             try:
+                from Rooms.models import Room
                 room = Room.objects.get(pk=room_id)
                 room.tasks.add(instance)
-            except Room.DoesNotExist:
+            except Exception:
                 pass  # Silently ignore invalid room ID
+
+    @action(detail=True, methods=['post'])
+    def react(self, request, pk=None):
+        task = self.get_object()
+        user = request.user
+        reaction_type = request.data.get('reaction_type', 'like')
+
+        existing_reaction = Reaction.objects.filter(user=user, task=task, reaction_type=reaction_type).first()
+        
+        if existing_reaction:
+            existing_reaction.delete()
+            return Response({'message': 'Reaction removed'}, status=status.HTTP_200_OK)
+        else:
+            Reaction.objects.create(user=user, task=task, reaction_type=reaction_type)
+            return Response({'message': 'Reaction added'}, status=status.HTTP_201_CREATED)
+
+    @action(detail=True, methods=['post'])
+    def view(self, request, pk=None):
+        task = self.get_object()
+        user = request.user
+        
+        if user.is_authenticated:
+            existing_view = Reaction.objects.filter(user=user, task=task, reaction_type='view').exists()
+            if not existing_view:
+                Reaction.objects.create(user=user, task=task, reaction_type='view')
+                # Assuming tasks don't have a view column natively yet, we can skip incrementing a direct field 
+                # or we just rely on the Reaction table. Let's return success.
+        
+        return Response({'message': 'View recorded'}, status=status.HTTP_200_OK)
+
+    @action(detail=True, methods=['post'])
+    def report(self, request, pk=None):
+        # Placeholder for reporting tasks, could integrate with a Report model later
+        return Response({'message': 'Task reported successfully'}, status=status.HTTP_200_OK)
+
+    @action(detail=True, methods=['post'])
+    def block(self, request, pk=None):
+        # Placeholder for blocking this creator/task type
+        return Response({'message': 'Task source blocked/marked not interested'}, status=status.HTTP_200_OK)
 
     @action(methods=['post', 'get'], detail=False)
     def set_expiry_duration(self, request):
@@ -498,9 +582,41 @@ class TaskResponseViewSet(ModelViewSet):
 class CommentViewSet(ModelViewSet):
     queryset = Comment.objects.all()
     serializer_class = CommentSerializer
-    filterset_fields = ['user', 'time_stamp']
-    search_fields = ['text']
-    ordering_fields = ['time_stamp']
+    filterset_fields = ['user', 'time_stamp', 'announcement']
+    search_fields = ['content']
+    ordering_fields = ['time_stamp', 'highlight_order']
+
+    @action(detail=True, methods=['post'])
+    def highlight(self, request, pk=None):
+        comment = self.get_object()
+        # Verify the user requesting the highlight is the creator of the announcement
+        # or has moderation permissions (for simplicity, assumed creator check here)
+        if comment.announcement and request.user != comment.announcement.user:
+            return Response({'error': 'Only the creator of the announcement can highlight comments.'}, status=status.HTTP_403_FORBIDDEN)
+            
+        highlight_order = request.data.get('highlight_order')
+        
+        if highlight_order is not None:
+            try:
+                order = int(highlight_order)
+                if order < 1 or order > 6:
+                    return Response({'error': 'Highlight order must be between 1 and 6.'}, status=status.HTTP_400_BAD_REQUEST)
+                # Check for existing comment with this order on the same announcement
+                if comment.announcement:
+                    existing = Comment.objects.filter(announcement=comment.announcement, highlight_order=order).first()
+                    if existing and existing.id != comment.id:
+                        # Clear the other comment's order to swap
+                        existing.highlight_order = None
+                        existing.save()
+            except ValueError:
+                return Response({'error': 'Highlight order must be an integer.'}, status=status.HTTP_400_BAD_REQUEST)
+        else:
+            order = None
+
+        comment.highlight_order = order
+        comment.save()
+
+        return Response({'message': 'Comment highlight updated successfully.', 'highlight_order': comment.highlight_order}, status=status.HTTP_200_OK)
 
 class ReactionViewSet(ModelViewSet):
     queryset = Reaction.objects.all()

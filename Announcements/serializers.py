@@ -25,24 +25,39 @@ class AnnouncementsRequestSerializer(serializers.ModelSerializer):
         fields = '__all__'  
         read_only_fields = ['time_stamp', 'status']
 
+class ChoiceSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Choice
+        fields = '__all__'  
+        read_only_fields = ['time_stamp', 'status']
+
+class QuestionSerializer(serializers.ModelSerializer):
+    choices = ChoiceSerializer(many=True, required=False, source='choice_set')
+    class Meta:
+        model = Question
+        fields = '__all__'  
+        read_only_fields = ['time_stamp']
+
 class TaskSerializer(serializers.ModelSerializer):
+    questions = QuestionSerializer(many=True, required=False, source='question_set')
     class Meta:
         model = Task
         fields = '__all__'  
         read_only_fields = ['time_stamp', 'status']
-    # def validate(self, data):
-        
-    #     return data
+
+    def create(self, validated_data):
+        questions_data = validated_data.pop('question_set', [])
+        task = Task.objects.create(**validated_data)
+        for q_data in questions_data:
+            choices_data = q_data.pop('choice_set', [])
+            question = Question.objects.create(task=task, **q_data)
+            for c_data in choices_data:
+                Choice.objects.create(question=question, **c_data)
+        return task
 
 class RepostsSerializer(serializers.ModelSerializer):
     class Meta:
         model = Reposts
-        fields = '__all__'  
-        read_only_fields = ['time_stamp', 'status']
-
-class ChoiceSerializer(serializers.ModelSerializer):
-    class Meta:
-        model = Choice
         fields = '__all__'  
         read_only_fields = ['time_stamp', 'status']
 
@@ -57,12 +72,6 @@ class CompletedTaskSerializer(serializers.ModelSerializer):
         model = CompletedTask
         fields = '__all__'  
         read_only_fields = ['completed_on']
-
-class QuestionSerializer(serializers.ModelSerializer):
-    class Meta:
-        model = Question
-        fields = '__all__'  
-        read_only_fields = ['timestamp']
 
 class SubQuestionSerializer(serializers.ModelSerializer):
     class Meta:
@@ -95,7 +104,13 @@ class ReactionSerializer(serializers.ModelSerializer):
         read_only_fields = ['time_stamp']
 
 class CommentSerializer(serializers.ModelSerializer):
+    user_name = serializers.SerializerMethodField()
     class Meta:
         model = Comment
         fields = '__all__'  
         read_only_fields = ['time_stamp']
+    
+    def get_user_name(self, obj):
+        if obj.user:
+            return f"{obj.user.first_name} {obj.user.last_name}".strip() or obj.user.email
+        return 'Anonymous'

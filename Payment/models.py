@@ -1081,3 +1081,151 @@ class SavedPaymentMethod(models.Model):
             ).exclude(pk=self.pk).update(is_default=False)
         super().save(*args, **kwargs)
 
+
+# ============================================================================
+# ML PRICING: Models for RL-based dynamic pricing
+# ============================================================================
+
+STUDENT_VERIFICATION_STATUS = (
+    ('pending', 'Pending Review'),
+    ('approved', 'Approved'),
+    ('rejected', 'Rejected'),
+    ('expired', 'Expired'),
+)
+
+class StudentVerification(models.Model):
+    """Student verification for student pricing package.
+    Students verified via ID documents, admission letter, transcripts, or school email."""
+    import uuid
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    user = models.OneToOneField(Profile, on_delete=models.CASCADE, related_name='student_verification')
+    
+    # Verification documents
+    student_id_document = models.FileField(upload_to='student_verification/ids/', null=True, blank=True)
+    admission_letter = models.FileField(upload_to='student_verification/admission/', null=True, blank=True)
+    transcript = models.FileField(upload_to='student_verification/transcripts/', null=True, blank=True)
+    school_email = models.EmailField(blank=True, help_text='Must be a valid .edu or .ac.xx email')
+    
+    # School info
+    institution_name = models.CharField(max_length=500)
+    student_number = models.CharField(max_length=100, blank=True)
+    expected_graduation = models.DateField(null=True, blank=True)
+    
+    # Verification status
+    status = models.CharField(max_length=20, choices=STUDENT_VERIFICATION_STATUS, default='pending')
+    verified_by = models.ForeignKey(Profile, on_delete=models.SET_NULL, null=True, blank=True, related_name='verified_students')
+    verification_notes = models.TextField(blank=True)
+    verified_at = models.DateTimeField(null=True, blank=True)
+    expires_at = models.DateTimeField(null=True, blank=True)
+    
+    # Discount
+    discount_rate = models.DecimalField(decimal_places=2, max_digits=5, default=40.00)  # 40% default
+    
+    created_at = models.DateTimeField(default=timezone.now)
+    updated_at = models.DateTimeField(auto_now=True)
+    
+    class Meta:
+        indexes = [
+            models.Index(fields=['user']),
+            models.Index(fields=['status']),
+        ]
+    
+    def __str__(self):
+        return f"{self.user.user.username} - {self.institution_name} ({self.status})"
+    
+    @property
+    def is_active(self):
+        if self.status != 'approved':
+            return False
+        if self.expires_at and self.expires_at < timezone.now():
+            return False
+        return True
+
+
+class PricingEvent(models.Model):
+    """Logs every pricing decision for RL training data collection."""
+    import uuid
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    
+    # Who and what
+    user = models.ForeignKey(PaymentProfile, on_delete=models.CASCADE, related_name='pricing_events')
+    product = models.ForeignKey(Product, on_delete=models.SET_NULL, null=True, blank=True)
+    
+    # Pricing decision
+    base_price = models.DecimalField(decimal_places=2, max_digits=12)
+    offered_price = models.DecimalField(decimal_places=2, max_digits=12)
+    discount_pct = models.DecimalField(decimal_places=4, max_digits=8, default=0)
+    
+    # State at time of decision (for replay buffer)
+    tier = models.CharField(max_length=20, choices=TIER_OPT)
+    is_student = models.BooleanField(default=False)
+    group_size = models.IntegerField(default=1)
+    demand_score = models.FloatField(default=0.0)
+    sentiment_score = models.FloatField(default=0.5)
+    notification_count = models.IntegerField(default=0)
+    supply_score = models.FloatField(default=0.0)
+    
+    # Action taken by model
+    price_action = models.FloatField(default=0.0)       # Price adjustment [-0.3, 0.3]
+    notify_action = models.FloatField(default=0.0)       # Notification intensity [0, 1]
+    promo_action = models.FloatField(default=0.0)        # Promo discount [0, 0.5]
+    
+    # Outcome
+    accepted = models.BooleanField(default=False)
+    revenue = models.DecimalField(decimal_places=2, max_digits=12, default=0)
+    user_savings = models.DecimalField(decimal_places=2, max_digits=12, default=0)
+    
+    # Metadata
+    model_version = models.CharField(max_length=50, default='v1')
+    is_exploration = models.BooleanField(default=False)  # Was noise added?
+    
+    created_at = models.DateTimeField(default=timezone.now)
+    
+    class Meta:
+        indexes = [
+            models.Index(fields=['user', '-created_at']),
+            models.Index(fields=['tier']),
+            models.Index(fields=['-created_at']),
+        ]
+    
+    def __str__(self):
+        return f"Pricing {self.offered_price} for {self.user} ({self.tier})"
+
+
+class UserPricingFeature(models.Model):
+    """Per-user ML features updated periodically for the pricing model."""
+    user = models.OneToOneField(PaymentProfile, on_delete=models.CASCADE, related_name='pricing_features')
+    
+    # Financial features
+    cumulative_savings = models.DecimalField(decimal_places=2, max_digits=12, default=0)
+    purchase_frequency = models.FloatField(default=0.0)   # Purchases per month
+    avg_transaction_value = models.DecimalField(decimal_places=2, max_digits=12, default=0)
+    total_spend = models.DecimalField(decimal_places=2, max_digits=12, default=0)
+    
+    # Engagement features
+    login_frequency = models.FloatField(default=0.0)      # Logins per week
+    session_duration_avg = models.FloatField(default=0.0)  # Minutes
+    pages_per_session = models.FloatField(default=0.0)
+    
+    # Platform features
+    tier = models.CharField(max_length=20, choices=TIER_OPT, default='free')
+    is_student = models.BooleanField(default=False)
+    group_memberships_count = models.IntegerField(default=0)
+    days_since_registration = models.IntegerField(default=0)
+    
+    # Pricing model state
+    current_discount_rate = models.FloatField(default=0.0)
+    price_sensitivity = models.FloatField(default=0.5)    # Estimated from behavior
+    churn_risk = models.FloatField(default=0.0)           # Probability of leaving
+    
+    # Timestamps
+    last_updated = models.DateTimeField(auto_now=True)
+    
+    class Meta:
+        indexes = [
+            models.Index(fields=['tier']),
+            models.Index(fields=['is_student']),
+        ]
+    
+    def __str__(self):
+        return f"Features for {self.user} (tier={self.tier}, student={self.is_student})"

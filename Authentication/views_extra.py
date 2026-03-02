@@ -269,20 +269,26 @@ class BaseSocialCallbackView(APIView):
         # Check if user is authenticated via allauth session
         if request.user.is_authenticated:
             user = request.user
-            print('--------------------PPPPPPPPPPPPPPPPPPP_______________')
             
             # Generate JWT tokens
             refresh = RefreshToken.for_user(user)
             
             # Get frontend URL (ensure no double slashes)
-            frontend_url = getattr(settings, 'FRONTEND_URL', 'http://localhost:5173/')
+            frontend_url = getattr(settings, 'FRONTEND_URL', 'http://localhost:3000/')
             if not frontend_url.endswith('/'):
                 frontend_url += '/'
             
-            # Check profile completion status
-            profile_completed = getattr(user, 'profile_completed', True)
+            # Check profile completion status via Profile model
+            profile_completed = False
+            try:
+                profile = user.profile
+                profile_completed = bool(profile.bio and profile.location)
+            except Profile.DoesNotExist:
+                profile_completed = False
             
-            print('--------------------PPPPPPPPPPPPPPPPPPP_______________')
+            # Check if user has a usable password (social-only users won't)
+            has_password = user.has_usable_password()
+            
             # Build redirect URL with tokens and user info
             redirect_url = (
                 f"{frontend_url}auth/callback?"
@@ -293,15 +299,15 @@ class BaseSocialCallbackView(APIView):
                 f"&first_name={user.first_name or ''}"
                 f"&user_type={user.user_type or ''}"
                 f"&profile_completed={'true' if profile_completed else 'false'}"
+                f"&has_password={'true' if has_password else 'false'}"
             )
-            print('--------------------PPPPPPPPPPPPPPPPPPP_______________')
             
             log_user_activity(user, 'social_login', request, f"Provider: {self.provider}")
             
             return redirect(redirect_url)
         
         # If not authenticated, redirect to login with error
-        frontend_url = getattr(settings, 'FRONTEND_URL', 'http://localhost:5173/')
+        frontend_url = getattr(settings, 'FRONTEND_URL', 'http://localhost:3000/')
         if not frontend_url.endswith('/'):
             frontend_url += '/'
         return redirect(f"{frontend_url}login?error=auth_failed")

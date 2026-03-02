@@ -260,7 +260,7 @@ class CapitalVentureViewSet(viewsets.ModelViewSet):
         """Get ventures the user is associated with"""
         ventures = CapitalVenture.objects.filter(
             Q(created_by=request.user) |
-            Q(organisation__members__user=request.user) |
+            Q(organisation__organisation_members__user=request.user) |
             Q(institution__members__user=request.user)
         ).distinct()
         serializer = CapitalVentureSerializer(ventures, many=True)

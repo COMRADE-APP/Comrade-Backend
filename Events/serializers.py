@@ -5,6 +5,7 @@ from datetime import datetime
 
 class EventSerializer(ModelSerializer):
     created_by_name = serializers.SerializerMethodField()
+    created_by_avatar = serializers.SerializerMethodField()
     
     class Meta:
         model = Event
@@ -14,6 +15,28 @@ class EventSerializer(ModelSerializer):
     def get_created_by_name(self, obj):
         if obj.created_by:
             return f"{obj.created_by.first_name} {obj.created_by.last_name}".strip() or obj.created_by.email
+        return None
+
+    def get_created_by_avatar(self, obj):
+        if obj.created_by:
+            try:
+                profile = obj.created_by.profile
+                if profile and profile.profile_picture:
+                    request = self.context.get('request')
+                    if request:
+                        return request.build_absolute_uri(profile.profile_picture.url)
+                    return profile.profile_picture.url
+            except Exception:
+                pass
+            try:
+                user_profile = obj.created_by.user_profile
+                if user_profile and user_profile.avatar:
+                    request = self.context.get('request')
+                    if request:
+                        return request.build_absolute_uri(user_profile.avatar.url)
+                    return user_profile.avatar.url
+            except Exception:
+                pass
         return None
 
     def validate_event_date(self, value):

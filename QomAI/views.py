@@ -22,6 +22,18 @@ from .serializers import (
 from .services.deepseek_service import qomai_service
 from .services.web_search_service import web_search_service
 from .services.research_service import deep_research_service
+from .services.voice_clone_service import voice_clone_service
+
+# For Voice Briefing
+from django.utils import timezone
+from datetime import timedelta
+from django.db.models import Count, Q
+try:
+    from Announcements.models import Task, Announcements
+    from Messages.models import ConversationParticipant, Message
+    from Events.models import Event
+except ImportError:
+    pass
 
 
 class ChatView(APIView):
@@ -273,6 +285,104 @@ class VoiceTranscriptionView(APIView):
 
 
 # ... (Keep existing ViewSets: ConversationViewSet, ChatHistoryView, UserPreferenceView, WebSearchView, FakeNewsAnalysisView, RecommendationsView, GenerateLearningPathView, GenerateTestView) ...
+
+class VoiceBriefingView(APIView):
+    """
+    Provides a synthesized text briefing for the AI Voice Assistant
+    Aggregates unread messages, pending tasks, and upcoming events.
+    """
+    permission_classes = [IsAuthenticated]
+    
+    def get(self, request):
+        user = request.user
+        now = timezone.now()
+        
+        briefing_parts = []
+        
+        # 1. Check Unread Messages
+        try:
+            unread_msgs = 0
+            participants = ConversationParticipant.objects.filter(user=user)
+            for p in participants:
+                unread_msgs += p.get_unread_count()
+                
+            if unread_msgs > 0:
+                msg_text = f"You have {unread_msgs} unread message{'s' if unread_msgs != 1 else ''}."
+                briefing_parts.append(msg_text)
+        except Exception as e:
+            print(f"Error fetching messages for briefing: {e}")
+            
+        # 2. Check Pending Tasks
+        try:
+            pending_tasks = Task.objects.filter(
+                user=user, 
+                state='active'
+            ).count()
+            
+            if pending_tasks > 0:
+                task_text = f"There are {pending_tasks} active task{'s' if pending_tasks != 1 else ''} on your board."
+                briefing_parts.append(task_text)
+        except Exception as e:
+            print(f"Error fetching tasks for briefing: {e}")
+            
+        # 3. Check Recent Announcements (last 7 days, unread)
+        try:
+            recent_announcements = Announcements.objects.filter(
+                user=user,
+                read_status=False,
+                time_stamp__gte=now - timedelta(days=7)
+            ).count()
+            
+            if recent_announcements > 0:
+                ann_text = f"You also have {recent_announcements} new announcement{'s' if recent_announcements != 1 else ''}."
+                briefing_parts.append(ann_text)
+        except Exception as e:
+            print(f"Error fetching announcements for briefing: {e}")
+            
+        # Final Assembly
+        if not briefing_parts:
+            final_text = "You're all caught up! There are no new messages, tasks, or announcements."
+        else:
+            final_text = "Here is your briefing. " + " ".join(briefing_parts)
+            
+        return Response({
+            "briefing_text": final_text
+        })
+
+
+class VoiceTTSView(APIView):
+    """
+    High-Fidelity Text-to-Speech endpoint (Phase 20)
+    Accepts text and returns an mp3 audio stream.
+    """
+    permission_classes = [IsAuthenticated]
+    
+    def get(self, request):
+        """
+        Fetch available high-fidelity custom and standard AI voices.
+        """
+        voices = voice_clone_service.get_available_voices()
+        return Response({'voices': voices}, status=200)
+    
+    def post(self, request):
+        text = request.data.get('text', '')
+        provider = request.data.get('provider', None)
+        voice_id = request.data.get('voice_id', None)
+        
+        if not text:
+            return Response({'error': 'No text provided for TTS.'}, status=400)
+            
+        result = voice_clone_service.generate_speech(text, provider=provider, voice_id=voice_id)
+        
+        if 'error' in result:
+            return Response(result, status=500)
+            
+        # Return audio directly
+        response = HttpResponse(result['audio_data'], content_type=result['content_type'])
+        # Add headers so frontend audio elements handle the stream cleanly
+        response['Accept-Ranges'] = 'bytes'
+        return response
+
 
 class ConversationViewSet(viewsets.ModelViewSet):
     permission_classes = [IsAuthenticated]
