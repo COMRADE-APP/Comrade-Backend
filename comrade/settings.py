@@ -217,6 +217,7 @@ WSGI_APPLICATION = 'comrade.wsgi.application'
 #     }
 # }
 
+# Accurate database configuration for Render
 DATABASES = {
     "default": dj_database_url.parse(
         os.environ.get("DATABASE_URL"),
