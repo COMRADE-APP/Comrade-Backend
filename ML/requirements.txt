@@ -41,3 +41,8 @@ matplotlib>=3.6.0
 # Model Serving (Optional)
 # uvicorn>=0.20.0
 # fastapi>=0.95.0
+
+# RL / Pricing Model
+gymnasium>=0.29.0
+beautifulsoup4>=4.12.0
+pyarrow>=14.0.0

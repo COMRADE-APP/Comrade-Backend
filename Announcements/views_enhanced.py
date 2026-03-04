@@ -10,7 +10,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework import status
 from django.contrib.contenttypes.models import ContentType
 from django.utils import timezone
-from Announcements.models import Announcements
+from Announcements.models import Announcements, Reaction, Comment
 from Announcements.enhanced_models import (
     AnnouncementPermission, ServiceAnnouncementConversion,
     AnnouncementSubscription, OfflineAnnouncementNotification
@@ -73,6 +73,39 @@ class AnnouncementViewSet(ModelViewSet):
                 'created': created
             }
         })
+
+    @action(detail=True, methods=['post'])
+    def react(self, request, pk=None):
+        announcement = self.get_object()
+        user = request.user
+        reaction_type = request.data.get('reaction_type', 'like')
+
+        existing_reaction = Reaction.objects.filter(user=user, announcement=announcement, reaction_type=reaction_type).first()
+        
+        if existing_reaction:
+            existing_reaction.delete()
+            return Response({'message': 'Reaction removed'}, status=status.HTTP_200_OK)
+        else:
+            Reaction.objects.create(user=user, announcement=announcement, reaction_type=reaction_type)
+            return Response({'message': 'Reaction added'}, status=status.HTTP_201_CREATED)
+
+    @action(detail=True, methods=['post'])
+    def view(self, request, pk=None):
+        announcement = self.get_object()
+        user = request.user
+        
+        # 1-view-per-user basis
+        if user.is_authenticated:
+            existing_view = Reaction.objects.filter(user=user, announcement=announcement, reaction_type='view').exists()
+            if not existing_view:
+                Reaction.objects.create(user=user, announcement=announcement, reaction_type='view')
+                announcement.views += 1
+                announcement.save(update_fields=['views'])
+        else:
+            # Fallback if accessed unauthenticated
+            pass # Or increment, but platform requires auth usually.
+
+        return Response({'message': 'View recorded', 'views': announcement.views}, status=status.HTTP_200_OK)
     
     @action(detail=True, methods=['post'])
     def subscribe(self, request, pk=None):
@@ -124,6 +157,30 @@ class AnnouncementViewSet(ModelViewSet):
                 {'error': 'No active subscription found'},
                 status=status.HTTP_404_NOT_FOUND
             )
+
+    @action(detail=True, methods=['get', 'post'])
+    def comments(self, request, pk=None):
+        announcement = self.get_object()
+        
+        if request.method == 'GET':
+            comments = Comment.objects.filter(announcement=announcement).order_by('-time_stamp')
+            from Announcements.serializers import CommentSerializer
+            serializer = CommentSerializer(comments, many=True)
+            return Response(serializer.data, status=status.HTTP_200_OK)
+        
+        elif request.method == 'POST':
+            content = request.data.get('content', '').strip()
+            if not content:
+                return Response({'error': 'Comment content is required'}, status=status.HTTP_400_BAD_REQUEST)
+            
+            comment = Comment.objects.create(
+                user=request.user,
+                announcement=announcement,
+                content=content
+            )
+            from Announcements.serializers import CommentSerializer
+            serializer = CommentSerializer(comment)
+            return Response(serializer.data, status=status.HTTP_201_CREATED)
 
 
 class ServiceConversionView(APIView):

@@ -3,7 +3,10 @@ from rest_framework.response import Response
 from rest_framework.viewsets import ModelViewSet
 from rest_framework.views import APIView
 from rest_framework.decorators import action
-from rest_framework import status, serializers
+from rest_framework import status, serializers, views, permissions
+import os
+import csv
+import pandas as pd
 from rest_framework.permissions import IsAuthenticated
 from django.db import transaction as db_transaction
 from django.db.models import Q, Sum
@@ -1674,3 +1677,261 @@ class ReviewViewSet(ModelViewSet):
         establishment.rating = total_rating / count if count else 0
         establishment.review_count = count
         establishment.save()
+
+
+# ============================================================================
+# DYNAMIC PRICING API VIEWS (RL Model)
+# ============================================================================
+
+class DynamicPriceView(APIView):
+    """GET /api/payment/pricing/<product_id>/
+    Returns the RL-optimized price for a product for the current user."""
+    permission_classes = [IsAuthenticated]
+    
+    def get(self, request, product_id):
+        from Payment.pricing_service import calculate_dynamic_price
+        
+        user = request.user
+        payment_profile = get_or_create_payment_profile(user)
+        if not payment_profile:
+            return Response({'error': 'Payment profile not found'}, status=status.HTTP_404_NOT_FOUND)
+        
+        try:
+            product = Product.objects.get(id=product_id)
+        except Product.DoesNotExist:
+            return Response({'error': 'Product not found'}, status=status.HTTP_404_NOT_FOUND)
+        
+        result = calculate_dynamic_price(payment_profile, product)
+        return Response(result)
+
+
+class TierRecommendationView(APIView):
+    """GET /api/payment/pricing/tier-recommendation/
+    Returns tier upgrade recommendation for current user."""
+    permission_classes = [IsAuthenticated]
+    
+    def get(self, request):
+        from Payment.pricing_service import get_tier_recommendation
+        
+        user = request.user
+        payment_profile = get_or_create_payment_profile(user)
+        if not payment_profile:
+            return Response({'error': 'Payment profile not found'}, status=status.HTTP_404_NOT_FOUND)
+        
+        result = get_tier_recommendation(payment_profile)
+        return Response(result)
+
+
+class PriceAcceptView(APIView):
+    """POST /api/payment/pricing/accept/
+    Logs that a user accepted/rejected a dynamic price (training data)."""
+    permission_classes = [IsAuthenticated]
+    
+    def post(self, request):
+        from Payment.pricing_service import log_pricing_event
+        
+        product_id = request.data.get('product_id')
+        offered_price = request.data.get('offered_price')
+        accepted = request.data.get('accepted', False)
+        
+        if not product_id or offered_price is None:
+            return Response({'error': 'product_id and offered_price are required'}, 
+                          status=status.HTTP_400_BAD_REQUEST)
+        
+        user = request.user
+        payment_profile = get_or_create_payment_profile(user)
+        if not payment_profile:
+            return Response({'error': 'Payment profile not found'}, status=status.HTTP_404_NOT_FOUND)
+        
+        try:
+            product = Product.objects.get(id=product_id)
+        except Product.DoesNotExist:
+            return Response({'error': 'Product not found'}, status=status.HTTP_404_NOT_FOUND)
+        
+        event = log_pricing_event(
+            user_profile=payment_profile,
+            product=product,
+            offered_price=float(offered_price),
+            accepted=accepted,
+        )
+        
+        return Response({
+            'status': 'logged',
+            'event_id': str(event.id),
+            'accepted': accepted,
+        })
+
+
+class StudentVerificationView(APIView):
+    """POST /api/payment/student-verification/
+    Submit student verification documents for student pricing."""
+    permission_classes = [IsAuthenticated]
+    
+    def get(self, request):
+        """Check current student verification status."""
+        from Payment.models import StudentVerification
+        
+        profile = Profile.objects.get(user=request.user)
+        try:
+            sv = StudentVerification.objects.get(user=profile)
+            return Response({
+                'status': sv.status,
+                'is_active': sv.is_active,
+                'institution_name': sv.institution_name,
+                'discount_rate': float(sv.discount_rate),
+                'expires_at': sv.expires_at.isoformat() if sv.expires_at else None,
+            })
+        except StudentVerification.DoesNotExist:
+            return Response({'status': 'none', 'is_active': False})
+    
+    def post(self, request):
+        """Submit student verification application."""
+        from Payment.models import StudentVerification
+        
+        profile = Profile.objects.get(user=request.user)
+        
+        institution_name = request.data.get('institution_name')
+        if not institution_name:
+            return Response({'error': 'institution_name is required'}, 
+                          status=status.HTTP_400_BAD_REQUEST)
+        
+        # Check for existing verification
+        existing = StudentVerification.objects.filter(user=profile).first()
+        if existing and existing.status == 'approved' and existing.is_active:
+            return Response({
+                'error': 'You already have an active student verification',
+                'status': existing.status,
+            }, status=status.HTTP_400_BAD_REQUEST)
+        
+        # Create or update verification
+        sv, created = StudentVerification.objects.update_or_create(
+            user=profile,
+            defaults={
+                'institution_name': institution_name,
+                'student_number': request.data.get('student_number', ''),
+                'school_email': request.data.get('school_email', ''),
+                'status': 'pending',
+            }
+        )
+        
+        # Handle file uploads
+        if 'student_id_document' in request.FILES:
+            sv.student_id_document = request.FILES['student_id_document']
+        if 'admission_letter' in request.FILES:
+            sv.admission_letter = request.FILES['admission_letter']
+        if 'transcript' in request.FILES:
+            sv.transcript = request.FILES['transcript']
+        
+        # Parse graduation date
+        expected_graduation = request.data.get('expected_graduation')
+        if expected_graduation:
+            from django.utils.dateparse import parse_date
+            sv.expected_graduation = parse_date(expected_graduation)
+        
+        sv.save()
+        
+        return Response({
+            'status': 'submitted',
+            'verification_id': str(sv.id),
+            'message': 'Your student verification has been submitted for review.',
+        }, status=status.HTTP_201_CREATED)
+
+
+# ============================================================================
+# ML MONITORING DASHBOARD API VIEWS
+# ============================================================================
+
+class MLDashboardView(views.APIView):
+    """
+    Retrieves real-time training logs from the ML pipeline completely isolated
+    from the training scripts to avoid file locks.
+    """
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request):
+        base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        ml_models_dir = os.path.join(base_dir, 'ML', 'models')
+        ml_data_dir = os.path.join(base_dir, 'ML', 'data')
+
+        def read_csv_tail(filepath, lines=50):
+            try:
+                if not os.path.exists(filepath) or os.path.getsize(filepath) == 0:
+                    return []
+                # Read using pandas for robust parsing, taking the tail
+                df = pd.read_csv(filepath)
+                if df.empty:
+                    return []
+                # Explicitly scrub NaN/Infinity to None for JSON serialization
+                import numpy as np
+                df.replace([np.inf, -np.inf], np.nan, inplace=True)
+                df = df.astype(object).where(pd.notnull(df), None)
+                return df.tail(lines).to_dict('records')
+            except Exception as e:
+                return [] # Return empty list instead of breaking frontend parsing
+
+        # 1. Pricing Model Logs
+        pricing_log = os.path.join(ml_models_dir, 'pricing', 'training_log.csv')
+        pricing_data = read_csv_tail(pricing_log)
+
+        # 2. Recommendation Model Logs
+        rec_log = os.path.join(ml_models_dir, 'recommendation', 'rec_training_log.csv')
+        rec_data = read_csv_tail(rec_log)
+
+        # 3. Distribution Model Logs
+        dist_log = os.path.join(ml_models_dir, 'distribution', 'dist_training_log.csv')
+        dist_data = read_csv_tail(dist_log)
+
+        # 4. Data Volume
+        raw_dir = os.path.join(ml_data_dir, 'raw_scrapped')
+        total_size_mb = 0
+        if os.path.exists(raw_dir):
+            for f in os.listdir(raw_dir):
+                fp = os.path.join(raw_dir, f)
+                total_size_mb += os.path.getsize(fp) / (1024 * 1024)
+
+        # 5. Distribution Categorical Metrics
+        import json
+        dist_metrics_file = os.path.join(ml_models_dir, 'distribution', 'dist_metrics.json')
+        dist_metrics = None
+        if os.path.exists(dist_metrics_file):
+            try:
+                with open(dist_metrics_file, 'r') as f:
+                    dist_metrics = json.load(f)
+            except Exception:
+                pass
+
+        # 6. Live Scraping Tracker
+        scrape_status_file = os.path.join(ml_data_dir, 'scrape_status.json')
+        scrape_status = None
+        if os.path.exists(scrape_status_file):
+            try:
+                with open(scrape_status_file, 'r') as f:
+                    scrape_status = json.load(f)
+            except Exception:
+                pass
+
+        # 7. Pipeline Logs
+        pipeline_log_file = os.path.join(base_dir, 'ML', 'training', 'pipeline.log')
+        pipeline_logs = []
+        if os.path.exists(pipeline_log_file):
+            try:
+                from collections import deque
+                with open(pipeline_log_file, 'r', encoding='utf-8') as f:
+                    pipeline_logs = list(deque(f, 200)) # Take last 200 lines
+            except Exception:
+                pass
+
+        return Response({
+            "models": {
+                "pricing": pricing_data,
+                "recommendation": rec_data,
+                "distribution": dist_data,
+                "distribution_metrics": dist_metrics
+            },
+            "metrics": {
+                "total_scraped_data_mb": round(total_size_mb, 2),
+                "is_pricing_training": True,  # Inferred securely without locks
+                "scrape_status": scrape_status,
+                "pipeline_logs": pipeline_logs
+            }
+        })

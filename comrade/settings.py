@@ -34,6 +34,7 @@ INSTALLED_APPS = [
     'django.contrib.sessions',
     'django.contrib.messages',
     'django.contrib.staticfiles',
+    'django.contrib.sites',
     
     # Custom Apps
     'Authentication',
@@ -146,6 +147,9 @@ CORS_ALLOWED_ORIGIN_REGEXES = [
     r"^https?://localhost:8000$",
     r"^https?://localhost:8080$",
     r"^https?://localhost:5173$",
+    r"^https?://localhost:3000$",
+    r"^https://.*\.vercel\.app$",
+    r"^https://qomrade\.onrender\.com$",
 ]
 
 # CSRF_COOKIE_SECURE = False
@@ -280,6 +284,8 @@ USE_TZ = True
 
 AUTH_USER_MODEL = 'Authentication.CustomUser'
 STATIC_URL = 'static/'
+STATIC_ROOT = BASE_DIR / 'staticfiles'
+STATICFILES_STORAGE = 'whitenoise.storage.CompressedManifestStaticFilesStorage'
 
 # Media files (Uploads)
 MEDIA_URL = '/media/'

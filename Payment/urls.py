@@ -54,5 +54,15 @@ urlpatterns = [
     path('stripe/webhook/', StripeWebhookView.as_view(), name='stripe-webhook'),
     path('paypal/webhook/', PayPalWebhookView.as_view(), name='paypal-webhook'),
     path('mpesa/callback/', MpesaCallbackView.as_view(), name='mpesa-callback'),
+    
+    # Dynamic Pricing (RL Model)
+    path('pricing/<int:product_id>/', views.DynamicPriceView.as_view(), name='dynamic-price'),
+    path('pricing/tier-recommendation/', views.TierRecommendationView.as_view(), name='tier-recommendation'),
+    path('pricing/accept/', views.PriceAcceptView.as_view(), name='pricing-accept'),
+    
+    # ML Monitoring
+    path('ml-dashboard/', views.MLDashboardView.as_view(), name='ml-dashboard'),
+    
+    # Student Verification
+    path('student/verify/', views.StudentVerificationView.as_view(), name='student-verify'),
 ]
-

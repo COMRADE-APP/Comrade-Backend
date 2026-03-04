@@ -67,10 +67,10 @@ class CustomUserSerializer(serializers.ModelSerializer):
         model = CustomUser
         fields = [
             'id', 'email', 'first_name', 'last_name', 'other_names',
-            'phone_number', 'user_type', 'is_active',
+            'phone_number', 'user_type', 'is_active', 'is_staff', 'is_superuser',
             'date_of_birth', 'preferred_currency', 'preferred_language',
         ]
-        read_only_fields = ['id', 'is_active']
+        read_only_fields = ['id', 'is_active', 'is_staff', 'is_superuser']
 
 
 class LoginSerializer(serializers.Serializer):

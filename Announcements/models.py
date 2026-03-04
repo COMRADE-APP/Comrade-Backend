@@ -27,6 +27,22 @@ TASK_TYPE = (
     ('file', 'File Upload'),
 )
 
+TASK_CATEGORY = (
+    ('exam', 'Exam'),
+    ('test', 'Test'),
+    ('survey', 'Survey'),
+    ('questionnaire', 'Questionnaire'),
+    ('scheduling', 'Scheduling'),
+    ('other', 'Other')
+)
+
+TASK_DIFFICULTY = (
+    ('beginner', 'Beginner'),
+    ('intermediate', 'Intermediate'),
+    ('advanced', 'Advanced'),
+    ('none', 'Not Applicable')
+)
+
 TASK_STATE = (
     ('active', 'Active'),
     ('expired', 'Expired'),
@@ -64,6 +80,7 @@ class Announcements(models.Model):
     read_status = models.BooleanField(default=False)
     read_time = models.DateTimeField(null=True, blank=True)
     time_stamp = models.DateTimeField(default=datetime.now)
+    views = models.IntegerField(default=0)  # Added for view counting
 
 
 class AnnouncementsRequest(models.Model):
@@ -88,6 +105,8 @@ class Task(models.Model):
     status = models.CharField(max_length=200, choices=ANN_STATUS, 
     default='pending')
     state = models.CharField(max_length=200, choices=TASK_STATE, default='active')
+    category = models.CharField(max_length=50, choices=TASK_CATEGORY, default='other')
+    difficulty = models.CharField(max_length=50, choices=TASK_DIFFICULTY, default='none')
     due_date = models.DateTimeField(default=datetime.now)
     time_stamp = models.DateTimeField(default=datetime.now)
 
@@ -237,6 +256,7 @@ class Comment(models.Model):
     content = models.TextField(max_length=5000, null=False)
     time_stamp = models.DateTimeField(default=datetime.now)
     status = models.CharField(max_length=200, choices=ANN_STATUS, default='pending')
+    highlight_order = models.IntegerField(null=True, blank=True)  # Up to 6 for creators to pin/highlight
 
 # Import enhanced announcement models
 from .enhanced_models import *

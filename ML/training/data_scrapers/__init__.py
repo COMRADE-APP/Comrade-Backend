@@ -1,1 +1,3 @@
-# Data scrapers for ML training
+"""
+Make data_scrapers a Python package.
+"""
