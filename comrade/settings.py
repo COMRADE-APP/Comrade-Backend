@@ -92,14 +92,11 @@ MIDDLEWARE = [
     'ActivityLog.tracking_middleware.ActivityTrackingMiddleware',
 ]
 
-# ALLOWED_HOSTS: Only hostnames, no protocols/ports
-# ALLOWED_HOSTS = [
-#     "localhost",
-#     "127.0.0.1",
-#     "[::1]",
-# ]
-
-ALLOWED_HOSTS = os.getenv("ALLOWED_HOSTS", "").split(",")
+# ALLOWED_HOSTS: read from env, with sensible defaults
+_allowed = os.getenv("ALLOWED_HOSTS", "")
+ALLOWED_HOSTS = [h.strip() for h in _allowed.split(",") if h.strip()] or [
+    "localhost", "127.0.0.1", "[::1]", "qomrade.onrender.com",
+]
 
 # CORS settings - FIX THESE
 # CORS_ALLOWED_ORIGINS = [
@@ -109,14 +106,22 @@ ALLOWED_HOSTS = os.getenv("ALLOWED_HOSTS", "").split(",")
 #     "http://127.0.0.1:5173",
 # ]
 
-CORS_ALLOWED_ORIGINS = os.getenv("CORS_ALLOWED_ORIGINS", "").split(",")
+_cors = os.getenv("CORS_ALLOWED_ORIGINS", "")
+CORS_ALLOWED_ORIGINS = [o.strip() for o in _cors.split(",") if o.strip()] or [
+    "http://localhost:3000", "http://localhost:5173",
+    "https://comrade-frontend-ochre.vercel.app",
+]
 
 # CRITICAL: This must be True for cookies/session auth
 # CORS_ALLOW_CREDENTIALS = True
 
 
 # CSRF settings - CRITICAL for POST requests
-CSRF_TRUSTED_ORIGINS = os.getenv("CSRF_TRUSTED_ORIGINS", "").split(",")
+_csrf = os.getenv("CSRF_TRUSTED_ORIGINS", "")
+CSRF_TRUSTED_ORIGINS = [o.strip() for o in _csrf.split(",") if o.strip()] or [
+    "https://comrade-frontend-ochre.vercel.app",
+    "https://qomrade.onrender.com",
+]
 
 # Additional CORS headers needed
 CORS_ALLOW_HEADERS = [
@@ -152,15 +157,13 @@ CORS_ALLOWED_ORIGIN_REGEXES = [
     r"^https://qomrade\.onrender\.com$",
 ]
 
-# CSRF_COOKIE_SECURE = False
-# SESSION_COOKIE_SECURE = False
-
-SECURE_SSL_REDIRECT = True
-SESSION_COOKIE_SECURE = True
-CSRF_COOKIE_SECURE = True
+# Security settings for production behind Render's reverse proxy
+SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
+SECURE_SSL_REDIRECT = os.getenv('SECURE_SSL_REDIRECT', 'False') == 'True'
+SESSION_COOKIE_SECURE = not DEBUG
+CSRF_COOKIE_SECURE = not DEBUG
 
 CORS_ALLOW_CREDENTIALS = os.getenv("CORS_ALLOW_CREDENTIALS", "True") == "True"
-CSRF_TRUSTED_ORIGINS = os.getenv("CSRF_TRUSTED_ORIGINS", "").split(",")
 
 
 
@@ -187,7 +190,7 @@ TWILIO_PHONE_NUMBER = os.getenv('TWILIO_PHONE_NUMBER', '')
 
 # Email configuration
 EMAIL_HOST = os.getenv('EMAIL_HOST', '')
-EMAIL_PORT = int(os.getenv('EMAIL_PORT', ''))
+EMAIL_PORT = int(os.getenv('EMAIL_PORT', '587'))
 EMAIL_USE_TLS = os.getenv('EMAIL_USE_TLS', 'True') == 'True'
 EMAIL_HOST_USER = os.getenv('EMAIL_HOST_USER', '')
 EMAIL_HOST_PASSWORD = os.getenv('EMAIL_HOST_PASSWORD', '')
