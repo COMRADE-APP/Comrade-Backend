@@ -46,6 +46,7 @@ class ResearchProject(models.Model):
     """Main research project model for conducting research from planning to publication"""
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     title = models.CharField(max_length=500)
+    image_url = models.URLField(max_length=500, null=True, blank=True)
     abstract = models.TextField()
     description = models.TextField()
     
@@ -73,6 +74,16 @@ class ResearchProject(models.Model):
     is_published = models.BooleanField(default=False)
     published_at = models.DateTimeField(null=True, blank=True)
     doi = models.CharField(max_length=200, blank=True)
+    
+    # Needs / Goals
+    seeking_participants = models.BooleanField(default=False)
+    requesting_funding = models.BooleanField(default=False)
+    seeking_teams = models.BooleanField(default=False)
+    seeking_partners_sponsors = models.BooleanField(default=False)
+
+    # Access
+    is_paid = models.BooleanField(default=False)
+    price = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
     
     # Metrics
     views = models.IntegerField(default=0)
@@ -418,3 +429,133 @@ class ResearchMilestone(models.Model):
     
     def __str__(self):
         return f"{self.research.title} - {self.title}"
+
+
+class ParticipantApplication(models.Model):
+    """User application to participate in a research project position"""
+    APPLICATION_STATUS = (
+        ('pending', 'Pending Review'),
+        ('shortlisted', 'Shortlisted'),
+        ('accepted', 'Accepted'),
+        ('rejected', 'Rejected'),
+        ('withdrawn', 'Withdrawn'),
+    )
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    position = models.ForeignKey(ParticipantPosition, on_delete=models.CASCADE, related_name='applications')
+    applicant = models.ForeignKey(CustomUser, on_delete=models.CASCADE, related_name='research_applications')
+    
+    # Application content
+    cover_letter = models.TextField(help_text="Why do you want to participate?")
+    relevant_experience = models.TextField(blank=True)
+    availability = models.TextField(blank=True, help_text="Hours per week, schedule preferences")
+    resume = models.FileField(upload_to='research/applications/', null=True, blank=True)
+    form_data = models.JSONField(default=dict, blank=True, help_text="Dynamic applicant form responses")
+    
+    # Status
+    status = models.CharField(max_length=20, choices=APPLICATION_STATUS, default='pending')
+    reviewer_notes = models.TextField(blank=True)
+    reviewed_by = models.ForeignKey(CustomUser, on_delete=models.SET_NULL, null=True, blank=True, related_name='reviewed_applications')
+    
+    # Timestamps
+    applied_at = models.DateTimeField(default=datetime.now)
+    reviewed_at = models.DateTimeField(null=True, blank=True)
+    
+    class Meta:
+        unique_together = ['position', 'applicant']
+        ordering = ['-applied_at']
+        indexes = [
+            models.Index(fields=['position', 'status']),
+            models.Index(fields=['applicant']),
+        ]
+    
+    def __str__(self):
+        return f"{self.applicant.email} -> {self.position.title} ({self.status})"
+
+
+class ResearchAnalytics(models.Model):
+    """Track research project interactions"""
+    research = models.ForeignKey(ResearchProject, on_delete=models.CASCADE, related_name='analytics')
+    user = models.ForeignKey(CustomUser, on_delete=models.CASCADE, null=True, blank=True)
+    action = models.CharField(max_length=50, choices=(
+        ('view', 'Viewed'),
+        ('apply', 'Applied'),
+        ('share', 'Shared'),
+        ('download_pub', 'Downloaded Publication'),
+        ('bookmark', 'Bookmarked'),
+    ))
+    metadata = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(default=datetime.now)
+
+    class Meta:
+        indexes = [
+            models.Index(fields=['research', 'action']),
+            models.Index(fields=['research', '-created_at']),
+        ]
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f"{self.action} on {self.research.title}"
+
+
+class RecruitmentPost(models.Model):
+    """A public posting seeking participants or team members for a research project"""
+    POST_TYPES = (
+        ('participants', 'Participants'),
+        ('team_members', 'Team Members'),
+        ('funding_requests', 'Funding Requests'),
+        ('partners_sponsors', 'Partners & Sponsors')
+    )
+    
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    research = models.ForeignKey(ResearchProject, on_delete=models.CASCADE, related_name='recruitment_posts')
+    title = models.CharField(max_length=300)
+    description = models.TextField()
+    requirements_text = models.TextField(blank=True, help_text="Overview of requirements")
+    positions = models.ManyToManyField(ParticipantPosition, related_name='recruitment_posts', blank=True)
+    post_type = models.CharField(max_length=50, choices=POST_TYPES, default='participants')
+    
+    # Dynamic Application Form Schema
+    application_form = models.JSONField(
+        default=dict, 
+        blank=True, 
+        help_text="Schema defining the multi-step application form questions/fields"
+    )
+    
+    application_deadline = models.DateTimeField(null=True, blank=True)
+    is_active = models.BooleanField(default=True)
+    can_convert_to_opinion = models.BooleanField(default=True, help_text="Can be shared to opinions feed")
+    
+    created_at = models.DateTimeField(default=datetime.now)
+    updated_at = models.DateTimeField(auto_now=True)
+    
+    class Meta:
+        ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['research', 'is_active']),
+            models.Index(fields=['post_type']),
+        ]
+        
+    def __str__(self):
+        return f"{self.title} for {self.research.title}"
+
+
+class ResearcherApplication(models.Model):
+    """Application for a user to become a verified researcher capable of posting research"""
+    STATUS_CHOICES = (
+        ('pending', 'Pending Review'),
+        ('approved', 'Approved'),
+        ('rejected', 'Rejected')
+    )
+
+    user = models.ForeignKey('Authentication.CustomUser', on_delete=models.CASCADE, related_name='researcher_applications')
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending')
+    resume = models.FileField(upload_to='researcher_applications/resumes/', blank=True, null=True)
+    verification_doc = models.FileField(upload_to='researcher_applications/verification/', blank=True, null=True)
+    qualifications = models.TextField(blank=True)
+    applied_at = models.DateTimeField(auto_now_add=True)
+    reviewed_at = models.DateTimeField(null=True, blank=True)
+    reviewer_notes = models.TextField(blank=True, null=True)
+
+    def __str__(self):
+        return f"{self.user.email} - {self.status}"
+

@@ -17,8 +17,10 @@ from Events.enhanced_models import (
     EventEmailReminder, EventToAnnouncementConversion,
     EventHelpRequest, EventHelpResponse, EventPermission,
     EventDocument, EventArticleLink, EventResearchLink,
-    EventAnnouncementLink, EventProductLink, EventPaymentGroupLink
+    EventAnnouncementLink, EventProductLink, EventPaymentGroupLink,
+    EventAnalytics, EventUserReminder
 )
+from Events.models import EventSchedule, EventSpeaker, EventFile
 from Events.enhanced_serializers import (
     EventRoomSerializer, EventResourceAccessSerializer, EventResourcePurchaseSerializer,
     EventInterestSerializer, EventReactionSerializer, EventCommentSerializer,
@@ -29,7 +31,9 @@ from Events.enhanced_serializers import (
     EventHelpRequestSerializer, EventHelpResponseSerializer,
     EventPermissionSerializer, EventDetailSerializer,
     EventDocumentSerializer, EventArticleLinkSerializer, EventResearchLinkSerializer,
-    EventAnnouncementLinkSerializer, EventProductLinkSerializer, EventPaymentGroupLinkSerializer
+    EventAnnouncementLinkSerializer, EventProductLinkSerializer, EventPaymentGroupLinkSerializer,
+    EventAnalyticsSerializer, EventUserReminderSerializer,
+    EventScheduleSerializer, EventSpeakerSerializer, EventFileSerializer
 )
 from Announcements.models import Announcements
 from Rooms.models import Room
@@ -66,9 +70,25 @@ class EventEnhancedViewSet(viewsets.ModelViewSet):
         return queryset.select_related('created_by').prefetch_related('event_reactions', 'event_comments', 'interests')
     
     def perform_create(self, serializer):
-        """Auto-set created_by to the authenticated user"""
+        """Auto-set created_by to the authenticated user and create tickets if capacity > 0"""
         print('-----------------------------------------------------------')
-        serializer.save(created_by=self.request.user)
+        event = serializer.save(created_by=self.request.user)
+        
+        # Auto-create tickets if capacity is defined
+        if event.capacity > 0:
+            price = 0
+            # If there's a ticket_price field on event (from EventSerializer), use it.
+            # Depending on model if ticket_price exists we would use it, else default to free
+            # Currently assume free if no price field is found
+            ticket_name = "General Admission" if price == 0 else "Standard Ticket"
+            
+            EventTicket.objects.create(
+                event=event,
+                ticket_type='Standard',
+                price=price,
+                quantity=event.capacity,
+                description='Auto-generated ticket'
+            )
     
     @action(detail=False, methods=['get'])
     def nearby(self, request):
@@ -578,7 +598,52 @@ class EventEnhancedViewSet(viewsets.ModelViewSet):
             return Response(status=status.HTTP_204_NO_CONTENT)
         except EventBlock.DoesNotExist:
             return Response({'error': 'Block not found'}, status=status.HTTP_404_NOT_FOUND)
+            return Response({'error': 'Block not found'}, status=status.HTTP_404_NOT_FOUND)
     
+    # COMMENTS
+    
+    @action(detail=True, methods=['post'], permission_classes=[IsAuthenticated])
+    def add_comment(self, request, pk=None):
+        """Add a comment to the event"""
+        event = self.get_object()
+        content = request.data.get('content')
+        parent_id = request.data.get('parent_id')
+        
+        if not content:
+            return Response({'error': 'content is required'}, status=status.HTTP_400_BAD_REQUEST)
+            
+        from Events.enhanced_models import EventComment
+        from Events.enhanced_serializers import EventCommentSerializer
+        
+        parent = None
+        if parent_id:
+            try:
+                parent = EventComment.objects.get(id=parent_id, event=event)
+            except EventComment.DoesNotExist:
+                return Response({'error': 'Parent comment not found'}, status=status.HTTP_404_NOT_FOUND)
+                
+        comment = EventComment.objects.create(
+            event=event,
+            user=request.user,
+            content=content,
+            parent=parent
+        )
+        
+        serializer = EventCommentSerializer(comment)
+        return Response(serializer.data, status=status.HTTP_201_CREATED)
+        
+    @action(detail=True, methods=['get'])
+    def comments(self, request, pk=None):
+        """Get event comments (threaded)"""
+        event = self.get_object()
+        from Events.enhanced_models import EventComment
+        from Events.enhanced_serializers import EventCommentSerializer
+        
+        # Only get top-level comments, serializer handles replies
+        comments = EventComment.objects.filter(event=event, parent=None).order_by('-created_at')
+        serializer = EventCommentSerializer(comments, many=True)
+        return Response(serializer.data)
+
     # REMINDERS
     
     @action(detail=True, methods=['post'], permission_classes=[IsAuthenticated])
@@ -611,6 +676,181 @@ class EventEnhancedViewSet(viewsets.ModelViewSet):
             serializer = EventEmailReminderSerializer(reminder)
         
         return Response(serializer.data, status=status.HTTP_201_CREATED)
+
+    @action(detail=True, methods=['post'], permission_classes=[IsAuthenticated])
+    def set_user_reminder(self, request, pk=None):
+        """Set 3-channel event reminder (notification, email, system message)"""
+        event = self.get_object()
+        time_before = request.data.get('time_before')
+        
+        if not time_before:
+            return Response({'error': 'time_before is required'}, status=status.HTTP_400_BAD_REQUEST)
+        
+        from datetime import timedelta
+        # Parse time_before
+        delta = timedelta()
+        if time_before.endswith('h'):
+            delta = timedelta(hours=int(time_before[:-1]))
+        elif time_before.endswith('d'):
+            delta = timedelta(days=int(time_before[:-1]))
+        elif time_before.endswith('w'):
+            delta = timedelta(weeks=int(time_before[:-1]))
+        else:
+            return Response({'error': 'Invalid time format. Use 1h, 2d, 1w etc.'}, status=status.HTTP_400_BAD_REQUEST)
+        
+        remind_at = event.event_date - delta
+        
+        # Create or update reminder
+        reminder, created = EventUserReminder.objects.update_or_create(
+            event=event,
+            user=request.user,
+            time_before=time_before,
+            defaults={
+                'remind_at': remind_at,
+                'send_notification': True,
+                'send_email': True,
+                'send_system_message': True,
+                'notification_sent': False,
+                'email_sent': False,
+                'system_message_sent': False
+            }
+        )
+        
+        # Start a background thread to send the reminder when the time comes
+        from threading import Thread
+        from django.core.mail import send_mail
+        from django.conf import settings
+        from Authentication.models import Profile, CustomUser
+        from Rooms.models import DirectMessage, DirectMessageRoom
+        import time
+
+        def _send_reminder(reminder_id):
+            try:
+                # Need to use the model directly to avoid stale objects
+                rem = EventUserReminder.objects.get(id=reminder_id)
+                evt = rem.event
+                usr = rem.user
+                
+                while True:
+                    now = timezone.now()
+                    if rem.remind_at <= now:
+                        try:
+                            # 1. Send Email
+                            if rem.send_email and not rem.email_sent:
+                                send_mail(
+                                    f'Reminder: {evt.name} is starting in {rem.time_before}',
+                                    f'Hi {usr.first_name},\n\nThis is a reminder that the event "{evt.name}" starts in {rem.time_before}.\n\nLocation: {evt.location}\nDate: {evt.event_date}',
+                                    settings.DEFAULT_FROM_EMAIL,
+                                    [usr.email]
+                                )
+                                rem.email_sent = True
+
+                            # 2. Send System Message (from QomReminder)
+                            if rem.send_system_message and not rem.system_message_sent:
+                                try:
+                                    qom_reminder, _ = CustomUser.objects.get_or_create(
+                                        email='qomreminder@comrade.com',
+                                        defaults={'username': 'QomReminder', 'first_name': 'Qom', 'last_name': 'Reminder'}
+                                    )
+                                    dm_room, _ = DirectMessageRoom.objects.get_or_create(participants__in=[usr, qom_reminder])
+                                    dm_room.participants.add(usr, qom_reminder)
+                                    
+                                    DirectMessage.objects.create(
+                                        sender=qom_reminder,
+                                        receiver=usr,
+                                        content=f'Reminder: {evt.name} starts in {rem.time_before}',
+                                        dm_room=dm_room
+                                    )
+                                    rem.system_message_sent = True
+                                except Exception as e:
+                                    print('Failed system message reminder:', e)
+
+                            # 3. In-App Notification (Not implemented strictly, just mark true)
+                            if rem.send_notification and not rem.notification_sent:
+                                rem.notification_sent = True
+
+                            rem.save()
+                        except Exception as e:
+                            print("Error sending reminder:", e)
+                        break
+                    time.sleep(60) # check every minute
+            except Exception as e:
+                print("Reminder thread error:", e)
+
+        # Only start thread if remind_at is in the future
+        if remind_at > timezone.now():
+            Thread(target=_send_reminder, args=(reminder.id,), daemon=True).start()
+
+        return Response({'status': 'Reminder set successfully'}, status=status.HTTP_201_CREATED)
+
+    @action(detail=True, methods=['delete'], permission_classes=[IsAuthenticated])
+    def remove_user_reminder(self, request, pk=None):
+        """Remove user reminder"""
+        event = self.get_object()
+        time_before = request.data.get('time_before')
+        
+        if not time_before:
+            return Response({'error': 'time_before is required'}, status=status.HTTP_400_BAD_REQUEST)
+            
+        EventUserReminder.objects.filter(event=event, user=request.user, time_before=time_before).delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+    @action(detail=True, methods=['get'], permission_classes=[IsAuthenticated])
+    def my_reminders(self, request, pk=None):
+        """Get user active reminders for an event"""
+        event = self.get_object()
+        reminders = EventUserReminder.objects.filter(event=event, user=request.user)
+        times = reminders.values_list('time_before', flat=True)
+        return Response(times)
+
+    # REVIEWS / FEEDBACK
+    
+    @action(detail=True, methods=['post'], permission_classes=[IsAuthenticated])
+    def submit_review(self, request, pk=None):
+        """Submit event review/feedback"""
+        event = self.get_object()
+        rating = request.data.get('rating')
+        feedback_text = request.data.get('feedback_text', '')
+        
+        from Events.models import EventFeedback
+        from Events.serializers import EventFeedbackSerializer
+        
+        feedback, created = EventFeedback.objects.update_or_create(
+            event=event,
+            user=request.user,
+            defaults={
+                'rating': rating,
+                'feedback': feedback_text
+            }
+        )
+        serializer = EventFeedbackSerializer(feedback)
+        return Response(serializer.data, status=status.HTTP_201_CREATED)
+        
+    @action(detail=True, methods=['get'])
+    def reviews(self, request, pk=None):
+        """Get event reviews"""
+        event = self.get_object()
+        from Events.models import EventFeedback
+        from Events.serializers import EventFeedbackSerializer
+        
+        feedbacks = EventFeedback.objects.filter(event=event, viewable=True).order_by('-submitted_on')
+        serializer = EventFeedbackSerializer(feedbacks, many=True)
+        return Response(serializer.data)
+
+    # ANALYTICS
+    @action(detail=True, methods=['post'])
+    def record_access(self, request, pk=None):
+        """Record an access/view for the event"""
+        event = self.get_object()
+        user = request.user if request.user.is_authenticated else None
+        
+        EventAnalytics.objects.create(
+            event=event,
+            user=user,
+            action='view',
+            ip_address=request.META.get('REMOTE_ADDR')
+        )
+        return Response({'status': 'recorded'})
     
     # ROOM MANAGEMENT
     
@@ -716,6 +956,281 @@ class EventEnhancedViewSet(viewsets.ModelViewSet):
         requests = EventHelpRequest.objects.filter(event=event)
         serializer = EventHelpRequestSerializer(requests, many=True)
         return Response(serializer.data)
+    
+    # ANALYTICS
+    
+    @action(detail=True, methods=['post'])
+    def record_access(self, request, pk=None):
+        """Record that user accessed the event page"""
+        event = self.get_object()
+        user = request.user if request.user.is_authenticated else None
+        
+        EventAnalytics.objects.create(
+            event=event,
+            user=user,
+            action='access',
+            ip_address=request.META.get('REMOTE_ADDR'),
+            user_agent=request.META.get('HTTP_USER_AGENT', '')[:500]
+        )
+        return Response({'status': 'recorded'})
+    
+    @action(detail=True, methods=['get'], permission_classes=[IsAuthenticated])
+    def analytics(self, request, pk=None):
+        """Get analytics data for event (creators only)"""
+        event = self.get_object()
+        
+        if event.created_by != request.user and not request.user.is_staff:
+            return Response({'error': 'Permission denied'}, status=status.HTTP_403_FORBIDDEN)
+        
+        from django.db.models import Count
+        from django.db.models.functions import TruncDate
+        
+        # Action breakdown
+        action_counts = dict(
+            EventAnalytics.objects.filter(event=event)
+            .values_list('action').annotate(count=Count('id'))
+            .values_list('action', 'count')
+        )
+        
+        # Daily access trend
+        daily_access = list(
+            EventAnalytics.objects.filter(event=event)
+            .annotate(date=TruncDate('created_at'))
+            .values('date').annotate(count=Count('id'))
+            .order_by('date').values('date', 'count')[:30]
+        )
+        
+        # Reaction breakdown
+        reaction_counts = dict(
+            event.event_reactions.values_list('reaction_type')
+            .annotate(count=Count('id'))
+            .values_list('reaction_type', 'count')
+        )
+        
+        # Unique visitors
+        unique_visitors = EventAnalytics.objects.filter(
+            event=event, action='access', user__isnull=False
+        ).values('user').distinct().count()
+        
+        return Response({
+            'action_counts': action_counts,
+            'daily_access': daily_access,
+            'reaction_counts': reaction_counts,
+            'unique_visitors': unique_visitors,
+            'total_reactions': event.event_reactions.count(),
+            'total_comments': event.event_comments.count(),
+            'total_shares': event.event_shares.count(),
+            'total_interested': event.interests.filter(interested=True).count(),
+        })
+    
+    # USER REMINDERS (3-channel: notification, system message, email)
+    
+    @action(detail=True, methods=['post'], permission_classes=[IsAuthenticated])
+    def set_user_reminder(self, request, pk=None):
+        """Set a reminder that sends notification, system message from QomReminders, and email"""
+        event = self.get_object()
+        time_before = request.data.get('time_before')  # '1h', '2h', '3h', '1d', '1w'
+        
+        if not time_before:
+            return Response({'error': 'time_before is required'}, status=status.HTTP_400_BAD_REQUEST)
+        
+        valid_times = ['1h', '2h', '3h', '6h', '12h', '1d', '2d', '1w']
+        if time_before not in valid_times:
+            return Response({'error': f'Invalid time_before. Must be one of: {valid_times}'}, status=status.HTTP_400_BAD_REQUEST)
+        
+        # Calculate remind_at datetime
+        from datetime import timedelta
+        time_map = {
+            '1h': timedelta(hours=1),
+            '2h': timedelta(hours=2),
+            '3h': timedelta(hours=3),
+            '6h': timedelta(hours=6),
+            '12h': timedelta(hours=12),
+            '1d': timedelta(days=1),
+            '2d': timedelta(days=2),
+            '1w': timedelta(weeks=1),
+        }
+        
+        remind_at = event.event_date - time_map[time_before]
+        
+        reminder, created = EventUserReminder.objects.update_or_create(
+            event=event,
+            user=request.user,
+            time_before=time_before,
+            defaults={
+                'remind_at': remind_at,
+                'send_notification': True,
+                'send_email': True,
+                'send_system_message': True,
+            }
+        )
+        
+        # Track analytics
+        EventAnalytics.objects.create(
+            event=event, user=request.user, action='reminder_set',
+            metadata={'time_before': time_before}
+        )
+        
+        serializer = EventUserReminderSerializer(reminder)
+        return Response(serializer.data, status=status.HTTP_201_CREATED if created else status.HTTP_200_OK)
+    
+    @action(detail=True, methods=['delete'], permission_classes=[IsAuthenticated])
+    def remove_user_reminder(self, request, pk=None):
+        """Remove a user reminder"""
+        event = self.get_object()
+        time_before = request.query_params.get('time_before')
+        
+        if time_before:
+            deleted, _ = EventUserReminder.objects.filter(
+                event=event, user=request.user, time_before=time_before
+            ).delete()
+        else:
+            deleted, _ = EventUserReminder.objects.filter(
+                event=event, user=request.user
+            ).delete()
+        
+        if deleted:
+            return Response(status=status.HTTP_204_NO_CONTENT)
+        return Response({'error': 'Reminder not found'}, status=status.HTTP_404_NOT_FOUND)
+    
+    @action(detail=True, methods=['get'], permission_classes=[IsAuthenticated])
+    def my_reminders(self, request, pk=None):
+        """Get user's reminders for this event"""
+        event = self.get_object()
+        reminders = EventUserReminder.objects.filter(event=event, user=request.user)
+        serializer = EventUserReminderSerializer(reminders, many=True)
+        return Response(serializer.data)
+    
+    # SCHEDULE MANAGEMENT (for creators)
+    
+    @action(detail=True, methods=['get'])
+    def schedule(self, request, pk=None):
+        """Get event schedule"""
+        event = self.get_object()
+        items = EventSchedule.objects.filter(event=event).order_by('start_time')
+        serializer = EventScheduleSerializer(items, many=True)
+        return Response(serializer.data)
+    
+    @action(detail=True, methods=['post'], permission_classes=[IsAuthenticated])
+    def add_schedule_item(self, request, pk=None):
+        """Add schedule item (creators only)"""
+        event = self.get_object()
+        if event.created_by != request.user and not request.user.is_staff:
+            return Response({'error': 'Permission denied'}, status=status.HTTP_403_FORBIDDEN)
+        
+        item = EventSchedule.objects.create(
+            event=event,
+            activity_name=request.data.get('activity_name', ''),
+            start_time=request.data.get('start_time'),
+            end_time=request.data.get('end_time'),
+        )
+        serializer = EventScheduleSerializer(item)
+        return Response(serializer.data, status=status.HTTP_201_CREATED)
+    
+    @action(detail=True, methods=['delete'], permission_classes=[IsAuthenticated], url_path='delete_schedule_item/(?P<item_id>[^/.]+)')
+    def delete_schedule_item(self, request, pk=None, item_id=None):
+        """Delete schedule item (creators only)"""
+        event = self.get_object()
+        if event.created_by != request.user and not request.user.is_staff:
+            return Response({'error': 'Permission denied'}, status=status.HTTP_403_FORBIDDEN)
+        
+        try:
+            item = EventSchedule.objects.get(id=item_id, event=event)
+            item.delete()
+            return Response(status=status.HTTP_204_NO_CONTENT)
+        except EventSchedule.DoesNotExist:
+            return Response({'error': 'Schedule item not found'}, status=status.HTTP_404_NOT_FOUND)
+    
+    # SPEAKERS MANAGEMENT
+    
+    @action(detail=True, methods=['get'])
+    def event_speakers(self, request, pk=None):
+        """Get event speakers"""
+        event = self.get_object()
+        speakers = EventSpeaker.objects.filter(event=event)
+        serializer = EventSpeakerSerializer(speakers, many=True)
+        return Response(serializer.data)
+    
+    @action(detail=True, methods=['post'], permission_classes=[IsAuthenticated])
+    def add_speaker(self, request, pk=None):
+        """Add speaker (creators only)"""
+        event = self.get_object()
+        if event.created_by != request.user and not request.user.is_staff:
+            return Response({'error': 'Permission denied'}, status=status.HTTP_403_FORBIDDEN)
+        
+        schedule_id = request.data.get('slotted_schedule')
+        try:
+            schedule = EventSchedule.objects.get(id=schedule_id, event=event)
+        except EventSchedule.DoesNotExist:
+            # Create a default schedule if none provided
+            schedule = EventSchedule.objects.create(
+                event=event,
+                activity_name=request.data.get('speaker_name', 'Speaker'),
+                start_time=event.event_date,
+                end_time=event.event_date,
+            )
+        
+        speaker = EventSpeaker.objects.create(
+            event=event,
+            speaker_name=request.data.get('speaker_name', ''),
+            speaker_bio=request.data.get('speaker_bio', ''),
+            added_by=request.user,
+            slotted_schedule=schedule,
+        )
+        
+        # Optionally link a platform user
+        user_id = request.data.get('user_id')
+        if user_id:
+            try:
+                from Authentication.models import CustomUser
+                linked_user = CustomUser.objects.get(id=user_id)
+                speaker.user = linked_user
+                speaker.save()
+            except CustomUser.DoesNotExist:
+                pass
+        
+        serializer = EventSpeakerSerializer(speaker)
+        return Response(serializer.data, status=status.HTTP_201_CREATED)
+    
+    # MATERIALS/FILES MANAGEMENT
+    
+    @action(detail=True, methods=['get'])
+    def materials(self, request, pk=None):
+        """Get event materials/files"""
+        event = self.get_object()
+        files = EventFile.objects.filter(event=event)
+        serializer = EventFileSerializer(files, many=True)
+        return Response(serializer.data)
+    
+    @action(detail=True, methods=['post'], permission_classes=[IsAuthenticated])
+    def add_material(self, request, pk=None):
+        """Upload material/file (creators only)"""
+        event = self.get_object()
+        if event.created_by != request.user and not request.user.is_staff:
+            return Response({'error': 'Permission denied'}, status=status.HTTP_403_FORBIDDEN)
+        
+        material = EventFile.objects.create(
+            event=event,
+            file_type=request.data.get('file_type', 'document'),
+            file_content=request.data.get('file_content'),
+            description=request.data.get('description', ''),
+        )
+        serializer = EventFileSerializer(material)
+        return Response(serializer.data, status=status.HTTP_201_CREATED)
+    
+    @action(detail=True, methods=['delete'], permission_classes=[IsAuthenticated], url_path='delete_material/(?P<material_id>[^/.]+)')
+    def delete_material(self, request, pk=None, material_id=None):
+        """Delete material (creators only)"""
+        event = self.get_object()
+        if event.created_by != request.user and not request.user.is_staff:
+            return Response({'error': 'Permission denied'}, status=status.HTTP_403_FORBIDDEN)
+        
+        try:
+            material = EventFile.objects.get(id=material_id, event=event)
+            material.delete()
+            return Response(status=status.HTTP_204_NO_CONTENT)
+        except EventFile.DoesNotExist:
+            return Response({'error': 'Material not found'}, status=status.HTTP_404_NOT_FOUND)
 
 
 # ===== LOGISTICS VIEWSETS =====

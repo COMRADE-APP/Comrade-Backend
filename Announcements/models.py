@@ -23,8 +23,10 @@ VER_STATUS = (
 TASK_TYPE = (
     ('radio', 'Single Choice Answers'),
     ('check', 'Multiple Choice Answers'),
-    ('text', 'Text Answers'),
-    ('file', 'File Upload'),
+    ('short_text', 'Short Text Answer'),
+    ('text', 'Paragraph Text Answer'),
+    ('file', 'Single File Upload'),
+    ('multiple_file', 'Multiple File Upload'),
 )
 
 TASK_CATEGORY = (
@@ -101,12 +103,16 @@ class Task(models.Model):
     organisation = models.ForeignKey('Organisation.Organisation', on_delete=models.CASCADE, null=True, blank=True, related_name='tasks')
     heading = models.CharField(max_length=200, null=False)
     description = models.TextField(max_length=5000, null=False)
+    image_url = models.URLField(max_length=500, null=True, blank=True)
     visibility = models.CharField(max_length=200, null=False, choices=VIS_TYPES, default='private')
     status = models.CharField(max_length=200, choices=ANN_STATUS, 
     default='pending')
     state = models.CharField(max_length=200, choices=TASK_STATE, default='active')
     category = models.CharField(max_length=50, choices=TASK_CATEGORY, default='other')
     difficulty = models.CharField(max_length=50, choices=TASK_DIFFICULTY, default='none')
+    is_activity = models.BooleanField(default=False)
+    is_gradable = models.BooleanField(default=False)
+    start_date = models.DateTimeField(default=datetime.now)
     due_date = models.DateTimeField(default=datetime.now)
     time_stamp = models.DateTimeField(default=datetime.now)
 
@@ -116,6 +122,8 @@ class Question(models.Model):
     position = models.IntegerField(default=1)
     description = models.TextField(max_length=5000, null=False)
     question_type = models.CharField(max_length=200, null=False, choices=TASK_TYPE, default='text')
+    points = models.FloatField(default=1.0)
+    correct_answer_text = models.TextField(max_length=5000, blank=True, default='')
     has_subquestion = models.BooleanField(default=False)
     time_stamp = models.DateTimeField(default=datetime.now)
 
@@ -221,11 +229,20 @@ class QuestionResponse(models.Model):
     question = models.ForeignKey(Question, on_delete=models.DO_NOTHING)
     sub_question = models.ForeignKey(SubQuestion, on_delete=models.DO_NOTHING, null=True, blank=True)
     answer_text = models.TextField(max_length=5000, null=False)
-    answer_choice = models.ForeignKey(Choice, on_delete=models.DO_NOTHING)
-    answer_file = models.FileField(upload_to='task_answers/')
+    answer_choice = models.ForeignKey(Choice, on_delete=models.DO_NOTHING, null=True, blank=True)
+    answer_file = models.FileField(upload_to='task_answers/', null=True, blank=True)
     score = models.FloatField(default=0.0)
     time_stamp = models.DateTimeField(default=datetime.now)
     status = models.CharField(max_length=200, choices=ANN_STATUS, default='pending')
+
+RESPONSE_STATUS = (
+    ('pending', 'Pending'),
+    ('received', 'Received'),
+    ('under_review', 'Under Review'),
+    ('complete', 'Complete'),
+    ('confirmed', 'Confirmed'),
+    ('graded', 'Graded'),
+)
 
 class TaskResponse(models.Model):
     user = models.ForeignKey(CustomUser, on_delete=models.DO_NOTHING)
@@ -234,6 +251,37 @@ class TaskResponse(models.Model):
     total_score = models.FloatField(default=0.0)
     time_stamp = models.DateTimeField(default=datetime.now)
     status = models.CharField(max_length=200, choices=ANN_STATUS, default='pending')
+
+    # Review workflow
+    review_status = models.CharField(max_length=50, choices=RESPONSE_STATUS, default='pending')
+    feedback = models.TextField(max_length=5000, blank=True, default='')
+    graded_at = models.DateTimeField(null=True, blank=True)
+    graded_by = models.ForeignKey(CustomUser, on_delete=models.SET_NULL, null=True, blank=True, related_name='graded_responses')
+
+    def __str__(self):
+        return f"Response by {self.user} for {self.task.heading}"
+
+
+SCORE_RELEASE_MODES = (
+    ('immediate', 'Immediately after submission'),
+    ('on_due_date', 'When due date passes'),
+    ('manual', 'Manually by creator'),
+)
+
+class TaskGradingConfig(models.Model):
+    """Configuration for auto-grading tasks"""
+    task = models.OneToOneField(Task, on_delete=models.CASCADE, related_name='grading_config')
+    auto_grade = models.BooleanField(default=False)
+    ai_grading_enabled = models.BooleanField(default=False)
+    score_release_mode = models.CharField(max_length=20, choices=SCORE_RELEASE_MODES, default='immediate')
+    scheduled_grade_at = models.DateTimeField(null=True, blank=True)
+    grade_immediately = models.BooleanField(default=True)
+    max_score = models.FloatField(default=100.0)
+    grading_criteria = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(default=datetime.now)
+
+    def __str__(self):
+        return f"Grading config for {self.task.heading}"
 
 # Remember: Task files saving should be in terms of folders (Weekly, monthly or yearly, daily, or roomwise)
 # FileResponse, CompletedTask, Question, QuestionResponse
@@ -257,6 +305,78 @@ class Comment(models.Model):
     time_stamp = models.DateTimeField(default=datetime.now)
     status = models.CharField(max_length=200, choices=ANN_STATUS, default='pending')
     highlight_order = models.IntegerField(null=True, blank=True)  # Up to 6 for creators to pin/highlight
+    parent = models.ForeignKey('self', on_delete=models.CASCADE, null=True, blank=True, related_name='replies')
+    likes = models.ManyToManyField(CustomUser, related_name='liked_announcement_comments', blank=True)
+    dislikes = models.ManyToManyField(CustomUser, related_name='disliked_announcement_comments', blank=True)
+
+
+class TaskSettings(models.Model):
+    """Advanced settings for tasks — timer, tab detection, video recording, etc."""
+    task = models.OneToOneField(Task, on_delete=models.CASCADE, related_name='settings')
+    
+    # Timer
+    timer_enabled = models.BooleanField(default=False)
+    timer_duration = models.DurationField(null=True, blank=True)  # e.g., timedelta(minutes=30)
+    
+    # Tab/Focus detection
+    no_tab_leaving = models.BooleanField(default=False)
+    auto_submit_on_tab_change = models.BooleanField(default=False)
+    max_tab_switches = models.IntegerField(default=3)
+    
+    # Save behavior
+    auto_save = models.BooleanField(default=True)
+    
+    # Attempt control
+    one_take = models.BooleanField(default=False)  # Only one attempt allowed
+    max_attempts = models.IntegerField(default=1)
+    accept_late_submissions = models.BooleanField(default=False)
+    
+    # Video recording
+    record_video = models.BooleanField(default=False)
+    
+    # Question display
+    shuffle_questions = models.BooleanField(default=False)
+    show_results_immediately = models.BooleanField(default=True)
+    questions_per_page = models.IntegerField(default=4)
+    
+    # Scoring
+    passing_score = models.FloatField(default=0.0)
+    
+    time_stamp = models.DateTimeField(default=datetime.now)
+    
+    def __str__(self):
+        return f"Settings for {self.task.heading}"
+
+
+class TaskAnalytics(models.Model):
+    """Track user interactions with tasks"""
+    task = models.ForeignKey(Task, on_delete=models.CASCADE, related_name='analytics')
+    user = models.ForeignKey(CustomUser, on_delete=models.CASCADE, null=True, blank=True, related_name='task_analytics')
+    
+    action = models.CharField(max_length=50, choices=(
+        ('access', 'Page Access'),
+        ('read', 'Read/View'),
+        ('share', 'Shared'),
+        ('react', 'Reacted'),
+        ('start', 'Started Task'),
+        ('submit', 'Submitted'),
+        ('save_draft', 'Saved Draft'),
+    ))
+    
+    metadata = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(default=datetime.now)
+    
+    class Meta:
+        indexes = [
+            models.Index(fields=['task', 'action']),
+            models.Index(fields=['task', '-created_at']),
+        ]
+        ordering = ['-created_at']
+    
+    def __str__(self):
+        return f"{self.action} on {self.task.heading} by {self.user}"
+
 
 # Import enhanced announcement models
 from .enhanced_models import *
+

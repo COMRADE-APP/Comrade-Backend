@@ -170,17 +170,62 @@ class AnnouncementViewSet(ModelViewSet):
         
         elif request.method == 'POST':
             content = request.data.get('content', '').strip()
+            parent_id = request.data.get('parent_id')
             if not content:
                 return Response({'error': 'Comment content is required'}, status=status.HTTP_400_BAD_REQUEST)
             
+            parent_comment = None
+            if parent_id:
+                parent_comment = Comment.objects.filter(id=parent_id, announcement=announcement).first()
+
             comment = Comment.objects.create(
                 user=request.user,
                 announcement=announcement,
-                content=content
+                content=content,
+                parent=parent_comment
             )
             from Announcements.serializers import CommentSerializer
-            serializer = CommentSerializer(comment)
+            serializer = CommentSerializer(comment, context={'request': request})
             return Response(serializer.data, status=status.HTTP_201_CREATED)
+
+    @action(detail=True, methods=['post'], url_path='comments/(?P<comment_id>[^/.]+)/react')
+    def react_comment(self, request, pk=None, comment_id=None):
+        """Handle likes and dislikes on announcement comments"""
+        announcement = self.get_object()
+        user = request.user
+        action = request.data.get('action') # 'like' or 'dislike'
+
+        try:
+            comment = Comment.objects.get(id=comment_id, announcement=announcement)
+        except Comment.DoesNotExist:
+            return Response({'error': 'Comment not found'}, status=status.HTTP_404_NOT_FOUND)
+
+        if action == 'like':
+            if comment.likes.filter(id=user.id).exists():
+                comment.likes.remove(user)
+                message = 'Like removed'
+            else:
+                comment.likes.add(user)
+                comment.dislikes.remove(user)
+                message = 'Comment liked'
+        elif action == 'dislike':
+            if comment.dislikes.filter(id=user.id).exists():
+                comment.dislikes.remove(user)
+                message = 'Dislike removed'
+            else:
+                comment.dislikes.add(user)
+                comment.likes.remove(user)
+                message = 'Comment disliked'
+        else:
+            return Response({'error': 'Invalid action'}, status=status.HTTP_400_BAD_REQUEST)
+
+        return Response({
+            'message': message,
+            'likes_count': comment.likes.count(),
+            'dislikes_count': comment.dislikes.count(),
+            'is_liked': comment.likes.filter(id=user.id).exists(),
+            'is_disliked': comment.dislikes.filter(id=user.id).exists()
+        }, status=status.HTTP_200_OK)
 
 
 class ServiceConversionView(APIView):

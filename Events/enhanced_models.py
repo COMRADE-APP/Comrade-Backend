@@ -619,3 +619,80 @@ class EventPaymentGroupLink(models.Model):
     class Meta:
         unique_together = ['event', 'payment_group']
 
+
+class EventAnalytics(models.Model):
+    """Track user interactions with events for analytics dashboard"""
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    event = models.ForeignKey(Event, on_delete=models.CASCADE, related_name='analytics')
+    user = models.ForeignKey(CustomUser, on_delete=models.CASCADE, null=True, blank=True, related_name='event_analytics')
+    
+    action = models.CharField(max_length=50, choices=(
+        ('access', 'Page Access'),
+        ('read', 'Read/View'),
+        ('share', 'Shared'),
+        ('react', 'Reacted'),
+        ('download', 'Downloaded Material'),
+        ('rsvp', 'RSVP'),
+        ('reminder_set', 'Reminder Set'),
+        ('ticket_purchase', 'Ticket Purchased'),
+        ('comment', 'Commented'),
+    ))
+    
+    metadata = models.JSONField(default=dict, blank=True)  # Extra details like share_type, reaction_type, etc.
+    ip_address = models.GenericIPAddressField(null=True, blank=True)
+    user_agent = models.TextField(blank=True)
+    
+    created_at = models.DateTimeField(default=datetime.now)
+    
+    class Meta:
+        indexes = [
+            models.Index(fields=['event', 'action']),
+            models.Index(fields=['event', '-created_at']),
+            models.Index(fields=['user', 'action']),
+        ]
+        ordering = ['-created_at']
+    
+    def __str__(self):
+        return f"{self.action} on {self.event.name} by {self.user}"
+
+
+class EventUserReminder(models.Model):
+    """User-set reminders with notification, system message, and email"""
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    event = models.ForeignKey(Event, on_delete=models.CASCADE, related_name='user_reminders')
+    user = models.ForeignKey(CustomUser, on_delete=models.CASCADE, related_name='event_user_reminders')
+    
+    time_before = models.CharField(max_length=20, choices=(
+        ('1h', '1 Hour Before'),
+        ('2h', '2 Hours Before'),
+        ('3h', '3 Hours Before'),
+        ('6h', '6 Hours Before'),
+        ('12h', '12 Hours Before'),
+        ('1d', '1 Day Before'),
+        ('2d', '2 Days Before'),
+        ('1w', '1 Week Before'),
+    ))
+    
+    remind_at = models.DateTimeField()
+    
+    # Which channels to use
+    send_notification = models.BooleanField(default=True)
+    send_email = models.BooleanField(default=True)
+    send_system_message = models.BooleanField(default=True)
+    
+    # Status tracking
+    notification_sent = models.BooleanField(default=False)
+    email_sent = models.BooleanField(default=False)
+    system_message_sent = models.BooleanField(default=False)
+    
+    created_at = models.DateTimeField(default=datetime.now)
+    
+    class Meta:
+        unique_together = ['event', 'user', 'time_before']
+        indexes = [
+            models.Index(fields=['remind_at', 'notification_sent']),
+        ]
+    
+    def __str__(self):
+        return f"Reminder {self.time_before} before {self.event.name} for {self.user}"
+

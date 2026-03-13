@@ -105,6 +105,8 @@ EVENT_LOCATION = (
 class Event(models.Model):
     name = models.CharField(max_length=200)
     description = models.TextField(max_length=2000)
+    cover_image = models.ImageField(upload_to='event_covers/', null=True, blank=True)
+    image_url = models.URLField(max_length=500, null=True, blank=True)
     capacity = models.IntegerField()
     duration = models.DurationField()
     event_type = models.CharField(max_length=200, choices=EVENT_TYPE, default='public')
@@ -134,6 +136,10 @@ class Event(models.Model):
     # Entity Authorship
     institution = models.ForeignKey(Institution, on_delete=models.CASCADE, null=True, blank=True, related_name='events')
     organisation = models.ForeignKey(Organisation, on_delete=models.CASCADE, null=True, blank=True, related_name='events')
+    
+    # Advanced Settings
+    seeking_sponsors = models.BooleanField(default=False)
+    seeking_partners = models.BooleanField(default=False)
 
     def __str__(self):
         return self.name
@@ -298,15 +304,141 @@ class EventSpeaker(models.Model):
         return f"{self.speaker_name} - {self.event.name}"
     
 class EventTicket(models.Model):
-    event = models.ForeignKey(Event, on_delete=models.DO_NOTHING)
+    event = models.ForeignKey(Event, on_delete=models.DO_NOTHING, related_name='tickets')
     ticket_type = models.CharField(max_length=100, choices=TICKET_TYPE, default='regular')
-    price = models.DecimalField(max_digits=10, decimal_places=2)
+    price = models.DecimalField(max_digits=10, decimal_places=2, default=0.00)
     quantity_available = models.IntegerField()
-    qr_code = models.FileField(upload_to='events_tickets/')
+    qr_code = models.FileField(upload_to='events_tickets/', blank=True, null=True)
+    is_free = models.BooleanField(default=True)
     timestamp = models.DateTimeField(auto_now_add=True)
 
     def __str__(self):
         return f"{self.ticket_type} - {self.event.name}"
+
+
+class TicketTier(models.Model):
+    """
+    Advanced ticketing model allowing custom groupings (e.g., Couple, Group of 5),
+    custom pricing, and eligibility restrictions.
+    """
+    event = models.ForeignKey(Event, on_delete=models.CASCADE, related_name='ticket_tiers')
+    name = models.CharField(max_length=200, help_text="e.g. VIP Couple, Group of 10, Student Individual")
+    description = models.TextField(blank=True, null=True)
+    price = models.DecimalField(max_digits=10, decimal_places=2, default=0.00)
+    capacity = models.IntegerField(help_text="Total number of tickets available in this tier")
+    group_size = models.IntegerField(default=1, help_text="Number of people this ticket admits (e.g., 2 for couple)")
+    
+    # Eligibility Restrictions
+    min_age = models.IntegerField(null=True, blank=True)
+    max_age = models.IntegerField(null=True, blank=True)
+    custom_criteria = models.CharField(max_length=300, blank=True, null=True, help_text="Specific string criteria if needed")
+    
+    is_active = models.BooleanField(default=True)
+    created_on = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return f"{self.name} - {self.event.name}"
+
+
+class EventMaterial(models.Model):
+    """
+    Documents and files generated or uploaded for the event.
+    Can also be used for document-to-event autofill generation.
+    """
+    MATERIAL_TYPES = (
+        ('schedule', 'Schedule / Program'),
+        ('brochure', 'Brochure'),
+        ('promo', 'Promotional Material'),
+        ('sponsorship', 'Sponsorship Deck'),
+        ('other', 'Other Material'),
+    )
+    event = models.ForeignKey(Event, on_delete=models.CASCADE, related_name='materials')
+    file = models.FileField(upload_to='event_materials/')
+    title = models.CharField(max_length=200)
+    material_type = models.CharField(max_length=50, choices=MATERIAL_TYPES, default='other')
+    is_public = models.BooleanField(default=True)
+    uploaded_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return f"{self.title} - {self.event.name}"
+
+
+BOOKING_STATUS = (
+    ('pending', 'Pending'),
+    ('confirmed', 'Confirmed'),
+    ('cancelled', 'Cancelled'),
+    ('checked_in', 'Checked In'),
+)
+
+class EventSlotBooking(models.Model):
+    """Individual slot booking for an event"""
+    event = models.ForeignKey(Event, on_delete=models.CASCADE, related_name='slot_bookings')
+    user = models.ForeignKey(CustomUser, on_delete=models.CASCADE, related_name='event_bookings')
+    ticket = models.ForeignKey(EventTicket, on_delete=models.SET_NULL, null=True, blank=True, related_name='bookings')
+    ticket_tier = models.ForeignKey(TicketTier, on_delete=models.SET_NULL, null=True, blank=True, related_name='tier_bookings')
+    quantity = models.IntegerField(default=1, help_text="Number of units purchased of this ticket/tier")
+    booking_status = models.CharField(max_length=50, choices=BOOKING_STATUS, default='pending')
+    qr_code_data = models.TextField(blank=True, default='')
+    ticket_number = models.CharField(max_length=100, unique=True, blank=True)
+    amount_paid = models.DecimalField(max_digits=10, decimal_places=2, default=0.00)
+    booked_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        unique_together = ['event', 'user']
+        indexes = [
+            models.Index(fields=['event', 'booking_status']),
+        ]
+
+    def save(self, *args, **kwargs):
+        if not self.ticket_number:
+            import uuid
+            self.ticket_number = f"QMR-{uuid.uuid4().hex[:8].upper()}"
+        if not self.qr_code_data:
+            import json
+            self.qr_code_data = json.dumps({
+                'ticket_number': self.ticket_number,
+                'event_id': self.event_id,
+                'user_id': self.user_id,
+                'event_name': self.event.name if self.event else '',
+            })
+        super().save(*args, **kwargs)
+
+    def __str__(self):
+        return f"Booking {self.ticket_number} - {self.event.name} by {self.user}"
+
+class EventInteractionAnalytics(models.Model):
+    """
+    Tracks granular analytics data for advanced event reporting.
+    """
+    INTERACTION_TYPES = (
+        ('view', 'Page View'),
+        ('share', 'Shared Event'),
+        ('ticket_click', 'Clicked to Buy Tickets'),
+        ('sponsor_click', 'Clicked Sponsor Info'),
+        ('partner_click', 'Clicked Partner Info'),
+        ('material_download', 'Downloaded Material'),
+    )
+    event = models.ForeignKey(Event, on_delete=models.CASCADE, related_name='interaction_analytics')
+    user = models.ForeignKey(CustomUser, on_delete=models.SET_NULL, null=True, blank=True)
+    interaction_type = models.CharField(max_length=50, choices=INTERACTION_TYPES)
+    
+    # Optional Demographics cache (stored here so analytics don't break if user deletes account)
+    viewer_age = models.IntegerField(null=True, blank=True)
+    viewer_location_country = models.CharField(max_length=100, null=True, blank=True)
+    viewer_location_city = models.CharField(max_length=100, null=True, blank=True)
+    
+    duration_seconds = models.IntegerField(default=0, help_text="For active views, how long they stayed")
+    referring_source = models.CharField(max_length=255, null=True, blank=True)
+    
+    timestamp = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        indexes = [
+            models.Index(fields=['event', 'interaction_type', 'timestamp']),
+        ]
+
+    def __str__(self):
+        return f"{self.interaction_type} on {self.event.name} at {self.timestamp}"
     
 # class EventOrganizer(models.Model):
 #     event = models.ForeignKey(Event, on_delete=models.DO_NOTHING)

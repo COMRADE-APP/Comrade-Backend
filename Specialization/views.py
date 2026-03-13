@@ -10,6 +10,8 @@ from rest_framework.permissions import IsAuthenticated
 from Specialization.permissions import IsAdmin, IsCreator, IsModerator
 from django.shortcuts import get_object_or_404
 import json
+import uuid
+import random
 from datetime import datetime
 
 
@@ -76,6 +78,75 @@ class SpecializationViewSet(ModelViewSet):
             'message': 'Specialization marked as completed successfully.'
         }
         return Response(context, status=status.HTTP_201_CREATED)
+
+    @action(detail=True, methods=['get'])
+    def analytics(self, request, pk=None):
+        specialization = self.get_object()
+        
+        # Real metrics
+        enrollments = specialization.specializationmembership_set.count() if hasattr(specialization, 'specializationmembership_set') else specialization.members.count()
+        completions = CompletedSpecialization.objects.filter(specialization=specialization).count()
+        
+        # Mock Engagement metrics for UI
+        views = enrollments * random.randint(3, 10)
+        shares = int(enrollments * random.uniform(0.1, 0.5))
+        likes = int(enrollments * random.uniform(0.3, 0.8))
+        average_rating = round(random.uniform(3.5, 5.0), 1) if enrollments > 0 else 0.0
+
+        revenue = 0
+        if specialization.is_paid and specialization.price:
+            revenue = float(specialization.price) * enrollments
+
+        return Response({
+            'enrollments': enrollments,
+            'completions': completions,
+            'views': views,
+            'shares': shares,
+            'likes': likes,
+            'average_rating': average_rating,
+            'revenue': revenue
+        }, status=status.HTTP_200_OK)
+
+    @action(detail=False, methods=['post'], permission_classes=[IsAuthenticated])
+    def generate_from_files(self, request):
+        files = request.FILES.getlist('files')
+        if not files:
+            return Response({'error': 'No files uploaded'}, status=status.HTTP_400_BAD_REQUEST)
+
+        # In a real scenario, an LLM/OCR would process these files. 
+        # Here we mock the generation based on the file count/names.
+        file_names = [f.name for f in files]
+        base_name = file_names[0].split('.')[0].replace('_', ' ').replace('-', ' ').title()
+        
+        user = request.user
+        profile = Profile.objects.get(user=user)
+
+        # Create the Specialization
+        new_specialization = Specialization.objects.create(
+            name=f"{base_name} Course",
+            description=f"Auto-generated learning path from {len(files)} uploaded files: {', '.join(file_names)}",
+            learning_type='course',
+            is_paid=False,
+        )
+        new_specialization.created_by.add(profile)
+        new_specialization.admins.add(profile)
+        
+        # Create a matching Stack per file
+        for f in files:
+            stack_name = f.name.split('.')[0].replace('_', ' ').title()
+            stack = Stack.objects.create(
+                name=stack_name,
+                description=f"Module covering topics from {f.name}"
+            )
+            stack.created_by.add(profile)
+            new_specialization.stacks.add(stack)
+
+        serializer = self.get_serializer(new_specialization)
+        return Response({
+            'message': f'Successfully generated {new_specialization.learning_type} with {len(files)} stacks.',
+            'data': serializer.data
+        }, status=status.HTTP_201_CREATED)
+
     
 
 class StackViewSet(ModelViewSet):

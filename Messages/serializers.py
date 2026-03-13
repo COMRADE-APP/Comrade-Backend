@@ -30,9 +30,9 @@ class UserMiniSerializer(serializers.ModelSerializer):
         return None
     
     def get_is_online(self, obj):
-        # Check if user was active in the last 5 minutes
-        if hasattr(obj, 'last_activity'):
-            return obj.last_activity > timezone.now() - timedelta(minutes=5)
+        # Check if user was active in the last 5 minutes based on last_seen
+        if obj.last_seen:
+            return obj.last_seen > timezone.now() - timedelta(minutes=5)
         return False
 
 

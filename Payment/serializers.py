@@ -511,6 +511,8 @@ class CreateOrderSerializer(serializers.Serializer):
     order_type = serializers.ChoiceField(choices=['product', 'food', 'hotel_booking', 'service_appointment'])
     delivery_mode = serializers.ChoiceField(choices=['pickup', 'delivery', 'appointment'])
     payment_type = serializers.ChoiceField(choices=['individual', 'group'], default='individual')
+    sales_channel = serializers.ChoiceField(choices=['online', 'in_store', 'pop_up'], default='online')
+    is_offline = serializers.BooleanField(default=False)
     payment_group_id = serializers.UUIDField(required=False)
     delivery_address = serializers.CharField(required=False, allow_blank=True)
     notes = serializers.CharField(required=False, allow_blank=True)

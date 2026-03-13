@@ -1,6 +1,13 @@
 from django.shortcuts import render
-from Resources.serializers import ResourceSerializer, ResourceVisibilitySerializer, VisibilityLogSerializer, LinkSerializer, VisibilitySerializer, MainVisibilityLogSerializer
-from Resources.models import Resource, ResourceVisibility, VisibilityLog, Link, Visibility, MainVisibilityLog
+from Resources.serializers import (
+    ResourceSerializer, ResourceVisibilitySerializer, VisibilityLogSerializer, LinkSerializer,
+    VisibilitySerializer, MainVisibilityLogSerializer, ResourceAccessRequestSerializer,
+    ResourceAnalyticsSerializer, ResourceCommentSerializer, ResourceReviewSerializer
+)
+from Resources.models import (
+    Resource, ResourceVisibility, VisibilityLog, Link, Visibility, MainVisibilityLog,
+    ResourceAccessRequest, ResourceAnalytics, ResourceComment, ResourceReview
+)
 from rest_framework.viewsets import ModelViewSet
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticatedOrReadOnly
@@ -130,10 +137,12 @@ VISIBILITY_OPTIONS_MAP = {
 
 # Create your views here.
 class ResourceViewSet(ModelViewSet):
-    queryset = Resource.objects.all()
+    queryset = Resource.objects.all().order_by('-id')
     serializer_class = ResourceSerializer
     # permission_classes = [IsAuthenticatedOrReadOnly]
     # renderer_classes = [PDFRenderer]
+    ordering_fields = ['id', 'title', 'created_at']
+    ordering = ['-id']
 
     def perform_create(self, serializer):
         """Create resource and optionally link to a room and handle visibility"""
@@ -220,6 +229,225 @@ class ResourceViewSet(ModelViewSet):
 
         return Response(file_info, status=status.HTTP_200_OK)
 
+    @action(detail=True, methods=['post'])
+    def request_access(self, request, pk=None):
+        """Request access to a restricted resource"""
+        resource = self.get_object()
+        from Authentication.models import Profile
+        profile, _ = Profile.objects.get_or_create(user=request.user)
+        
+        existing = ResourceAccessRequest.objects.filter(resource=resource, requester=profile).first()
+        if existing:
+            return Response({'detail': 'Access already requested', 'status': existing.status}, status=status.HTTP_400_BAD_REQUEST)
+        
+        access_req = ResourceAccessRequest.objects.create(
+            resource=resource,
+            requester=profile,
+            message=request.data.get('message', ''),
+        )
+        ResourceAnalytics.objects.create(resource=resource, user=profile, action='access_request')
+        return Response(ResourceAccessRequestSerializer(access_req).data, status=status.HTTP_201_CREATED)
+
+    @action(detail=True, methods=['get'])
+    def access_requests(self, request, pk=None):
+        """Get all access requests for a resource (creator only)"""
+        resource = self.get_object()
+        from Authentication.models import Profile
+        profile = Profile.objects.filter(user=request.user).first()
+        if resource.created_by != profile and not request.user.is_staff:
+            return Response({'detail': 'Not authorized'}, status=status.HTTP_403_FORBIDDEN)
+        
+        reqs = ResourceAccessRequest.objects.filter(resource=resource)
+        status_filter = request.query_params.get('status')
+        if status_filter:
+            reqs = reqs.filter(status=status_filter)
+        return Response(ResourceAccessRequestSerializer(reqs, many=True).data)
+
+    @action(detail=True, methods=['post'], url_path='review-access/(?P<request_id>[^/.]+)')
+    def review_access(self, request, pk=None, request_id=None):
+        """Approve or deny an access request (creator only)"""
+        resource = self.get_object()
+        from Authentication.models import Profile
+        profile = Profile.objects.filter(user=request.user).first()
+        if resource.created_by != profile and not request.user.is_staff:
+            return Response({'detail': 'Not authorized'}, status=status.HTTP_403_FORBIDDEN)
+        
+        try:
+            access_req = ResourceAccessRequest.objects.get(id=request_id, resource=resource)
+        except ResourceAccessRequest.DoesNotExist:
+            return Response({'detail': 'Request not found'}, status=status.HTTP_404_NOT_FOUND)
+        
+        new_status = request.data.get('status')
+        if new_status not in ['approved', 'denied', 'revoked']:
+            return Response({'detail': 'Invalid status'}, status=status.HTTP_400_BAD_REQUEST)
+        
+        access_req.status = new_status
+        access_req.reviewed_by = profile
+        access_req.review_note = request.data.get('review_note', '')
+        access_req.reviewed_at = datetime.now()
+        access_req.save()
+        
+        # If approved, add user to visibility access
+        if new_status == 'approved':
+            rv = ResourceVisibility.objects.filter(resource=resource).first()
+            if rv:
+                rv.users_with_access.add(access_req.requester)
+        
+        return Response(ResourceAccessRequestSerializer(access_req).data)
+
+    @action(detail=True, methods=['post'])
+    def record_analytics(self, request, pk=None):
+        """Record a resource interaction (view, download, share)"""
+        resource = self.get_object()
+        action_type = request.data.get('action', 'view')
+        valid_actions = ['view', 'download', 'share', 'purchase']
+        if action_type not in valid_actions:
+            return Response({'detail': 'Invalid action'}, status=status.HTTP_400_BAD_REQUEST)
+        
+        from Authentication.models import Profile
+        profile = None
+        if request.user.is_authenticated:
+            profile, _ = Profile.objects.get_or_create(user=request.user)
+        
+        ResourceAnalytics.objects.create(
+            resource=resource, user=profile, action=action_type,
+            metadata=request.data.get('metadata', {})
+        )
+        return Response({'status': 'recorded'})
+
+    @action(detail=True, methods=['get'])
+    def analytics(self, request, pk=None):
+        """Get analytics for a resource (creator only)"""
+        resource = self.get_object()
+        from Authentication.models import Profile
+        from django.db.models import Count
+        from django.db.models.functions import TruncDate
+        
+        profile = Profile.objects.filter(user=request.user).first()
+        if resource.created_by != profile and not request.user.is_staff:
+            return Response({'detail': 'Not authorized'}, status=status.HTTP_403_FORBIDDEN)
+        
+        action_counts = dict(
+            ResourceAnalytics.objects.filter(resource=resource)
+            .values_list('action').annotate(count=Count('id'))
+            .values_list('action', 'count')
+        )
+        
+        daily_views = list(
+            ResourceAnalytics.objects.filter(resource=resource, action='view')
+            .annotate(date=TruncDate('created_at'))
+            .values('date').annotate(count=Count('id'))
+            .order_by('date').values('date', 'count')[:30]
+        )
+        
+        unique_visitors = ResourceAnalytics.objects.filter(
+            resource=resource, user__isnull=False
+        ).values('user').distinct().count()
+        
+        return Response({
+            'action_counts': action_counts,
+            'daily_views': daily_views,
+            'unique_visitors': unique_visitors,
+            'total_interactions': ResourceAnalytics.objects.filter(resource=resource).count(),
+            'access_requests': ResourceAccessRequest.objects.filter(resource=resource).count(),
+            'pending_requests': ResourceAccessRequest.objects.filter(resource=resource, status='pending').count(),
+        })
+
+    @action(detail=True, methods=['get', 'post'])
+    def comments(self, request, pk=None):
+        """Get or create comments for a resource"""
+        resource = self.get_object()
+        
+        if request.method == 'GET':
+            comments = ResourceComment.objects.filter(resource=resource, parent=None)
+            serializer = ResourceCommentSerializer(comments, many=True, context={'request': request})
+            return Response(serializer.data)
+            
+        elif request.method == 'POST':
+            from Authentication.models import Profile
+            profile, _ = Profile.objects.get_or_create(user=request.user)
+            
+            content = request.data.get('content')
+            parent_id = request.data.get('parent_id')
+            
+            if not content:
+                return Response({'error': 'Content is required'}, status=status.HTTP_400_BAD_REQUEST)
+                
+            parent = None
+            if parent_id:
+                try:
+                    parent = ResourceComment.objects.get(id=parent_id, resource=resource)
+                except ResourceComment.DoesNotExist:
+                    return Response({'error': 'Parent comment not found'}, status=status.HTTP_404_NOT_FOUND)
+            
+            comment = ResourceComment.objects.create(
+                resource=resource,
+                user=profile,
+                content=content,
+                parent=parent
+            )
+            
+            serializer = ResourceCommentSerializer(comment, context={'request': request})
+            return Response(serializer.data, status=status.HTTP_201_CREATED)
+
+    @action(detail=True, methods=['post'], url_path='comments/(?P<comment_id>[^/.]+)/react')
+    def react_comment(self, request, pk=None, comment_id=None):
+        resource = self.get_object()
+        try:
+            comment = ResourceComment.objects.get(id=comment_id, resource=resource)
+        except ResourceComment.DoesNotExist:
+            return Response({'error': 'Comment not found'}, status=status.HTTP_404_NOT_FOUND)
+
+        from Authentication.models import Profile
+        profile, _ = Profile.objects.get_or_create(user=request.user)
+        action = request.data.get('action') # 'like' or 'dislike'
+
+        if action == 'like':
+            if profile in comment.likes.all():
+                comment.likes.remove(profile)
+            else:
+                comment.likes.add(profile)
+                comment.dislikes.remove(profile)
+        elif action == 'dislike':
+            if profile in comment.dislikes.all():
+                comment.dislikes.remove(profile)
+            else:
+                comment.dislikes.add(profile)
+                comment.likes.remove(profile)
+        else:
+            return Response({'error': 'Invalid action'}, status=status.HTTP_400_BAD_REQUEST)
+
+        return Response({'status': 'success'})
+
+    @action(detail=True, methods=['get', 'post'])
+    def reviews(self, request, pk=None):
+        """Get or create reviews for a resource"""
+        resource = self.get_object()
+        
+        if request.method == 'GET':
+            reviews = ResourceReview.objects.filter(resource=resource)
+            serializer = ResourceReviewSerializer(reviews, many=True, context={'request': request})
+            return Response(serializer.data)
+            
+        elif request.method == 'POST':
+            from Authentication.models import Profile
+            profile, _ = Profile.objects.get_or_create(user=request.user)
+            
+            rating = request.data.get('rating')
+            content = request.data.get('content', '')
+            
+            if not rating:
+                return Response({'error': 'Rating is required'}, status=status.HTTP_400_BAD_REQUEST)
+                
+            review, created = ResourceReview.objects.update_or_create(
+                resource=resource,
+                user=profile,
+                defaults={'rating': rating, 'content': content}
+            )
+            
+            serializer = ResourceReviewSerializer(review, context={'request': request})
+            status_code = status.HTTP_201_CREATED if created else status.HTTP_200_OK
+            return Response(serializer.data, status=status_code)
 class ResourceVisibilityViewSet(ModelViewSet):
     queryset = ResourceVisibility.objects.all()
     serializer_class = ResourceVisibilitySerializer

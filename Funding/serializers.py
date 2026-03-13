@@ -100,15 +100,22 @@ class FundingResponseSerializer(serializers.ModelSerializer):
 
 class NegotiationMessageSerializer(serializers.ModelSerializer):
     sender_name = serializers.SerializerMethodField()
+    is_me = serializers.SerializerMethodField()
 
     class Meta:
         model = NegotiationMessage
         fields = ['id', 'negotiation', 'sender', 'sender_name', 'content', 
-                  'attachment', 'is_read', 'created_at']
+                  'attachment', 'is_read', 'created_at', 'is_me']
         read_only_fields = ['id', 'sender', 'created_at']
 
     def get_sender_name(self, obj):
         return f"{obj.sender.first_name} {obj.sender.last_name}".strip() or obj.sender.email
+
+    def get_is_me(self, obj):
+        request = self.context.get('request')
+        if request and hasattr(request, 'user'):
+            return obj.sender == request.user
+        return False
 
 
 class FundingNegotiationSerializer(serializers.ModelSerializer):

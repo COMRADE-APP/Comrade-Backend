@@ -238,6 +238,7 @@ class UserProfileSerializer(serializers.ModelSerializer):
             'date_of_birth', 'preferred_currency', 'preferred_language',
             'avatar', 'avatar_url', 'cover_image', 'cover_url',
             'bio', 'location', 'occupation', 'website', 'interests',
+            'religion', 'hobbies', 'certifications', 'work_experience',
             'show_email', 'show_phone', 'allow_messages', 
             'show_activity_status', 'show_read_receipts',
             'is_following', 'followers_count', 'following_count',
@@ -392,6 +393,7 @@ class UserProfileUpdateSerializer(serializers.ModelSerializer):
         fields = [
             'first_name', 'last_name', 'other_names',
             'bio', 'location', 'occupation', 'website', 'interests',
+            'religion', 'hobbies', 'certifications', 'work_experience',
             'show_email', 'show_phone', 'allow_messages',
             'show_activity_status', 'show_read_receipts'
         ]

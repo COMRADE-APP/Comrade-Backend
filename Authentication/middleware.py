@@ -8,15 +8,13 @@ class ActiveUserMiddleware:
     def __call__(self, request):
         if request.user.is_authenticated:
             now = timezone.now()
-            # Update last_seen
-            request.user.last_seen = now
-            request.user.is_online = True
-            request.user.save(update_fields=['last_seen', 'is_online'])
-
-            # Set a cache key for online status (expires in 5 mins)
-            # This is useful for efficient "is_online" checks without hitting DB constantly
-            # key = f'user_online_{request.user.id}'
-            # cache.set(key, True, 300) 
+            # Only update last_seen (throttled to once per minute to reduce DB writes)
+            cache_key = f'user_lastseen_{request.user.id}'
+            if not cache.get(cache_key):
+                request.user.last_seen = now
+                request.user.save(update_fields=['last_seen'])
+                cache.set(cache_key, True, 60)  # throttle for 60 seconds
 
         response = self.get_response(request)
         return response
+
