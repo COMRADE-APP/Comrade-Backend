@@ -6,14 +6,14 @@ from django.db.models import Q, Count
 from rest_framework import status
 from rest_framework.decorators import action
 from rest_framework.response import Response
-from Resources.models import Resource, ResourceVisibility 
+from Resources.models import Resource, ResourceVisibility
 from Resources.serializers import ResourceSerializer, ResourceVisibilitySerializer
 from Rooms.models import Room, DefaultRoom, DirectMessage, DirectMessageRoom, ForwadingLog, RoomSettings, RoomChat, RoomChatFile, RoomTyping
 from Rooms.serializers import (
     RoomSerializer, RoomListSerializer, RoomRecommendationSerializer,
     DefaultRoomSerializer, DirectMessageSerializer, DirectMessageCreateSerializer,
     DirectMessageRoomSerializer, DirectMessageRoomListSerializer, ForwadingLogSerializer,
-    RoomChatSerializer, RoomChatCreateSerializer, RoomSettingsSerializer, 
+    RoomChatSerializer, RoomChatCreateSerializer, RoomSettingsSerializer,
     RoomDetailSerializer, MemberDetailSerializer, RoomChatFileSerializer
 )
 from Opinions.models import Follow
@@ -108,11 +108,14 @@ class RoomViewSet(ModelViewSet):
     
     @action(detail=False, methods=['get'])
     def my_rooms(self, request):
-        """Get rooms the user is a member of"""
+        """Get rooms the user is a member of, sorted by latest message"""
+        from django.db.models import Max
         rooms = Room.objects.filter(
             members=request.user,
             operation_state='active'
-        ).order_by('-created_on')
+        ).annotate(
+            latest_message_at=Max('chats__created_at')
+        ).order_by('-latest_message_at', '-created_on')
         serializer = RoomListSerializer(rooms, many=True, context={'request': request})
         return Response(serializer.data)
     
@@ -816,7 +819,7 @@ class TypingView(APIView):
         user = request.user
         
         # Calculate expiry (e.g. 5 seconds from now)
-        expires_at = datetime.now() + timedelta(seconds=5)
+        expires_at = timezone.now() + timedelta(seconds=5)
         
         if typing_type == 'room':
             room = get_object_or_404(Room, id=pk)
@@ -840,7 +843,7 @@ class TypingView(APIView):
         Expects `type`: 'room' or 'dm' in query params.
         """
         typing_type = request.query_params.get('type', 'room')
-        now = datetime.now()
+        now = timezone.now()
         
         users_data = []
         
@@ -848,12 +851,12 @@ class TypingView(APIView):
             typing_users = RoomTyping.objects.filter(
                 room_id=pk, 
                 expires_at__gt=now
-            ).exclude(user=request.user).select_related('user', 'user_profile')
+            ).exclude(user=request.user).select_related('user')
         else:
             typing_users = RoomTyping.objects.filter(
                 dm_room_id=pk, 
                 expires_at__gt=now
-            ).exclude(user=request.user).select_related('user', 'user_profile')
+            ).exclude(user=request.user).select_related('user')
             
         for t in typing_users:
             avatar_url = None

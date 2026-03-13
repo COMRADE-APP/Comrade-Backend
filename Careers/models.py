@@ -40,6 +40,7 @@ class Gig(models.Model):
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     creator = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='created_gigs')
+    image_url = models.URLField(max_length=500, null=True, blank=True)
     
     title = models.CharField(max_length=255)
     description = models.TextField()
@@ -122,6 +123,7 @@ class CareerOpportunity(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     
     # Link to organization (using UUID for flexibility)
+    image_url = models.URLField(max_length=500, null=True, blank=True)
     organization_id = models.UUIDField(null=True, blank=True)
     institution_id = models.UUIDField(null=True, blank=True)
     company_name = models.CharField(max_length=255, help_text="Fallback if no org link")

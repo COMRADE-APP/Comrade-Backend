@@ -101,6 +101,24 @@ class OpinionViewSet(viewsets.ModelViewSet):
             return OpinionCreateSerializer
         return OpinionSerializer
     
+    def get_object(self):
+        """Use a broader queryset for single-object retrieval.
+        This ensures opinions accessed by direct link/ID always load
+        for detail views and all detail-level actions (like, repost, etc.),
+        while the list feed still applies visibility/blocking filters."""
+        pk = self.kwargs.get('pk')
+        if pk is not None:
+            try:
+                obj = Opinion.objects.filter(is_deleted=False).select_related(
+                    'user', 'reposted_by', 'original_opinion__user'
+                ).prefetch_related('media_files').get(pk=pk)
+                self.check_object_permissions(self.request, obj)
+                return obj
+            except Opinion.DoesNotExist:
+                from rest_framework.exceptions import NotFound
+                raise NotFound('Opinion not found.')
+        return super().get_object()
+    
     def perform_create(self, serializer):
         # Check character limit based on user tier
         content = self.request.data.get('content', '')
@@ -232,6 +250,12 @@ class OpinionViewSet(viewsets.ModelViewSet):
                 order=i
             )
             
+        # Handle tagged rooms
+        tagged_rooms_ids = self.request.data.getlist('tagged_rooms')
+        if tagged_rooms_ids:
+            tagged_rooms_ids = list(set(tagged_rooms_ids))
+            opinion.tagged_rooms.set(tagged_rooms_ids)
+            
         # Handle mentioned users notifications
         mentioned_user_ids = self.request.data.getlist('mentioned_users')
         if mentioned_user_ids:
@@ -249,6 +273,21 @@ class OpinionViewSet(viewsets.ModelViewSet):
                     )
                 except Exception as e:
                     print(f"Error notifying mentioned user {user_id}: {e}")
+                    
+        # Notify followers about new post (limit to first 100 to avoid timeout)
+        try:
+            follower_ids = user.followers.values_list('follower_id', flat=True)[:100]
+            followers = CustomUser.objects.filter(id__in=follower_ids)
+            for follower in followers:
+                create_interaction_notification(
+                    user,
+                    follower,
+                    'new_post',
+                    opinion,
+                    f'{user.first_name} added a new post'
+                )
+        except Exception as e:
+            print(f"Error notifying followers: {e}")
     
     @action(detail=False, methods=['get'], permission_classes=[permissions.IsAuthenticated])
     def feed(self, request):
@@ -286,11 +325,11 @@ class OpinionViewSet(viewsets.ModelViewSet):
     
     @action(detail=False, methods=['get'], url_path='room/(?P<room_id>[^/.]+)')
     def room_opinions(self, request, room_id=None):
-        """Get opinions for a specific room"""
+        """Get opinions for a specific room (either scoped to room or tagged in room)"""
         queryset = Opinion.objects.filter(
-            is_deleted=False,
-            room_id=room_id
-        ).select_related('user', 'reposted_by').prefetch_related('media_files').order_by('-created_at')
+            Q(room_id=room_id) | Q(tagged_rooms__id=room_id),
+            is_deleted=False
+        ).distinct().select_related('user', 'reposted_by').prefetch_related('media_files').order_by('-created_at')
         
         # Exclude blocked users if authenticated
         if request.user.is_authenticated:
@@ -304,30 +343,34 @@ class OpinionViewSet(viewsets.ModelViewSet):
     
     @action(detail=True, methods=['post'], permission_classes=[permissions.IsAuthenticated])
     def like(self, request, pk=None):
-        """Like or unlike an opinion"""
+        """Like or unlike an opinion. For reposts, like is applied to the original."""
         opinion = self.get_object()
-        like, created = OpinionLike.objects.get_or_create(user=request.user, opinion=opinion)
+        
+        # If this is a repost, redirect like to the original opinion
+        target = opinion.original_opinion if opinion.is_repost and opinion.original_opinion else opinion
+        
+        like, created = OpinionLike.objects.get_or_create(user=request.user, opinion=target)
         
         if not created:
             like.delete()
-            opinion.likes_count = max(0, opinion.likes_count - 1)
-            opinion.save(update_fields=['likes_count'])
-            return Response({'liked': False, 'likes_count': opinion.likes_count})
+            target.likes_count = max(0, target.likes_count - 1)
+            target.save(update_fields=['likes_count'])
+            return Response({'liked': False, 'likes_count': target.likes_count})
         
-        opinion.likes_count += 1
-        opinion.save(update_fields=['likes_count'])
+        target.likes_count += 1
+        target.save(update_fields=['likes_count'])
         
         # Create notification
         create_interaction_notification(
-            request.user, opinion.user, 'like', opinion,
+            request.user, target.user, 'like', target,
             f'{request.user.first_name} liked your post'
         )
         
-        return Response({'liked': True, 'likes_count': opinion.likes_count})
+        return Response({'liked': True, 'likes_count': target.likes_count})
     
     @action(detail=True, methods=['post'], permission_classes=[permissions.IsAuthenticated])
     def repost(self, request, pk=None):
-        """Repost an opinion"""
+        """Repost an opinion — toggle M2M only, no duplicate Opinion entry."""
         opinion = self.get_object()
         repost, created = OpinionRepost.objects.get_or_create(
             user=request.user, 
@@ -343,16 +386,6 @@ class OpinionViewSet(viewsets.ModelViewSet):
         
         opinion.reposts_count += 1
         opinion.save(update_fields=['reposts_count'])
-        
-        # Create repost opinion entry
-        Opinion.objects.create(
-            user=opinion.user,
-            content=opinion.content,
-            is_repost=True,
-            original_opinion=opinion,
-            reposted_by=request.user,
-            visibility=opinion.visibility
-        )
         
         create_interaction_notification(
             request.user, opinion.user, 'repost', opinion,
@@ -464,11 +497,78 @@ class OpinionViewSet(viewsets.ModelViewSet):
             except OpinionComment.DoesNotExist:
                 pass
         
+        # Handle entity authorship
+        organisation = None
+        institution = None
+        establishment = None
+        poster_role = None
+        
+        org_id = request.data.get('organisation')
+        inst_id = request.data.get('institution')
+        estab_id = request.data.get('establishment')
+        
+        if org_id:
+            try:
+                from Organisation.models import Organisation, OrganisationMember
+                membership = OrganisationMember.objects.filter(
+                    organisation_id=org_id, 
+                    user=request.user, 
+                    is_active=True
+                ).first()
+                org = Organisation.objects.get(id=org_id)
+                if membership:
+                    organisation = org
+                    poster_role = membership.role
+                elif org.created_by == request.user:
+                    organisation = org
+                    poster_role = 'owner'
+            except Exception as e:
+                print(f"Error setting organisation for comment: {e}")
+        
+        if inst_id:
+            try:
+                from Institution.models import Institution, InstitutionMember
+                membership = InstitutionMember.objects.filter(
+                    institution_id=inst_id, 
+                    user=request.user, 
+                    is_active=True
+                ).first()
+                inst = Institution.objects.get(id=inst_id)
+                if membership:
+                    institution = inst
+                    role_map = {'creator': 'owner', 'admin': 'admin', 'moderator': 'moderator', 'member': 'member', 'subscriber': 'member'}
+                    poster_role = role_map.get(membership.role, 'member')
+                elif inst.created_by == request.user:
+                    institution = inst
+                    poster_role = 'owner'
+            except Exception as e:
+                print(f"Error setting institution for comment: {e}")
+        
+        if estab_id:
+            try:
+                from Payment.models import Establishment
+                estab = Establishment.objects.get(id=estab_id)
+                if estab.owner.user == request.user:
+                    establishment = estab
+                    poster_role = 'owner'
+                elif estab.organisation and organisation and estab.organisation == organisation:
+                    establishment = estab
+            except Exception as e:
+                print(f"Error setting establishment for comment: {e}")
+                
+        explicit_role = request.data.get('poster_role')
+        if explicit_role and explicit_role in ['owner', 'admin', 'moderator', 'member']:
+            poster_role = explicit_role
+
         comment = OpinionComment.objects.create(
             user=request.user,
             opinion=opinion,
             parent_comment=parent_comment,
-            content=content
+            content=content,
+            organisation=organisation,
+            institution=institution,
+            establishment=establishment,
+            poster_role=poster_role
         )
         
         opinion.comments_count += 1

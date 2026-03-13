@@ -115,6 +115,40 @@ class FundingRequestViewSet(viewsets.ModelViewSet):
         serializer = FundingRequestSerializer(requests, many=True)
         return Response(serializer.data)
 
+    @action(detail=True, methods=['post'], permission_classes=[permissions.IsAuthenticated])
+    def get_or_create_negotiation(self, request, pk=None):
+        """Get or create a negotiation thread for this funding request"""
+        funding_request = self.get_object()
+        
+        # Determine roles based on who is requesting
+        if request.user == funding_request.business.founder:
+            # Founder is checking - they need to specify which investor
+            investor_id = request.data.get('investor_id')
+            if not investor_id:
+                return Response({'error': 'investor_id required when founder initiates'}, 
+                              status=status.HTTP_400_BAD_REQUEST)
+            try:
+                from django.contrib.auth import get_user_model
+                User = get_user_model()
+                investor = User.objects.get(id=investor_id)
+            except User.DoesNotExist:
+                return Response({'error': 'Investor not found'}, status=status.HTTP_404_NOT_FOUND)
+            
+            founder = request.user
+        else:
+            # Investor is initiating
+            investor = request.user
+            founder = funding_request.business.founder
+
+        negotiation, created = FundingNegotiation.objects.get_or_create(
+            funding_request=funding_request,
+            investor=investor,
+            founder=founder
+        )
+        
+        serializer = FundingNegotiationSerializer(negotiation)
+        return Response(serializer.data, status=status.HTTP_200_OK if not created else status.HTTP_201_CREATED)
+
 class InvestmentOpportunityViewSet(viewsets.ModelViewSet):
     """
     Read-only for normal users, write for Admins
@@ -169,21 +203,32 @@ class FundingNegotiationViewSet(viewsets.ModelViewSet):
         user = self.request.user
         return self.queryset.filter(Q(investor=user) | Q(founder=user))
 
+    @action(detail=True, methods=['get'])
+    def messages(self, request, pk=None):
+        """Get all messages in a negotiation"""
+        negotiation = self.get_object()
+        messages = negotiation.messages.all().order_by('created_at')
+        from .serializers import NegotiationMessageSerializer
+        serializer = NegotiationMessageSerializer(messages, many=True, context={'request': request})
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
     @action(detail=True, methods=['post'])
     def send_message(self, request, pk=None):
         """Send a message in a negotiation"""
         negotiation = self.get_object()
         content = request.data.get('content')
-        if not content:
-            return Response({'error': 'Content required'}, status=status.HTTP_400_BAD_REQUEST)
+        if not content and not request.data.get('attachment'):
+            return Response({'error': 'Content or attachment required'}, status=status.HTTP_400_BAD_REQUEST)
         
+        from .models import NegotiationMessage
         message = NegotiationMessage.objects.create(
             negotiation=negotiation,
             sender=request.user,
-            content=content,
+            content=content or '',
             attachment=request.data.get('attachment')
         )
-        serializer = NegotiationMessageSerializer(message)
+        from .serializers import NegotiationMessageSerializer
+        serializer = NegotiationMessageSerializer(message, context={'request': request})
         return Response(serializer.data, status=status.HTTP_201_CREATED)
 
 
@@ -265,6 +310,40 @@ class CapitalVentureViewSet(viewsets.ModelViewSet):
         ).distinct()
         serializer = CapitalVentureSerializer(ventures, many=True)
         return Response(serializer.data)
+
+    @action(detail=True, methods=['post'], permission_classes=[permissions.IsAuthenticated])
+    def add_funds(self, request, pk=None):
+        """Add additional funds to the VC"""
+        venture = self.get_object()
+        
+        # Verify user has permission to add funds
+        if venture.created_by != request.user:
+            return Response(
+                {'error': 'You do not have permission to add funds to this venture'},
+                status=status.HTTP_403_FORBIDDEN
+            )
+            
+        amount = request.data.get('amount')
+        if not amount:
+            return Response({'error': 'amount is required'}, status=status.HTTP_400_BAD_REQUEST)
+            
+        try:
+            amount = float(amount)
+            if amount <= 0:
+                raise ValueError
+        except ValueError:
+            return Response({'error': 'amount must be a positive number'}, status=status.HTTP_400_BAD_REQUEST)
+
+        # Increment total and available funds
+        venture.total_fund = float(venture.total_fund) + amount
+        venture.available_fund = float(venture.available_fund) + amount
+        venture.save()
+        
+        serializer = CapitalVentureSerializer(venture)
+        return Response({
+            'message': f'Successfully added KES {amount:,.2f} to the fund.',
+            'venture': serializer.data
+        })
 
     @action(detail=True, methods=['get'])
     def funding_requests(self, request, pk=None):

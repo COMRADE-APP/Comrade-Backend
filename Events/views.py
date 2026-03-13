@@ -6,8 +6,8 @@ from rest_framework import status
 from rest_framework.permissions import IsAuthenticated, IsAdminUser, IsAuthenticatedOrReadOnly
 from rest_framework.viewsets import ModelViewSet
 from Events.serializers import EventSerializer
-from Events.models import Event, EventCategory, EventAttendance, EventBudget, EventCategoryAssignment, EventCollaboration, EventFeedback, EventFeedbackResponse, EventFile, EventFollowUp, EventLogistics, EventMediaCoverage, EventPartnership, EventPhoto, EventPromotion, EventRegistration, EventReminder, EventSchedule, EventSession, EventSpeaker, EventSponsor, EventSponsorAgreement, EventSponsorBenefit, EventSponsorLogo, EventSponsorPackage, EventSponsorPayment, EventSponsorshipAgreementDocument, EventSponsorshipApplication, EventSponsorshipApproval, EventSponsorshipCertificate, EventSponsorshipContract, EventSponsorshipDowngrade, EventSponsorshipEvaluation, EventSponsorshipExtension, EventSponsorshipFeedback, EventSponsorshipHistory, EventSponsorshipInvoice, EventSponsorshipLetter, EventSponsorshipLevel, EventSponsorshipRecognition, EventSponsorshipRejection, EventSponsorshipRenewal, EventSponsorshipReport, EventSponsorshipTermination, EventSponsorshipTransfer, EventSponsorshipUpgrade, EventSurvey, EventSurveyQuestion, EventSurveyResponse, EventTag, EventTagAssignment, EventTicket, EventVideo, EventReport, EventInvitation, EventLike, EventVisibility, VisibilityLog
-from Events.serializers import EventSerializer, EventCategorySerializer, EventAttendanceSerializer, EventBudgetSerializer, EventCategoryAssignmentSerializer, EventCollaborationSerializer, EventFeedbackSerializer, EventFeedbackResponseSerializer, EventFileSerializer, EventFollowUpSerializer, EventLogisticsSerializer, EventMediaCoverageSerializer, EventPartnershipSerializer, EventPhotoSerializer, EventPromotionSerializer, EventRegistrationSerializer, EventReminderSerializer, EventScheduleSerializer, EventSessionSerializer, EventSpeakerSerializer, EventSponsorSerializer, EventSponsorAgreementSerializer, EventSponsorBenefitSerializer, EventSponsorLogoSerializer, EventSponsorPackageSerializer, EventSponsorPaymentSerializer, EventSponsorshipAgreementDocumentSerializer, EventSponsorshipApplicationSerializer, EventSponsorshipApprovalSerializer, EventSponsorshipCertificateSerializer, EventSponsorshipContractSerializer, EventSponsorshipDowngradeSerializer, EventSponsorshipEvaluationSerializer, EventSponsorshipExtensionSerializer, EventSponsorshipFeedbackSerializer, EventSponsorshipHistorySerializer, EventSponsorshipInvoiceSerializer, EventSponsorshipLetterSerializer, EventSponsorshipLevelSerializer, EventSponsorshipRecognitionSerializer, EventSponsorshipRejectionSerializer, EventSponsorshipRenewalSerializer, EventSponsorshipReportSerializer, EventSponsorshipTerminationSerializer, EventSponsorshipTransferSerializer, EventSponsorshipUpgradeSerializer, EventSurveySerializer, EventSurveyQuestionSerializer, EventSurveyResponseSerializer, EventTagSerializer, EventTagAssignmentSerializer, EventTicketSerializer, EventVideoSerializer, EventReportSerializer, EventInvitationSerializer, EventLikeSerializer, EventVisibilitySerializer, VisibilityLogSerializer
+from Events.models import Event, EventCategory, EventAttendance, EventBudget, EventCategoryAssignment, EventCollaboration, EventFeedback, EventFeedbackResponse, EventFile, EventFollowUp, EventLogistics, EventMediaCoverage, EventPartnership, EventPhoto, EventPromotion, EventRegistration, EventReminder, EventSchedule, EventSession, EventSpeaker, EventSponsor, EventSponsorAgreement, EventSponsorBenefit, EventSponsorLogo, EventSponsorPackage, EventSponsorPayment, EventSponsorshipAgreementDocument, EventSponsorshipApplication, EventSponsorshipApproval, EventSponsorshipCertificate, EventSponsorshipContract, EventSponsorshipDowngrade, EventSponsorshipEvaluation, EventSponsorshipExtension, EventSponsorshipFeedback, EventSponsorshipHistory, EventSponsorshipInvoice, EventSponsorshipLetter, EventSponsorshipLevel, EventSponsorshipRecognition, EventSponsorshipRejection, EventSponsorshipRenewal, EventSponsorshipReport, EventSponsorshipTermination, EventSponsorshipTransfer, EventSponsorshipUpgrade, EventSurvey, EventSurveyQuestion, EventSurveyResponse, EventTag, EventTagAssignment, EventTicket, EventVideo, EventReport, EventInvitation, EventLike, EventVisibility, VisibilityLog, EventSlotBooking, TicketTier, EventInteractionAnalytics, EventMaterial
+from Events.serializers import EventSerializer, EventCategorySerializer, EventAttendanceSerializer, EventBudgetSerializer, EventCategoryAssignmentSerializer, EventCollaborationSerializer, EventFeedbackSerializer, EventFeedbackResponseSerializer, EventFileSerializer, EventFollowUpSerializer, EventLogisticsSerializer, EventMediaCoverageSerializer, EventPartnershipSerializer, EventPhotoSerializer, EventPromotionSerializer, EventRegistrationSerializer, EventReminderSerializer, EventScheduleSerializer, EventSessionSerializer, EventSpeakerSerializer, EventSponsorSerializer, EventSponsorAgreementSerializer, EventSponsorBenefitSerializer, EventSponsorLogoSerializer, EventSponsorPackageSerializer, EventSponsorPaymentSerializer, EventSponsorshipAgreementDocumentSerializer, EventSponsorshipApplicationSerializer, EventSponsorshipApprovalSerializer, EventSponsorshipCertificateSerializer, EventSponsorshipContractSerializer, EventSponsorshipDowngradeSerializer, EventSponsorshipEvaluationSerializer, EventSponsorshipExtensionSerializer, EventSponsorshipFeedbackSerializer, EventSponsorshipHistorySerializer, EventSponsorshipInvoiceSerializer, EventSponsorshipLetterSerializer, EventSponsorshipLevelSerializer, EventSponsorshipRecognitionSerializer, EventSponsorshipRejectionSerializer, EventSponsorshipRenewalSerializer, EventSponsorshipReportSerializer, EventSponsorshipTerminationSerializer, EventSponsorshipTransferSerializer, EventSponsorshipUpgradeSerializer, EventSurveySerializer, EventSurveyQuestionSerializer, EventSurveyResponseSerializer, EventTagSerializer, EventTagAssignmentSerializer, EventTicketSerializer, EventVideoSerializer, EventReportSerializer, EventInvitationSerializer, EventLikeSerializer, EventVisibilitySerializer, VisibilityLogSerializer, EventSlotBookingSerializer, EventInteractionAnalyticsSerializer
 from Announcements.models import Pin
 from Rooms.permissions import IsModerator
 from rest_framework.filters import SearchFilter, OrderingFilter
@@ -27,6 +27,9 @@ from django.conf import settings
 import copy
 from django.shortcuts import get_object_or_404
 from Resources.views import VISIBILITY_MAP
+import json
+import PyPDF2
+
 # Create your views here.
 
 
@@ -39,6 +42,69 @@ class EventViewSet(ModelViewSet):
     lookup_field = 'id'
     search_fields = ['id', 'name', 'description', 'location']
     filterset_fields = ['event_date', 'location', 'created_by', 'status', 'complexity_level']
+
+    def _process_nested_data(self, event, request_data):
+        # Process Ticket Tiers
+        ticket_tiers_data = request_data.get('ticket_tiers', [])
+        if isinstance(ticket_tiers_data, str):
+            try:
+                ticket_tiers_data = json.loads(ticket_tiers_data)
+            except json.JSONDecodeError:
+                ticket_tiers_data = []
+        
+        if ticket_tiers_data:
+            # Clear existing if updating (or handle more gracefully)
+            event.ticket_tiers.all().delete()
+            for tier_data in ticket_tiers_data:
+                TicketTier.objects.create(
+                    event=event,
+                    name=tier_data.get('name'),
+                    price=tier_data.get('price', 0.00),
+                    capacity=tier_data.get('capacity', 0),
+                    min_age=tier_data.get('min_age'),
+                    max_age=tier_data.get('max_age'),
+                    custom_criteria=tier_data.get('custom_criteria', ''),
+                    group_size_allowed=tier_data.get('group_size_allowed', 1)
+                )
+
+        # Process Materials via IDs
+        materials_ids = request_data.getlist('existing_materials', []) if hasattr(request_data, 'getlist') else request_data.get('existing_materials', [])
+        if materials_ids:
+            try:
+                # Assuming materials were uploaded separately and we're just linking them
+                mats = EventMaterial.objects.filter(id__in=materials_ids)
+                event.materials.add(*mats)
+            except Exception:
+                pass
+
+
+    def create(self, request, *args, **kwargs):
+        # Allow DRF to handle the main model creation
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        self.perform_create(serializer)
+        
+        event = serializer.instance
+        self._process_nested_data(event, request.data)
+
+        headers = self.get_success_headers(serializer.data)
+        return Response(self.get_serializer(event).data, status=status.HTTP_201_CREATED, headers=headers)
+
+    def update(self, request, *args, **kwargs):
+        partial = kwargs.pop('partial', False)
+        instance = self.get_object()
+        serializer = self.get_serializer(instance, data=request.data, partial=partial)
+        serializer.is_valid(raise_exception=True)
+        self.perform_update(serializer)
+
+        self._process_nested_data(instance, request.data)
+
+        if getattr(instance, '_prefetched_objects_cache', None):
+            # If 'prefetch_related' has been applied to a queryset, we need to
+            # forcibly invalidate the prefetch cache on the instance.
+            instance._prefetched_objects_cache = {}
+
+        return Response(self.get_serializer(instance).data)
 
     def perform_create(self, serializer):
         """Auto-set created_by to the authenticated user and optionally link to a room"""
@@ -55,36 +121,52 @@ class EventViewSet(ModelViewSet):
 
     # @action(detail=False, methods=['get'])
     # def create_event(self, request):
-    #     event = Event.objects.create(
-    #         name=request.data['name'],
-    #         description=request.data['description'],
-    #         location=request.data['location'],
-    #         date=request.data['date'],
-    #         end_date=request.data['end_date'],
-    #         start_time=request.data['start_time'],
-    #         end_time=request.data['end_time'],
-    #         url=request.data['url'],
-    #         visibility=request.data['visibility'],
-    #         event_type=request.data['event_type'],
-    #         max_attendees=request.data['max_attendees'],
-    #         is_ticketed=request.data['is_ticketed'],
-    #         ticket_price=request.data['ticket_price'],
-    #         status=request.data['status'],
-    #         created_by=request.user,
-    #         event_url=request.data['event_url'],
-    #         event_location=request.data['event_location'],
-    #         event_type=request.data['event_type'],
-    #         booking_deadline=request.data['event_booking_deadline'],
-    #         max_attendees=request.data['event_max_attendees'],
-    #         is_ticketed=request.data['event_is_ticketed'],
-    #         ticket_price=request.data['event_ticket_price'],
-    #         status=request.data['event_status'],
-    #         created_by=request.user,
-    #         end_time=request.data['end_time'],
-    #         end_date=request.data['end_date'],
-    #     )
-    #     serializer = self.get_serializer(event)
+    # ... (existing commented code)
     #     return Response(serializer.data, status=status.HTTP_200_OK)
+
+    @action(detail=False, methods=['post'], url_path='parse-document')
+    def parse_document(self, request):
+        """
+        AI-powered document parsing to auto-fill event fields.
+        Expects a file upload (PDF/Text) and returns extracted JSON data.
+        """
+        file_obj = request.FILES.get('file')
+        if not file_obj:
+            return Response({"error": "No file uploaded"}, status=status.HTTP_400_BAD_REQUEST)
+
+        extracted_text = ""
+        try:
+            if file_obj.name.endswith('.pdf'):
+                pdf_reader = PyPDF2.PdfReader(file_obj)
+                for page in pdf_reader.pages:
+                    extracted_text += page.extract_text() + "\n"
+            else:
+                extracted_text = file_obj.read().decode('utf-8', errors='ignore')
+        except Exception as e:
+            return Response({"error": f"Failed to read file: {str(e)}"}, status=status.HTTP_400_BAD_REQUEST)
+
+        # MOCK LLM EXTRACTION
+        # In production, send `extracted_text` to QomAI/LLM to retrieve structured JSON
+        # For this prototype, we'll run a basic heuristic/mock extraction
+        
+        parsed_data = {
+            "name": "Auto-Extracted Event Title",
+            "description": extracted_text[:500] + "...",  # First 500 chars as description
+            "location": "TBD Location",
+            "event_date": timezone.now().date().isoformat(),
+            "start_time": "09:00:00",
+            "end_time": "17:00:00",
+            "capacity": 100,
+            "is_ticketed": False,
+            "seeking_sponsors": "sponsor" in extracted_text.lower(),
+            "seeking_partners": "partner" in extracted_text.lower()
+        }
+
+        return Response({
+            "message": "Document parsed successfully",
+            "parsed_data": parsed_data,
+            "raw_text_preview": extracted_text[:200]
+        }, status=status.HTTP_200_OK)
 
     # Custom user actions
     '''Actions for normal users to interact with events such as RSVP, comment, like, etc.'''
@@ -454,9 +536,69 @@ class EventViewSet(ModelViewSet):
         event.save()
         return Response({'message': 'Event duplicated successfully. Saved as draft.'}, status=status.HTTP_201_CREATED)
 
+    # ===== REACTIONS (love, excited) =====
 
-    
+    @action(detail=True, methods=['post'], url_path='add_reaction')
+    def add_reaction(self, request, id=None):
+        """Add or update a reaction to an event."""
+        event = self.get_object()
+        reaction_type = request.data.get('reaction_type', 'love')
+        like_obj, created = EventLike.objects.get_or_create(
+            event=event, user=request.user,
+            defaults={'reaction': reaction_type, 'like': True}
+        )
+        if not created:
+            like_obj.reaction = reaction_type
+            like_obj.like = True
+            like_obj.save()
+        return Response({
+            'status': 'reaction_added',
+            'reaction_type': reaction_type,
+        }, status=status.HTTP_200_OK)
 
+    @action(detail=True, methods=['delete'], url_path='remove_reaction')
+    def remove_reaction(self, request, id=None):
+        """Remove a reaction from an event."""
+        event = self.get_object()
+        EventLike.objects.filter(event=event, user=request.user).delete()
+        return Response({'status': 'reaction_removed'}, status=status.HTTP_200_OK)
+
+    # ===== PIN / UNPIN =====
+
+    @action(detail=True, methods=['post'], url_path='pin')
+    def pin_event(self, request, id=None):
+        """Pin event to user's dashboard."""
+        event = self.get_object()
+        pin_obj, created = Pin.objects.get_or_create(user=request.user)
+        pin_obj.events.add(event)
+        return Response({'status': 'pinned'}, status=status.HTTP_200_OK)
+
+    @action(detail=True, methods=['delete'], url_path='unpin')
+    def unpin_event(self, request, id=None):
+        """Unpin event from user's dashboard."""
+        event = self.get_object()
+        pins = Pin.objects.filter(user=request.user)
+        for pin in pins:
+            pin.events.remove(event)
+        return Response({'status': 'unpinned'}, status=status.HTTP_200_OK)
+
+    # ===== INTERESTED =====
+
+    @action(detail=True, methods=['post'], url_path='mark_interested')
+    def mark_interested(self, request, id=None):
+        """Toggle interest in an event using EventFeedback with attendance_status=interested."""
+        event = self.get_object()
+        interested = request.data.get('interested', True)
+        if interested:
+            EventFeedback.objects.get_or_create(
+                event=event, user=request.user,
+                defaults={'attendendance_status': 'interested', 'rating': 0}
+            )
+        else:
+            EventFeedback.objects.filter(
+                event=event, user=request.user, attendendance_status='interested'
+            ).delete()
+        return Response({'status': 'interested' if interested else 'not_interested'}, status=status.HTTP_200_OK)
 
 
 class EventVisibilityViewSet(ModelViewSet):
@@ -1263,3 +1405,300 @@ class EventVideoViewSet(ModelViewSet):
     queryset = EventVideo.objects.all()
     permission_classes = [IsAuthenticatedOrReadOnly]
 
+
+class EventSlotBookingViewSet(ModelViewSet):
+    """ViewSet for slot bookings with booking, availability and cancellation"""
+    serializer_class = EventSlotBookingSerializer
+    queryset = EventSlotBooking.objects.all()
+    permission_classes = [IsAuthenticatedOrReadOnly]
+    filterset_fields = ['event', 'user', 'booking_status']
+
+    @action(detail=False, methods=['post'])
+    def book_slot(self, request):
+        """Book a slot for an event. Auto-generates ticket if capacity available. Supports bulk."""
+        event_id = request.data.get('event_id')
+        tickets_data = request.data.get('tickets_data', [])
+
+        # Fallback for old single ticket flow
+        if not tickets_data:
+            ticket_id = request.data.get('ticket_id')
+            ticket_tier_id = request.data.get('ticket_tier_id')
+            quantity = int(request.data.get('quantity', 1))
+            if ticket_id or ticket_tier_id or quantity > 0:
+                tickets_data = [{'ticket_id': ticket_id, 'ticket_tier_id': ticket_tier_id, 'quantity': quantity}]
+        
+        if not tickets_data:
+            return Response({'error': 'No tickets selected for purchase'}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            event = Event.objects.get(pk=event_id)
+        except Event.DoesNotExist:
+            return Response({'error': 'Event not found'}, status=status.HTTP_404_NOT_FOUND)
+
+        # Optional Profile Fetch for age validation
+        user_profile = getattr(request.user, 'profile', None)
+        user_age = None
+        if user_profile and user_profile.date_of_birth:
+            today = datetime.today()
+            dob = user_profile.date_of_birth
+            user_age = today.year - dob.year - ((today.month, today.day) < (dob.month, dob.day))
+        
+        # Check overall capacity
+        confirmed = event.slot_bookings.filter(booking_status__in=['confirmed', 'checked_in']).aggregate(
+            total=models.Sum('quantity')
+        )['total'] or 0
+        
+        total_quantity_requested = sum([int(t.get('quantity', 1)) for t in tickets_data])
+        if confirmed + total_quantity_requested > event.capacity:
+            return Response({'error': f'Event capacity exceeded. Only {event.capacity - confirmed} slots left.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        bookings_created = []
+        is_free_batch = True
+
+        for item in tickets_data:
+            ticket_id = item.get('ticket_id')
+            ticket_tier_id = item.get('ticket_tier_id')
+            quantity = int(item.get('quantity', 1))
+
+            if quantity < 1:
+                continue
+
+            ticket = None
+            tier = None
+            amount = 0.00
+            is_free = True
+
+            # if it's sending ticket_id but the model expects ticket tiers to be fetched by that ID because of frontend mixup:
+            # Let's try matching TicketTier first if we think it came from the new UI
+            if ticket_id and not ticket_tier_id:
+                try:
+                    tier = TicketTier.objects.get(pk=ticket_id, event=event)
+                    ticket_tier_id = tier.id
+                    ticket_id = None
+                except TicketTier.DoesNotExist:
+                    pass
+
+            if ticket_tier_id:
+                try:
+                    tier = TicketTier.objects.get(pk=ticket_tier_id, event=event)
+                    if tier.min_age and (user_age is None or user_age < tier.min_age):
+                        return Response({'error': f'You must be at least {tier.min_age} to buy {tier.name}.'}, status=status.HTTP_403_FORBIDDEN)
+                    if tier.max_age and (user_age is None or user_age > tier.max_age):
+                        return Response({'error': f'You must be under {tier.max_age} to buy {tier.name}.'}, status=status.HTTP_403_FORBIDDEN)
+                    
+                    tier_booked = EventSlotBooking.objects.filter(ticket_tier=tier, booking_status__in=['confirmed', 'checked_in']).aggregate(
+                        total=models.Sum('quantity')
+                    )['total'] or 0
+                    if tier_booked + quantity > tier.capacity:
+                        return Response({'error': f'Tier "{tier.name}" capacity exceeded.'}, status=status.HTTP_400_BAD_REQUEST)
+                    
+                    amount = float(tier.price) * quantity
+                    is_free = (float(tier.price) == 0.00)
+                except TicketTier.DoesNotExist:
+                    return Response({'error': 'Ticket Tier not found'}, status=status.HTTP_404_NOT_FOUND)
+                
+            elif ticket_id:
+                try:
+                    ticket = EventTicket.objects.get(pk=ticket_id, event=event)
+                    amount = float(ticket.price) * quantity
+                    is_free = ticket.is_free
+                except EventTicket.DoesNotExist:
+                    return Response({'error': 'Ticket not found'}, status=status.HTTP_404_NOT_FOUND)
+            else:
+                ticket = event.tickets.first()
+                if not ticket:
+                    ticket = EventTicket.objects.create(
+                        event=event, ticket_type='regular', price=0.00,
+                        quantity_available=event.capacity, is_free=True
+                    )
+                amount = 0 if ticket.is_free else float(ticket.price) * quantity
+                is_free = ticket.is_free
+
+            if not tier:
+                existing = EventSlotBooking.objects.filter(event=event, user=request.user).first()
+                if existing and len(tickets_data) == 1:
+                    return Response({'error': 'You have already booked a slot for this event', 'booking': EventSlotBookingSerializer(existing).data}, status=status.HTTP_400_BAD_REQUEST)
+
+            if not is_free:
+                is_free_batch = False
+
+            booking = EventSlotBooking.objects.create(
+                event=event,
+                user=request.user,
+                ticket=ticket,
+                ticket_tier=tier,
+                quantity=quantity,
+                booking_status='confirmed' if is_free else 'pending',
+                amount_paid=amount
+            )
+            bookings_created.append(booking)
+
+        # Analytics Logging
+        EventInteractionAnalytics.objects.create(
+            event=event, user=request.user, interaction_type='ticket_click',
+            viewer_age=user_age
+        )
+
+        serializer = EventSlotBookingSerializer(bookings_created, many=True)
+        return Response({
+            'message': 'Slots booked successfully!' if is_free_batch else 'Booking created. Please complete payment.',
+            'purchases': serializer.data,
+            'is_free': is_free_batch,
+            'quantity': total_quantity_requested,
+            'requires_payment': not is_free_batch
+        }, status=status.HTTP_201_CREATED)
+
+    @action(detail=False, methods=['get'])
+    def my_bookings(self, request):
+        """Get all bookings for the current user"""
+        bookings = EventSlotBooking.objects.filter(user=request.user).order_by('-booked_at')
+        serializer = EventSlotBookingSerializer(bookings, many=True)
+        return Response(serializer.data)
+
+    @action(detail=False, methods=['get'], url_path='availability/(?P<event_id>[^/.]+)')
+    def availability(self, request, event_id=None):
+        """Get slot availability for an event including new tier structures"""
+        try:
+            event = Event.objects.get(pk=event_id)
+        except Event.DoesNotExist:
+            return Response({'error': 'Event not found'}, status=status.HTTP_404_NOT_FOUND)
+
+        confirmed = event.slot_bookings.filter(booking_status__in=['confirmed', 'checked_in']).aggregate(
+            total=models.Sum('quantity')
+        )['total'] or 0
+        remaining = max(0, event.capacity - confirmed)
+        tickets = event.tickets.all()
+        tiers = event.ticket_tiers.filter(is_active=True)
+
+        return Response({
+            'event_id': event.id,
+            'event_name': event.name,
+            'capacity': event.capacity,
+            'booked': confirmed,
+            'slots_remaining': remaining,
+            'is_full': remaining == 0,
+            'tickets': [{
+                'id': t.id,
+                'type': t.ticket_type,
+                'price': str(t.price),
+                'is_free': t.is_free,
+                'quantity_available': t.quantity_available,
+            } for t in tickets],
+            'tiers': [{
+                'id': tier.id,
+                'name': tier.name,
+                'price': str(tier.price),
+                'capacity': tier.capacity,
+                'group_size': tier.group_size,
+                'description': tier.description,
+                'min_age': tier.min_age,
+                'max_age': tier.max_age
+            } for tier in tiers]
+        })
+
+    @action(detail=True, methods=['post'])
+    def cancel(self, request, pk=None):
+        """Cancel a booking"""
+        booking = self.get_object()
+        if booking.user != request.user:
+            return Response({'error': 'You can only cancel your own bookings'}, status=status.HTTP_403_FORBIDDEN)
+        booking.booking_status = 'cancelled'
+        booking.save()
+        return Response({'message': 'Booking cancelled successfully'})
+
+    @action(detail=True, methods=['post'])
+    def confirm_payment(self, request, pk=None):
+        """Confirm payment for a paid booking"""
+        booking = self.get_object()
+        if booking.user != request.user:
+            return Response({'error': 'You can only confirm your own bookings'}, status=status.HTTP_403_FORBIDDEN)
+        booking.booking_status = 'confirmed'
+        booking.save()
+        serializer = EventSlotBookingSerializer(booking)
+        return Response({
+            'message': 'Payment confirmed. Your ticket is ready!',
+            'booking': serializer.data
+        })
+
+
+class EventInteractionAnalyticsViewSet(ModelViewSet):
+    """ViewSet to handle granular interaction logging (post) and analytics dashboard retrieval (get)"""
+    serializer_class = EventInteractionAnalyticsSerializer
+    queryset = EventInteractionAnalytics.objects.all()
+    # Log interactions from any authenticated user, view stats via dedicated queries
+    permission_classes = [IsAuthenticated] 
+
+    @action(detail=False, methods=['post'])
+    def log_interaction(self, request):
+        event_id = request.data.get('event_id')
+        interaction_type = request.data.get('interaction_type')
+        duration = int(request.data.get('duration_seconds', 0))
+
+        if not event_id or not interaction_type:
+            return Response({'error': 'event_id and interaction_type are required'}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            event = Event.objects.get(pk=event_id)
+        except Event.DoesNotExist:
+            return Response({'error': 'Event not found'}, status=status.HTTP_404_NOT_FOUND)
+
+        # Basic cached demographics extraction
+        user_profile = getattr(request.user, 'profile', None)
+        user_age = None
+        if user_profile and user_profile.date_of_birth:
+            today = datetime.today()
+            dob = user_profile.date_of_birth
+            user_age = today.year - dob.year - ((today.month, today.day) < (dob.month, dob.day))
+
+        EventInteractionAnalytics.objects.create(
+            event=event,
+            user=request.user,
+            interaction_type=interaction_type,
+            duration_seconds=duration,
+            viewer_age=user_age,
+            # (Country and City could be extracted here from user Profile/Account settings if implemented)
+        )
+        return Response({'status': 'logged'}, status=status.HTTP_201_CREATED)
+
+    @action(detail=False, methods=['get'])
+    def event_dashboard(self, request):
+        """Retrieve aggregated statistics for the event created by the current user"""
+        event_id = request.query_params.get('event_id')
+        if not event_id:
+            return Response({'error': 'event_id required'}, status=status.HTTP_400_BAD_REQUEST)
+        
+        try:
+            event = Event.objects.get(pk=event_id)
+        except Event.DoesNotExist:
+            return Response({'error': 'Event not found'}, status=status.HTTP_404_NOT_FOUND)
+        
+        # Only allow the creator/admins to view stats
+        if event.created_by != request.user and not request.user.is_staff:
+            return Response({'error': 'Not authorized to view stats for this event'}, status=status.HTTP_403_FORBIDDEN)
+
+        interactions = EventInteractionAnalytics.objects.filter(event=event)
+        
+        # Aggregate Views, Shares, etc.
+        total_views = interactions.filter(interaction_type='view').count()
+        total_shares = interactions.filter(interaction_type='share').count()
+        ticket_clicks = interactions.filter(interaction_type='ticket_click').count()
+
+        # Ticket Sales Velocity (mocking simple counts for now)
+        ticket_sales = event.slot_bookings.filter(booking_status__in=['confirmed', 'checked_in']).count()
+        
+        # Simple Age clusters
+        age_distribution = {
+            'Under 18': interactions.filter(viewer_age__lt=18).count(),
+            '18-24': interactions.filter(viewer_age__gte=18, viewer_age__lte=24).count(),
+            '25-34': interactions.filter(viewer_age__gte=25, viewer_age__lte=34).count(),
+            '35+': interactions.filter(viewer_age__gte=35).count(),
+            'Unknown': interactions.filter(viewer_age__isnull=True).count(),
+        }
+
+        return Response({
+            'total_views': total_views,
+            'total_shares': total_shares,
+            'engagement_clicks': ticket_clicks,
+            'tickets_sold': ticket_sales,
+            'age_distribution': age_distribution
+        })

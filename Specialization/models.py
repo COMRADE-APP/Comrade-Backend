@@ -22,6 +22,7 @@ PARTICIPANTS = (
 class Stack(models.Model):
     name = models.CharField(max_length=255)
     description = models.TextField(max_length=500, null=True, blank=True)
+    image_url = models.URLField(max_length=500, null=True, blank=True)
     created_by = models.ManyToManyField(Profile, related_name='stack_creators', blank=True)
     created_on = models.DateTimeField(default=datetime.now)
     resources = models.ManyToManyField(Resource, related_name='stack_resources', blank=True)
@@ -41,6 +42,17 @@ class Stack(models.Model):
 class Specialization(models.Model):
     name = models.CharField(max_length=255, unique=False)
     description = models.TextField(max_length=500, null=True, blank=True)
+    image_url = models.URLField(max_length=500, null=True, blank=True)
+    
+    LEARNING_TYPES = [
+        ('specialization', 'Specialization'),
+        ('course', 'Course'),
+        ('masterclass', 'Masterclass')
+    ]
+    learning_type = models.CharField(max_length=50, choices=LEARNING_TYPES, default='specialization')
+    is_paid = models.BooleanField(default=False)
+    price = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
+
     created_by = models.ManyToManyField(Profile, blank=True, related_name='created_specializations')
     created_on = models.DateTimeField(default=datetime.now)
     stacks = models.ManyToManyField(Stack, related_name='specialization_stacks', blank=True)

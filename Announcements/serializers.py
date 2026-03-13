@@ -1,4 +1,4 @@
-from Announcements.models import Announcements, Text, Reply, AnnouncementsRequest, Task, Reposts, Choice, Pin, CompletedTask, FileResponse, Question, QuestionResponse, SubQuestion, TaskResponse, Reaction, Comment
+from Announcements.models import Announcements, Text, Reply, AnnouncementsRequest, Task, Reposts, Choice, Pin, CompletedTask, FileResponse, Question, QuestionResponse, SubQuestion, TaskResponse, Reaction, Comment, TaskGradingConfig
 from rest_framework import serializers
 
 
@@ -80,6 +80,7 @@ class SubQuestionSerializer(serializers.ModelSerializer):
         read_only_fields = ['timestamp']
     
 class QuestionResponseSerializer(serializers.ModelSerializer):
+    question_detail = QuestionSerializer(source='question', read_only=True)
     class Meta:
         model = QuestionResponse
         fields = '__all__'  
@@ -92,10 +93,41 @@ class FileResponseSerializer(serializers.ModelSerializer):
         read_only_fields = ['timestamp']
 
 class TaskResponseSerializer(serializers.ModelSerializer):
+    user_name = serializers.SerializerMethodField()
+    user_email = serializers.SerializerMethodField()
+    user_avatar = serializers.SerializerMethodField()
+    task_detail = TaskSerializer(source='task', read_only=True)
+    question_responses_detail = QuestionResponseSerializer(source='question_responses', many=True, read_only=True)
+
     class Meta:
         model = TaskResponse
         fields = '__all__'  
-        read_only_fields = ['timestamp']
+        read_only_fields = ['time_stamp']
+
+    def get_user_name(self, obj):
+        if obj.user:
+            return f"{obj.user.first_name} {obj.user.last_name}".strip() or obj.user.email
+        return 'Anonymous'
+
+    def get_user_email(self, obj):
+        return obj.user.email if obj.user else ''
+
+    def get_user_avatar(self, obj):
+        try:
+            from Authentication.models import Profile
+            profile = Profile.objects.filter(user=obj.user).first()
+            if profile and profile.profile_picture:
+                return profile.profile_picture.url
+        except Exception:
+            pass
+        return None
+
+
+class TaskGradingConfigSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = TaskGradingConfig
+        fields = '__all__'
+        read_only_fields = ['created_at']
 
 class ReactionSerializer(serializers.ModelSerializer):
     class Meta:
@@ -105,6 +137,13 @@ class ReactionSerializer(serializers.ModelSerializer):
 
 class CommentSerializer(serializers.ModelSerializer):
     user_name = serializers.SerializerMethodField()
+    user_avatar = serializers.SerializerMethodField()
+    likes_count = serializers.SerializerMethodField()
+    dislikes_count = serializers.SerializerMethodField()
+    is_liked = serializers.SerializerMethodField()
+    is_disliked = serializers.SerializerMethodField()
+    replies = serializers.SerializerMethodField()
+
     class Meta:
         model = Comment
         fields = '__all__'  
@@ -114,3 +153,37 @@ class CommentSerializer(serializers.ModelSerializer):
         if obj.user:
             return f"{obj.user.first_name} {obj.user.last_name}".strip() or obj.user.email
         return 'Anonymous'
+
+    def get_user_avatar(self, obj):
+        try:
+            from Authentication.models import Profile
+            profile = Profile.objects.filter(user=obj.user).first()
+            if profile and profile.profile_picture:
+                return profile.profile_picture.url
+        except Exception:
+            pass
+        return None
+
+    def get_likes_count(self, obj):
+        return obj.likes.count()
+
+    def get_dislikes_count(self, obj):
+        return obj.dislikes.count()
+
+    def get_is_liked(self, obj):
+        request = self.context.get('request')
+        if request and request.user and request.user.is_authenticated:
+            return obj.likes.filter(id=request.user.id).exists()
+        return False
+
+    def get_is_disliked(self, obj):
+        request = self.context.get('request')
+        if request and request.user and request.user.is_authenticated:
+            return obj.dislikes.filter(id=request.user.id).exists()
+        return False
+
+    def get_replies(self, obj):
+        if obj.parent is None:
+            replies = obj.replies.all().order_by('time_stamp')
+            return CommentSerializer(replies, many=True, context=self.context).data
+        return []

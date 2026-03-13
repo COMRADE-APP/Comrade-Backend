@@ -12,6 +12,7 @@ class Article(models.Model):
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     title = models.CharField(max_length=255)
+    image_url = models.URLField(max_length=500, null=True, blank=True)
     slug = models.SlugField(max_length=255, unique=True, blank=True)
     content = models.TextField()
     excerpt = models.TextField(blank=True, null=True)
@@ -49,6 +50,11 @@ class Article(models.Model):
     
     # Metrics
     views_count = models.PositiveIntegerField(default=0)
+    read_count = models.PositiveIntegerField(default=0)
+    
+    # Access
+    is_paid = models.BooleanField(default=False)
+    price = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
     
     class Meta:
         ordering = ['-created_at']
@@ -99,6 +105,14 @@ class ArticleBookmark(models.Model):
     article = models.ForeignKey(Article, on_delete=models.CASCADE, related_name='bookmarks')
     user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
     created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        unique_together = ('article', 'user')
+
+class ArticleRead(models.Model):
+    article = models.ForeignKey(Article, on_delete=models.CASCADE, related_name='reads')
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
+    read_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
         unique_together = ('article', 'user')

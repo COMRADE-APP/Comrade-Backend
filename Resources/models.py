@@ -148,6 +148,7 @@ class Resource(models.Model):
     visibility = models.CharField(max_length=200, choices=VIS_TYPES, default='public')
     title = models.CharField(max_length=100, default='', )
     desc = models.TextField(max_length=1000, default='')
+    image_url = models.URLField(max_length=500, null=True, blank=True)
     file_type = models.CharField(max_length=20, choices=RESOURCE_TYPES, default='doc')
     res_file = models.FileField(upload_to='resources/docs', blank=True, null=True)
     res_text = models.TextField(blank=True, null=True)
@@ -161,6 +162,9 @@ class Resource(models.Model):
     # New fields
     status = models.CharField(max_length=50, choices=RESOURCE_STATUS, default='draft')
     category = models.CharField(max_length=100, blank=True, null=True)
+    cover_image = models.ImageField(upload_to='resources/covers', blank=True, null=True)
+    allow_download = models.BooleanField(default=True)
+    expires_at = models.DateTimeField(null=True, blank=True, help_text="Resource auto-hides after this time")
     
     # Linking fields
     linked_opinion = models.ForeignKey(Opinion, on_delete=models.SET_NULL, null=True, blank=True, related_name='linked_resources')
@@ -343,3 +347,89 @@ class MainVisibilityLog(models.Model):
     def __str__(self):
         return f"Visibility change for {self.resource.title} by {self.changed_by.username} on {self.changed_on}"
 
+
+class ResourceAccessRequest(models.Model):
+    """Request access to restricted or paid resources"""
+    ACCESS_STATUS = (
+        ('pending', 'Pending'),
+        ('approved', 'Approved'),
+        ('denied', 'Denied'),
+        ('revoked', 'Revoked'),
+    )
+    resource = models.ForeignKey(Resource, on_delete=models.CASCADE, related_name='access_requests')
+    requester = models.ForeignKey(Profile, on_delete=models.CASCADE, related_name='resource_access_requests')
+    status = models.CharField(max_length=20, choices=ACCESS_STATUS, default='pending')
+    message = models.TextField(blank=True, help_text="Reason for requesting access")
+    reviewed_by = models.ForeignKey(Profile, on_delete=models.SET_NULL, null=True, blank=True, related_name='reviewed_access_requests')
+    review_note = models.TextField(blank=True)
+    requested_at = models.DateTimeField(default=datetime.now)
+    reviewed_at = models.DateTimeField(null=True, blank=True)
+    expires_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        unique_together = ['resource', 'requester']
+        ordering = ['-requested_at']
+
+    def __str__(self):
+        return f"{self.requester} -> {self.resource.title} ({self.status})"
+
+
+class ResourceAnalytics(models.Model):
+    """Track resource interactions"""
+    resource = models.ForeignKey(Resource, on_delete=models.CASCADE, related_name='analytics')
+    user = models.ForeignKey(Profile, on_delete=models.CASCADE, null=True, blank=True, related_name='resource_analytics')
+    action = models.CharField(max_length=50, choices=(
+        ('view', 'Viewed'),
+        ('download', 'Downloaded'),
+        ('share', 'Shared'),
+        ('access_request', 'Access Requested'),
+        ('purchase', 'Purchased'),
+    ))
+    metadata = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(default=datetime.now)
+
+    class Meta:
+        indexes = [
+            models.Index(fields=['resource', 'action']),
+            models.Index(fields=['resource', '-created_at']),
+        ]
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f"{self.action} on {self.resource.title}"
+
+
+class ResourceComment(models.Model):
+    """Comments on resources with threaded replies"""
+    resource = models.ForeignKey(Resource, on_delete=models.CASCADE, related_name='comments')
+    user = models.ForeignKey(Profile, on_delete=models.CASCADE, related_name='resource_comments')
+    content = models.TextField(max_length=2000)
+    parent = models.ForeignKey('self', on_delete=models.CASCADE, null=True, blank=True, related_name='replies')
+    likes = models.ManyToManyField(Profile, blank=True, related_name='liked_resource_comments')
+    dislikes = models.ManyToManyField(Profile, blank=True, related_name='disliked_resource_comments')
+    is_edited = models.BooleanField(default=False)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f"Comment by {self.user} on {self.resource.title}"
+
+
+class ResourceReview(models.Model):
+    """Star-based reviews for resources"""
+    resource = models.ForeignKey(Resource, on_delete=models.CASCADE, related_name='reviews')
+    user = models.ForeignKey(Profile, on_delete=models.CASCADE, related_name='resource_reviews')
+    rating = models.IntegerField(choices=[(i, str(i)) for i in range(1, 6)])
+    content = models.TextField(max_length=2000, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        unique_together = ['resource', 'user']
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f"{self.rating}★ by {self.user} on {self.resource.title}"

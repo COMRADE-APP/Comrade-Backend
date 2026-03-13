@@ -19,13 +19,6 @@ SECRET_KEY = os.getenv('SECRET_KEY', 'django-insecure-c+%9#v0&z&-av-84em1*d3aazv
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = os.getenv('DEBUG', 'True') == 'True'
 
-# ALLOWED_HOSTS = os.getenv('ALLOWED_HOSTS', 'localhost:3000,127.0.0.1:8000').split(',')
-ALLOWED_HOSTS = [
-    "localhost",
-    "127.0.0.1",
-    "[::1]",
-]
-
 # Application definition
 INSTALLED_APPS = [
     'django.contrib.admin',
@@ -34,7 +27,7 @@ INSTALLED_APPS = [
     'django.contrib.sessions',
     'django.contrib.messages',
     'django.contrib.staticfiles',
-    'django.contrib.sites',
+    # 'django.contrib.sites',
     
     # Custom Apps
     'Authentication',
@@ -167,20 +160,6 @@ CORS_ALLOW_CREDENTIALS = os.getenv("CORS_ALLOW_CREDENTIALS", "True") == "True"
 
 
 
-# If you want to disable CSRF for testing (not recommended for production)
-# CSRF_COOKIE_SECURE = False  # Set to True in production with HTTPS
-# SESSION_COOKIE_SECURE = False  # Set to True in production with HTTPS
-
-# ALLOWED_HOSTS = [
-#     "localhost",
-#     "127.0.0.1",
-#     "[::1]",
-#     "localhost:8000",
-#     "localhost:3000",
-#     "localhost:5173",
-#     "localhost:8080",
-# ]
-
 # Twilio configuration
 ACCOUNT_SID = os.getenv('TWILIO_ACCOUNT_SID', '')
 AUTH_TOKEN = os.getenv('TWILIO_AUTH_TOKEN', '')
@@ -217,33 +196,25 @@ TEMPLATES = [
 
 WSGI_APPLICATION = 'comrade.wsgi.application'
 
-# DATABASES = {
-#     'default': {
-#         'ENGINE': 'django.db.backends.sqlite3',
-#         'NAME': BASE_DIR / 'db.sqlite3',
-#     }
-# }
-
-# Accurate database configuration for Render
-DATABASES = {
-    "default": dj_database_url.parse(
-        os.environ.get("DATABASE_URL"),
-        conn_max_age=600,
-        ssl_require=True
-    )
-}
-
-# Postgis db configurations
-# DATABASES = {
-#     'default': {
-#         'ENGINE': 'django.db.backends.postgresql',
-#         'NAME': 'qomradebd',
-#         'USER': 'qomradebd_user',
-#         'PASSWORD': os.getenv('DB_PASSWORD'),
-#         'HOST': os.getenv('DB_EXTERNAL_URL'),
-#         'PORT': '5432',
-#     }
-# }
+# ── Database ────────────────────────────────────────────────────────────────
+# Production: set DATABASE_URL env var (PostgreSQL on Render)
+# Local dev:  leave DATABASE_URL unset → falls back to SQLite
+_database_url = os.environ.get('DATABASE_URL')
+if _database_url:
+    DATABASES = {
+        'default': dj_database_url.parse(
+            _database_url,
+            conn_max_age=600,
+            ssl_require=True,
+        )
+    }
+else:
+    DATABASES = {
+        'default': {
+            'ENGINE': 'django.db.backends.sqlite3',
+            'NAME': BASE_DIR / 'db.sqlite3',
+        }
+    }
 
 AUTH_PASSWORD_VALIDATORS = [
     {'NAME': 'django.contrib.auth.password_validation.UserAttributeSimilarityValidator'},
@@ -394,7 +365,7 @@ SOCIALACCOUNT_STORE_TOKENS = True
 
 # Redirect URLs - Point to frontend
 # NOTE: Frontend runs on port 3000 by default, ensure FRONTEND_URL has trailing slash
-FRONTEND_URL = os.getenv('FRONTEND_URL', 'http://localhost:3000/')
+FRONTEND_URL = os.getenv('FRONTEND_URL', 'http://localhost:5173/')
 
 # Dashboard is at root '/' in frontend
 FRONTEND_DASHBOARD = FRONTEND_URL  # Frontend dashboard is at '/'
@@ -409,8 +380,8 @@ LOGOUT_REDIRECT_URL = f"{FRONTEND_URL}login"
 # Django AllAuth settings for development
 SITE_ID = 1
 
-# Allow HTTP for development (change to 'https' in production)
-ACCOUNT_DEFAULT_HTTP_PROTOCOL = "https"
+# Allow HTTP in dev, HTTPS in production
+ACCOUNT_DEFAULT_HTTP_PROTOCOL = 'http' if DEBUG else 'https'
 
 # These settings help with cross-origin requests
 ACCOUNT_EMAIL_VERIFICATION = 'optional'  # Set to 'mandatory' in production

@@ -48,7 +48,32 @@ class ArticleViewSet(viewsets.ModelViewSet):
         return queryset
 
     def perform_create(self, serializer):
-        serializer.save(author=self.request.user)
+        article = serializer.save(author=self.request.user)
+        self._handle_attachments(article)
+
+    def perform_update(self, serializer):
+        article = serializer.save()
+        self._handle_attachments(article)
+
+    def _handle_attachments(self, article):
+        attachments = self.request.FILES.getlist('attachments')
+        for file in attachments:
+            ArticleAttachment.objects.create(article=article, file=file)
+
+    @action(detail=True, methods=['post'], permission_classes=[permissions.IsAuthenticated])
+    def upload_attachment(self, request, id=None):
+        article = self.get_object()
+        if article.author != request.user:
+            return Response({'detail': 'Not authorized'}, status=status.HTTP_403_FORBIDDEN)
+        
+        file = request.FILES.get('file')
+        if not file:
+            return Response({'detail': 'No file provided'}, status=status.HTTP_400_BAD_REQUEST)
+            
+        attachment = ArticleAttachment.objects.create(article=article, file=file)
+        # return full URL
+        url = request.build_absolute_uri(attachment.file.url)
+        return Response({'id': attachment.id, 'url': url, 'name': file.name, 'type': file.content_type}, status=status.HTTP_201_CREATED)
 
     def retrieve(self, request, *args, **kwargs):
         instance = self.get_object()
@@ -57,6 +82,24 @@ class ArticleViewSet(viewsets.ModelViewSet):
         instance.save()
         serializer = self.get_serializer(instance)
         return Response(serializer.data)
+
+    @action(detail=True, methods=['post'], permission_classes=[permissions.AllowAny])
+    def record_read(self, request, id=None):
+        instance = self.get_object()
+        
+        # Track per-user read if authenticated
+        if request.user.is_authenticated:
+            from .models import ArticleRead
+            read, created = ArticleRead.objects.get_or_create(article=instance, user=request.user)
+            if created:
+                instance.read_count += 1
+                instance.save(update_fields=['read_count'])
+        else:
+            # For anonymous users, just increment
+            instance.read_count += 1
+            instance.save(update_fields=['read_count'])
+            
+        return Response({'status': 'read recorded', 'read_count': instance.read_count})
 
     @action(detail=True, methods=['post'], permission_classes=[permissions.IsAuthenticated])
     def like(self, request, id=None):

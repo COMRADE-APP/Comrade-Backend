@@ -1,16 +1,55 @@
-from Events.models import Event, EventCategory, EventAttendance, EventBudget, EventCategoryAssignment, EventCollaboration, EventFeedback, EventFeedbackResponse, EventFile, EventFollowUp, EventLogistics, EventMediaCoverage, EventPartnership, EventPhoto, EventPromotion, EventRegistration, EventReminder, EventSchedule, EventSession, EventSpeaker, EventSponsor, EventSponsorAgreement, EventSponsorBenefit, EventSponsorLogo, EventSponsorPackage, EventSponsorPayment, EventSponsorshipAgreementDocument, EventSponsorshipApplication, EventSponsorshipApproval, EventSponsorshipCertificate, EventSponsorshipContract, EventSponsorshipDowngrade, EventSponsorshipEvaluation, EventSponsorshipExtension, EventSponsorshipFeedback, EventSponsorshipHistory, EventSponsorshipInvoice, EventSponsorshipLetter, EventSponsorshipLevel, EventSponsorshipRecognition, EventSponsorshipRejection, EventSponsorshipRenewal, EventSponsorshipReport, EventSponsorshipTermination, EventSponsorshipTransfer, EventSponsorshipUpgrade, EventSurvey, EventSurveyQuestion, EventSurveyResponse, EventTag, EventTagAssignment, EventTicket, EventVideo, EventReport, EventInvitation, EventLike, EventVisibility, VisibilityLog
+from Events.models import Event, EventCategory, EventAttendance, EventBudget, EventCategoryAssignment, EventCollaboration, EventFeedback, EventFeedbackResponse, EventFile, EventFollowUp, EventLogistics, EventMediaCoverage, EventPartnership, EventPhoto, EventPromotion, EventRegistration, EventReminder, EventSchedule, EventSession, EventSpeaker, EventSponsor, EventSponsorAgreement, EventSponsorBenefit, EventSponsorLogo, EventSponsorPackage, EventSponsorPayment, EventSponsorshipAgreementDocument, EventSponsorshipApplication, EventSponsorshipApproval, EventSponsorshipCertificate, EventSponsorshipContract, EventSponsorshipDowngrade, EventSponsorshipEvaluation, EventSponsorshipExtension, EventSponsorshipFeedback, EventSponsorshipHistory, EventSponsorshipInvoice, EventSponsorshipLetter, EventSponsorshipLevel, EventSponsorshipRecognition, EventSponsorshipRejection, EventSponsorshipRenewal, EventSponsorshipReport, EventSponsorshipTermination, EventSponsorshipTransfer, EventSponsorshipUpgrade, EventSurvey, EventSurveyQuestion, EventSurveyResponse, EventTag, EventTagAssignment, EventTicket, EventVideo, EventReport, EventInvitation, EventLike, EventVisibility, VisibilityLog, EventSlotBooking, TicketTier, EventMaterial, EventInteractionAnalytics
 from rest_framework.serializers import ModelSerializer, Serializer
 from rest_framework import serializers
 from datetime import datetime
+from Announcements.models import Pin
+
+class TicketTierSerializer(ModelSerializer):
+    class Meta:
+        model = TicketTier
+        fields = '__all__'
+
+class EventMaterialSerializer(ModelSerializer):
+    class Meta:
+        model = EventMaterial
+        fields = '__all__'
+
+class EventInteractionAnalyticsSerializer(ModelSerializer):
+    class Meta:
+        model = EventInteractionAnalytics
+        fields = '__all__'
 
 class EventSerializer(ModelSerializer):
     created_by_name = serializers.SerializerMethodField()
     created_by_avatar = serializers.SerializerMethodField()
+    slots_remaining = serializers.SerializerMethodField()
+    tickets_available = serializers.SerializerMethodField()
+    ticket_tiers = TicketTierSerializer(many=True, read_only=True)
+    materials = EventMaterialSerializer(many=True, read_only=True)
+    user_reaction = serializers.SerializerMethodField()
+    is_pinned = serializers.SerializerMethodField()
+    is_interested = serializers.SerializerMethodField()
     
     class Meta:
         model = Event
         fields = '__all__'
         read_only_fields = ['time_stamp', 'created_by']
+
+    def get_slots_remaining(self, obj):
+        confirmed = obj.slot_bookings.filter(booking_status__in=['confirmed', 'checked_in']).count()
+        return max(0, obj.capacity - confirmed)
+
+    def get_tickets_available(self, obj):
+        tickets = obj.tickets.all()
+        if tickets.exists():
+            return [{
+                'id': t.id,
+                'ticket_type': t.ticket_type,
+                'price': str(t.price),
+                'is_free': t.is_free,
+                'quantity_available': t.quantity_available,
+            } for t in tickets]
+        return []
 
     def get_created_by_name(self, obj):
         if obj.created_by:
@@ -38,6 +77,28 @@ class EventSerializer(ModelSerializer):
             except Exception:
                 pass
         return None
+
+    def get_user_reaction(self, obj):
+        request = self.context.get('request')
+        if request and hasattr(request, 'user') and request.user.is_authenticated:
+            like = EventLike.objects.filter(event=obj, user=request.user).first()
+            if like:
+                return like.reaction
+        return None
+
+    def get_is_pinned(self, obj):
+        request = self.context.get('request')
+        if request and hasattr(request, 'user') and request.user.is_authenticated:
+            return Pin.objects.filter(user=request.user, events=obj).exists()
+        return False
+
+    def get_is_interested(self, obj):
+        request = self.context.get('request')
+        if request and hasattr(request, 'user') and request.user.is_authenticated:
+            return EventFeedback.objects.filter(
+                event=obj, user=request.user, attendendance_status='interested'
+            ).exists()
+        return False
 
     def validate_event_date(self, value):
         from django.utils import timezone
@@ -406,6 +467,46 @@ class EventInvitationSerializer(ModelSerializer):
         read_only_fields = ['timestamp']
 
 
+class EventSlotBookingSerializer(ModelSerializer):
+    user_name = serializers.SerializerMethodField()
+    user_email = serializers.SerializerMethodField()
+    event_name = serializers.SerializerMethodField()
+    event_date = serializers.SerializerMethodField()
+    event_location = serializers.SerializerMethodField()
+    event_organizer = serializers.SerializerMethodField()
+
+    class Meta:
+        model = EventSlotBooking
+        fields = '__all__'
+        read_only_fields = ['booked_at', 'ticket_number', 'qr_code_data']
+
+    def get_user_name(self, obj):
+        if obj.user:
+            return f"{obj.user.first_name} {obj.user.last_name}".strip() or obj.user.email
+        return 'Guest'
+
+    def get_user_email(self, obj):
+        return obj.user.email if obj.user else ''
+
+    def get_event_name(self, obj):
+        return obj.event.name if obj.event else ''
+
+    def get_event_date(self, obj):
+        if obj.event:
+            return str(obj.event.event_date)
+        return ''
+
+    def get_event_location(self, obj):
+        return obj.event.location if obj.event else ''
+
+    def get_event_organizer(self, obj):
+        if obj.event and obj.event.created_by:
+            return f"{obj.event.created_by.first_name} {obj.event.created_by.last_name}".strip() or obj.event.created_by.email
+        if obj.event and obj.event.organisation:
+            return obj.event.organisation.name
+        return 'Qomrade'
+
+
 # class EventScheduler(Serializer):
 #     event_id = serializers.ModelField(Event)
-#     scheduled 
+#     scheduled

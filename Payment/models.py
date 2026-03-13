@@ -337,8 +337,13 @@ class Product(models.Model):
     product_type = models.CharField(max_length=50, choices=PRODUCT_TYPES, default='physical')
     image_url = models.URLField(blank=True, null=True)
     
+    # Inventory Tracking
+    stock_quantity = models.IntegerField(default=0)
+    sku = models.CharField(max_length=100, blank=True)
+    
     # Logic flags
-    is_sharable = models.BooleanField(default=True) # Can be bought by a group
+    is_sharable = models.BooleanField(default=True) # Sharable = 1 product for all group members; Non-sharable = 1 per member
+    allow_group_purchase = models.BooleanField(default=True) # If False, product is strictly individual purchase only
     requires_subscription = models.BooleanField(default=False)
     duration_days = models.IntegerField(default=30) # For subscriptions
     
@@ -904,6 +909,15 @@ class Order(models.Model):
     
     order_type = models.CharField(max_length=50, choices=ORDER_TYPES, default='product')
     delivery_mode = models.CharField(max_length=20, choices=DELIVERY_MODE, default='pickup')
+    
+    # Offline sales tracking
+    SALES_CHANNEL_CHOICES = (
+        ('online', 'Online'),
+        ('in_store', 'In-Store/Offline'),
+        ('pop_up', 'Pop-up Market'),
+    )
+    sales_channel = models.CharField(max_length=20, choices=SALES_CHANNEL_CHOICES, default='online')
+    is_offline = models.BooleanField(default=False)
     
     # Payment
     payment_type = models.CharField(max_length=20, choices=PAY_TYPE, default='individual')

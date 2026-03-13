@@ -1,5 +1,5 @@
 from rest_framework import serializers
-from .models import Article, ArticleAttachment, Comment, ArticleLike, ArticleBookmark
+from .models import Article, ArticleAttachment, Comment, ArticleLike, ArticleBookmark, ArticleRead
 from Authentication.serializers import CustomUserSerializer as UserSerializer
 
 class ArticleAttachmentSerializer(serializers.ModelSerializer):
@@ -26,6 +26,7 @@ class ArticleSerializer(serializers.ModelSerializer):
     attachments = ArticleAttachmentSerializer(many=True, read_only=True)
     is_liked = serializers.SerializerMethodField()
     is_bookmarked = serializers.SerializerMethodField()
+    has_read = serializers.SerializerMethodField()
     likes_count = serializers.SerializerMethodField()
     comments_count = serializers.SerializerMethodField()
 
@@ -34,19 +35,27 @@ class ArticleSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'title', 'slug', 'content', 'excerpt', 
             'author', 'category', 'tags', 'status', 'cover_image',
-            'created_at', 'published_at', 'views_count',
-            'attachments', 'is_liked', 'is_bookmarked',
-            'likes_count', 'comments_count'
+            'created_at', 'updated_at', 'published_at', 'views_count', 'read_count',
+            'attachments', 'is_liked', 'is_bookmarked', 'has_read',
+            'likes_count', 'comments_count', 'is_paid', 'price'
         ]
-        read_only_fields = ['author', 'slug', 'views_count', 'created_at', 'published_at']
+        read_only_fields = ['author', 'slug', 'views_count', 'read_count', 'created_at', 'updated_at', 'published_at']
 
     def get_author(self, obj):
         # Simplified author info
+        avatar_url = None
+        if hasattr(obj.author, 'userprofile') and obj.author.userprofile.avatar:
+            request = self.context.get('request')
+            if request:
+                avatar_url = request.build_absolute_uri(obj.author.userprofile.avatar.url)
+            else:
+                avatar_url = obj.author.userprofile.avatar.url
+
         return {
             "id": obj.author.id,
             "name": f"{obj.author.first_name} {obj.author.last_name}" if obj.author.first_name else obj.author.email,
-            "email": obj.author.email
-            # Add avatar if available in your User model
+            "email": obj.author.email,
+            "avatar": avatar_url
         }
 
     def get_is_liked(self, obj):
@@ -59,6 +68,12 @@ class ArticleSerializer(serializers.ModelSerializer):
         request = self.context.get('request')
         if request and request.user.is_authenticated:
             return ArticleBookmark.objects.filter(article=obj, user=request.user).exists()
+        return False
+
+    def get_has_read(self, obj):
+        request = self.context.get('request')
+        if request and request.user.is_authenticated:
+            return ArticleRead.objects.filter(article=obj, user=request.user).exists()
         return False
 
     def get_likes_count(self, obj):

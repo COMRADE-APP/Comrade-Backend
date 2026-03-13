@@ -12,8 +12,10 @@ from Events.enhanced_models import (
     EventEmailReminder, EventToAnnouncementConversion,
     EventHelpRequest, EventHelpResponse, EventPermission,
     EventDocument, EventArticleLink, EventResearchLink,
-    EventAnnouncementLink, EventProductLink, EventPaymentGroupLink
+    EventAnnouncementLink, EventProductLink, EventPaymentGroupLink,
+    EventAnalytics, EventUserReminder
 )
+from Events.models import EventSchedule, EventSession, EventSpeaker, EventFile
 from Authentication.models import CustomUser
 
 
@@ -288,18 +290,31 @@ class EventDetailSerializer(serializers.ModelSerializer):
     created_by_name = serializers.SerializerMethodField()
     room = EventRoomSerializer(source='event_room', read_only=True)
     reactions_count = serializers.SerializerMethodField()
+    reactions_breakdown = serializers.SerializerMethodField()
     comments_count = serializers.SerializerMethodField()
     interested_count = serializers.SerializerMethodField()
+    user_reaction = serializers.SerializerMethodField()
+    user_reminder = serializers.SerializerMethodField()
+    schedule_items = serializers.SerializerMethodField()
+    speakers = serializers.SerializerMethodField()
+    materials = serializers.SerializerMethodField()
+    status = serializers.SerializerMethodField()
     
     class Meta:
         model = Event
         fields = [
             'id', 'name', 'description', 'capacity', 'duration',
+            'event_type', 'event_location', 'event_url',
             'start_time', 'end_time', 'booking_deadline', 'booking_status',
             'attendees', 'attendees_viewable', 'activate_feedback',
             'event_date', 'deadline_reached', 'location', 'status',
+            'latitude', 'longitude', 'complexity_level',
             'scheduled_time', 'time_stamp', 'created_by', 'created_by_name',
-            'room', 'reactions_count', 'comments_count', 'interested_count'
+            'institution', 'organisation',
+            'room', 'reactions_count', 'reactions_breakdown',
+            'comments_count', 'interested_count',
+            'user_reaction', 'user_reminder',
+            'schedule_items', 'speakers', 'materials'
         ]
         read_only_fields = ['id', 'time_stamp']
     
@@ -309,11 +324,73 @@ class EventDetailSerializer(serializers.ModelSerializer):
     def get_reactions_count(self, obj):
         return obj.event_reactions.count()
     
+    def get_reactions_breakdown(self, obj):
+        from django.db.models import Count
+        return dict(obj.event_reactions.values_list('reaction_type').annotate(count=Count('id')).values_list('reaction_type', 'count'))
+    
     def get_comments_count(self, obj):
         return obj.event_comments.filter(parent__isnull=True).count()
     
     def get_interested_count(self, obj):
         return obj.interests.filter(interested=True).count()
+    
+    def get_user_reaction(self, obj):
+        request = self.context.get('request')
+        if request and request.user.is_authenticated:
+            reaction = obj.event_reactions.filter(user=request.user).first()
+            return reaction.reaction_type if reaction else None
+        return None
+    
+    def get_user_reminder(self, obj):
+        request = self.context.get('request')
+        if request and request.user.is_authenticated:
+            reminders = obj.user_reminders.filter(user=request.user).values_list('time_before', flat=True)
+            return list(reminders)
+        return []
+    
+    def get_schedule_items(self, obj):
+        items = EventSchedule.objects.filter(event=obj).order_by('start_time')
+        return EventScheduleSerializer(items, many=True).data
+    
+    def get_speakers(self, obj):
+        spkrs = EventSpeaker.objects.filter(event=obj)
+        return EventSpeakerSerializer(spkrs, many=True).data
+    
+    def get_materials(self, obj):
+        files = EventFile.objects.filter(event=obj)
+        return EventFileSerializer(files, many=True).data
+
+    def get_status(self, obj):
+        # Override the static model status with a dynamic one based on date/time
+        from django.utils import timezone
+        import datetime
+        now = timezone.now()
+        
+        # If explicitly cancelled or postponed, respect that
+        if obj.status in ['cancelled', 'postponed']:
+            return obj.status
+            
+        try:
+            # Create timezone-aware datetime objects for the event boundaries
+            event_date = obj.event_date.date() if isinstance(obj.event_date, datetime.datetime) else obj.event_date
+            start_dt = timezone.make_aware(datetime.datetime.combine(event_date, obj.start_time))
+            end_dt = timezone.make_aware(datetime.datetime.combine(event_date, obj.end_time))
+            
+            # If end time is before start time, it likely crosses midnight
+            if end_dt < start_dt:
+                end_dt += datetime.timedelta(days=1)
+                
+            if now > end_dt:
+                return 'past'
+            elif start_dt <= now <= end_dt:
+                return 'happening now'
+            elif start_dt > now and (start_dt - now).total_seconds() <= 86400: # Within 24 hours
+                return 'happening soon'
+            else:
+                return 'active' # Future event > 24 hours away
+        except Exception:
+            return obj.status # Fallback
+
 
 
 # ===== LOGISTICS SERIALIZERS =====
@@ -417,3 +494,69 @@ class EventPaymentGroupLinkSerializer(serializers.ModelSerializer):
             'current_amount', 'purpose', 'target_amount', 'created_at'
         ]
         read_only_fields = ['id', 'created_at']
+
+
+# ===== NEW SERIALIZERS =====
+
+class EventAnalyticsSerializer(serializers.ModelSerializer):
+    user_email = serializers.EmailField(source='user.email', read_only=True)
+    event_name = serializers.CharField(source='event.name', read_only=True)
+    
+    class Meta:
+        model = EventAnalytics
+        fields = [
+            'id', 'event', 'event_name', 'user', 'user_email',
+            'action', 'metadata', 'created_at'
+        ]
+        read_only_fields = ['id', 'created_at']
+
+
+class EventUserReminderSerializer(serializers.ModelSerializer):
+    event_name = serializers.CharField(source='event.name', read_only=True)
+    
+    class Meta:
+        model = EventUserReminder
+        fields = [
+            'id', 'event', 'event_name', 'user', 'time_before',
+            'remind_at', 'send_notification', 'send_email', 'send_system_message',
+            'notification_sent', 'email_sent', 'system_message_sent', 'created_at'
+        ]
+        read_only_fields = ['id', 'remind_at', 'notification_sent', 'email_sent', 'system_message_sent', 'created_at']
+
+
+class EventScheduleSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = EventSchedule
+        fields = ['id', 'event', 'activity_name', 'start_time', 'end_time', 'created_on']
+        read_only_fields = ['id', 'created_on']
+
+
+class EventSpeakerSerializer(serializers.ModelSerializer):
+    user_name = serializers.SerializerMethodField()
+    
+    class Meta:
+        model = EventSpeaker
+        fields = ['id', 'event', 'user', 'user_name', 'speaker_name', 'speaker_bio', 'added_by', 'slotted_schedule']
+        read_only_fields = ['id']
+    
+    def get_user_name(self, obj):
+        if obj.user:
+            return f"{obj.user.first_name} {obj.user.last_name}".strip() or obj.user.email
+        return obj.speaker_name
+
+
+class EventFileSerializer(serializers.ModelSerializer):
+    file_url = serializers.SerializerMethodField()
+    
+    class Meta:
+        model = EventFile
+        fields = ['id', 'event', 'file_type', 'file_content', 'file_url', 'description', 'created_on']
+        read_only_fields = ['id', 'created_on']
+    
+    def get_file_url(self, obj):
+        if obj.file_content:
+            request = self.context.get('request')
+            if request:
+                return request.build_absolute_uri(obj.file_content.url)
+            return obj.file_content.url
+        return None

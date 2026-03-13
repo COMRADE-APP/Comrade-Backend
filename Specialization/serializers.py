@@ -5,7 +5,8 @@ from Specialization.models import Specialization, Stack, SavedSpecialization, Sa
 class SpecializationSerializer(ModelSerializer):
     class Meta:
         model = Specialization
-        fields = '__all__'
+        fields = ['id', 'name', 'description', 'image_url', 'learning_type', 'is_paid', 'price', 'created_by', 'created_on', 'stacks', 'members', 'admins', 'moderator']
+        read_only_fields = ['id', 'created_on']
 
 class StackSerializer(ModelSerializer):
     class Meta:

@@ -135,6 +135,13 @@ class Opinion(models.Model):
         related_name='opinions'
     )
     
+    # Tagged rooms (for @roomname mentions)
+    tagged_rooms = models.ManyToManyField(
+        'Rooms.Room',
+        blank=True,
+        related_name='tagged_in_opinions'
+    )
+    
     # Anonymous posting - hides user identity publicly but tracks internally
     is_anonymous = models.BooleanField(default=False)
     
@@ -229,6 +236,36 @@ class OpinionComment(models.Model):
         blank=True,
         related_name='replies'
     )
+    # Entity Authorship (Optional)
+    institution = models.ForeignKey(
+        'Institution.Institution',
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name='opinion_comments'
+    )
+    organisation = models.ForeignKey(
+        'Organisation.Organisation',
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name='opinion_comments'
+    )
+    establishment = models.ForeignKey(
+        'Payment.Establishment',
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name='opinion_comments'
+    )
+    poster_role = models.CharField(
+        max_length=20,
+        choices=POSTER_ROLE_CHOICES,
+        blank=True,
+        null=True,
+        help_text='Role of poster within the entity at time of posting'
+    )
+    
     content = models.TextField(max_length=1000)
     
     likes_count = models.PositiveIntegerField(default=0)

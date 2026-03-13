@@ -69,6 +69,7 @@ class CustomUser(AbstractUser):
     is_author = models.BooleanField(default=False)
     is_editor = models.BooleanField(default=False)
     is_normal_user = models.BooleanField(default=False)  # Non-student general users
+    is_researcher = models.BooleanField(default=False)
     
     # Profile completion tracking
     profile_completed = models.BooleanField(default=False)
@@ -464,6 +465,12 @@ class UserProfile(models.Model):
     occupation = models.CharField(max_length=200, blank=True)
     website = models.URLField(blank=True)
     interests = models.JSONField(default=list, blank=True)  # Array of interest strings
+    
+    # Comprehensive Fields
+    religion = models.CharField(max_length=100, blank=True)
+    hobbies = models.JSONField(default=list, blank=True)
+    certifications = models.JSONField(default=list, blank=True)
+    work_experience = models.JSONField(default=list, blank=True)
     
     # Privacy Settings
     show_email = models.CharField(max_length=20, choices=PRIVACY_CHOICES, default='followers')

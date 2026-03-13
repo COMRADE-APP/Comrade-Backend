@@ -73,7 +73,7 @@ class OpinionSerializer(serializers.ModelSerializer):
             'is_liked', 'is_reposted', 'is_bookmarked',
             'quoted_opinion', 'is_pinned', 'is_repost', 'reposted_by_user', 'original_content',
             'media_files', 'created_at', 'time_ago', 'entity_author', 'poster_role',
-            'is_anonymous', 'room', 'user_type'
+            'is_anonymous', 'room', 'tagged_rooms', 'user_type'
         ]
         read_only_fields = ['id', 'user', 'likes_count', 'comments_count', 'reposts_count', 'created_at']
     
@@ -102,6 +102,21 @@ class OpinionSerializer(serializers.ModelSerializer):
                 'is_following': False,
             }
             data['user_type'] = None
+            
+        # Sync metrics and flags for reposts from the original opinion
+        if instance.is_repost and instance.original_opinion:
+            orig = instance.original_opinion
+            data['likes_count'] = orig.likes_count
+            data['comments_count'] = orig.comments_count
+            data['reposts_count'] = orig.reposts_count
+            data['shares_count'] = orig.shares_count
+            data['views_count'] = orig.views_count
+            
+            request = self.context.get('request')
+            if request and request.user.is_authenticated:
+                data['is_liked'] = OpinionLike.objects.filter(user=request.user, opinion=orig).exists()
+                data['is_reposted'] = OpinionRepost.objects.filter(user=request.user, opinion=orig).exists()
+                data['is_bookmarked'] = Bookmark.objects.filter(user=request.user, opinion=orig).exists()
         
         return data
     
@@ -162,9 +177,20 @@ class OpinionSerializer(serializers.ModelSerializer):
     
     def get_reposted_by_user(self, obj):
         if obj.is_repost and obj.reposted_by:
+            avatar_url = None
+            try:
+                if hasattr(obj.reposted_by, 'user_profile') and obj.reposted_by.user_profile.avatar:
+                    request = self.context.get('request')
+                    if request:
+                        avatar_url = request.build_absolute_uri(obj.reposted_by.user_profile.avatar.url)
+                    else:
+                        avatar_url = obj.reposted_by.user_profile.avatar.url
+            except:
+                pass
             return {
                 'id': obj.reposted_by.id,
                 'name': f'{obj.reposted_by.first_name} {obj.reposted_by.last_name}'.strip(),
+                'avatar_url': avatar_url,
             }
         return None
     
@@ -214,7 +240,7 @@ class OpinionCreateSerializer(serializers.ModelSerializer):
     """Serializer for creating opinions"""
     class Meta:
         model = Opinion
-        fields = ['content', 'visibility', 'media_url', 'media_type', 'quoted_opinion', 'is_anonymous', 'room',
+        fields = ['content', 'visibility', 'media_url', 'media_type', 'quoted_opinion', 'is_anonymous', 'room', 'tagged_rooms',
                   'organisation', 'institution', 'establishment', 'poster_role']
     
     def validate_content(self, value):
@@ -229,14 +255,58 @@ class OpinionCommentSerializer(serializers.ModelSerializer):
     replies = serializers.SerializerMethodField()
     is_liked = serializers.SerializerMethodField()
     time_ago = serializers.SerializerMethodField()
+    entity_author = serializers.SerializerMethodField()
+    user_type = serializers.SerializerMethodField()
     
     class Meta:
         model = OpinionComment
         fields = [
             'id', 'user', 'opinion', 'parent_comment', 'content',
-            'likes_count', 'is_liked', 'replies', 'created_at', 'time_ago'
+            'likes_count', 'is_liked', 'replies', 'created_at', 'time_ago',
+            'entity_author', 'poster_role', 'user_type'
         ]
         read_only_fields = ['id', 'user', 'likes_count', 'created_at']
+    
+    def get_user_type(self, obj):
+        if obj.user:
+            return obj.user.user_type
+        return None
+        
+    def get_entity_author(self, obj):
+        entity = None
+        if obj.organisation:
+            entity = {
+                'id': obj.organisation.id,
+                'name': obj.organisation.name,
+                'type': 'organisation',
+                'avatar': obj.organisation.profile_picture.url if obj.organisation.profile_picture else None,
+            }
+        elif obj.institution:
+            entity = {
+                'id': obj.institution.id,
+                'name': obj.institution.name,
+                'type': 'institution',
+                'avatar': obj.institution.profile_picture.url if obj.institution.profile_picture else (obj.institution.logo_url or None),
+            }
+        elif obj.establishment:
+            entity = {
+                'id': obj.establishment.id,
+                'name': obj.establishment.name,
+                'type': 'establishment',
+                'avatar': obj.establishment.logo.url if obj.establishment.logo else None,
+            }
+        
+        if entity and obj.poster_role:
+            role_labels = {
+                'owner': {'label': 'Owner', 'icon': '👑'},
+                'admin': {'label': 'Admin', 'icon': '🛡️'},
+                'moderator': {'label': 'Moderator', 'icon': '🔧'},
+                'member': {'label': 'Member', 'icon': '👤'},
+            }
+            entity['poster_role'] = obj.poster_role
+            entity['poster_role_display'] = role_labels.get(obj.poster_role, {'label': obj.poster_role, 'icon': ''})
+        
+        return entity
     
     def get_replies(self, obj):
         # Only get top-level replies to avoid deep recursion

@@ -19,6 +19,11 @@ NOTIFICATION_TYPES = (
     ('product_update', 'Product Update'),
     ('system', 'System'),
     ('announcement', 'Announcement'),
+    ('recommendation', 'Recommendation'),
+    ('trending', 'Trending'),
+    ('suggested', 'Suggested'),
+    ('profile_view', 'Profile View'),
+    ('new_post', 'New Post'),
 )
 
 

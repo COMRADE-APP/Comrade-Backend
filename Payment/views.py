@@ -893,6 +893,24 @@ class ProductViewSet(ModelViewSet):
     serializer_class = ProductSerializer
     permission_classes = [IsAuthenticated] 
     
+    @action(detail=False, methods=['post'])
+    def sync_inventory(self, request):
+        """Sync inventory from hardcoded data or parsed file data"""
+        inventory_data = request.data.get('inventory', [])
+        # Expecting a list of dicts: [{'product_id': ...}, ...]
+        updated_products = []
+        for item in inventory_data:
+            try:
+                product = Product.objects.get(id=item.get('product_id'))
+                product.stock_quantity = item.get('stock_quantity', product.stock_quantity)
+                if 'sku' in item:
+                    product.sku = item.get('sku')
+                product.save()
+                updated_products.append(product.id)
+            except Product.DoesNotExist:
+                continue
+        return Response({'status': 'Inventory synced', 'updated_count': len(updated_products)})
+    
     @action(detail=False, methods=['get'])
     def recommendations(self, request):
         """Get recommended products"""
@@ -1552,6 +1570,9 @@ class OrderViewSet(ModelViewSet):
             except Establishment.DoesNotExist:
                 return Response({'error': 'Establishment not found'}, status=status.HTTP_404_NOT_FOUND)
         
+        # Offline sales handle their own payments
+        is_offline = data.get('sales_channel') in ['in_store', 'pop_up'] or data.get('is_offline', False)
+        
         # Create order
         order = Order.objects.create(
             buyer=profile,
@@ -1559,6 +1580,8 @@ class OrderViewSet(ModelViewSet):
             order_type=data['order_type'],
             delivery_mode=data['delivery_mode'],
             payment_type=data.get('payment_type', 'individual'),
+            sales_channel=data.get('sales_channel', 'online'),
+            is_offline=is_offline,
             delivery_address=data.get('delivery_address', ''),
             notes=data.get('notes', ''),
         )
@@ -1619,8 +1642,8 @@ class OrderViewSet(ModelViewSet):
         
         order.total_amount = total
         
-        # Deduct from balance (individual purchase)
-        if data.get('payment_type', 'individual') == 'individual':
+        # Deduct from balance (individual purchase) if online
+        if not is_offline and data.get('payment_type', 'individual') == 'individual':
             if payment_profile.comrade_balance < total:
                 order.delete()
                 return Response({'error': 'Insufficient balance'}, status=status.HTTP_400_BAD_REQUEST)
@@ -1643,6 +1666,36 @@ class OrderViewSet(ModelViewSet):
         order.status = new_status
         order.save()
         return Response(OrderSerializer(order).data)
+    
+    @action(detail=False, methods=['get'])
+    def shop_analytics(self, request):
+        """Get analytics for the user's shop/establishment."""
+        try:
+            profile = Profile.objects.get(user=request.user)
+        except Profile.DoesNotExist:
+            return Response({'error': 'Profile not found'}, status=status.HTTP_400_BAD_REQUEST)
+            
+        establishments = Establishment.objects.filter(owner=profile)
+        if not establishments.exists():
+            return Response({'error': 'No establishments found'}, status=status.HTTP_404_NOT_FOUND)
+            
+        establishment = establishments.first() 
+        orders = Order.objects.filter(establishment=establishment)
+        
+        from django.db.models import Sum
+        
+        channels = ['online', 'in_store', 'pop_up']
+        revenue_by_channel = {}
+        for channel in channels:
+            revenue_by_channel[channel] = orders.filter(sales_channel=channel).aggregate(total=Sum('total_amount'))['total'] or 0
+            
+        return Response({
+            'total_revenue': sum(revenue_by_channel.values()),
+            'revenue_by_channel': revenue_by_channel,
+            'total_orders': orders.count(),
+            'online_orders': orders.filter(sales_channel='online').count(),
+            'offline_orders': orders.filter(sales_channel__in=['in_store', 'pop_up']).count(),
+        })
     
     @action(detail=False, methods=['get'])
     def my_orders(self, request):

@@ -27,9 +27,14 @@ class UserMinimalSerializer(serializers.ModelSerializer):
 
     def get_is_online(self, obj):
         # Check privacy
-        if hasattr(obj, 'user_profile') and not obj.user_profile.show_activity_status:
+        if hasattr(obj, 'user_profile') and obj.user_profile and not obj.user_profile.show_activity_status:
             return False
-        return obj.is_online
+        # Time-based: user is online if last_seen within 5 minutes
+        from django.utils import timezone
+        from datetime import timedelta
+        if obj.last_seen:
+            return obj.last_seen > timezone.now() - timedelta(minutes=5)
+        return False
 
     def get_last_seen(self, obj):
         # Check privacy
