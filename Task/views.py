@@ -5,6 +5,7 @@ from rest_framework.response import Response
 from django.shortcuts import get_object_or_404
 from django.db.models import Q, Count
 from datetime import datetime
+from datetime import datetime
 
 from Announcements.models import (
     Task, 
@@ -16,9 +17,10 @@ from Announcements.models import (
     QuestionResponse, 
     TaskResponse,
     TaskSettings,
-    TaskAnalytics
+    TaskAnalytics,
+    TaskGradingConfig
 )
-from .serializers import (
+from Task.serializers import (
     TaskSerializer,
     TaskCreateSerializer,
     QuestionSerializer,
@@ -29,6 +31,7 @@ from .serializers import (
     FileResponseSerializer,
     TaskSettingsSerializer,
     TaskAnalyticsSerializer,
+    TaskGradingConfigSerializer
 )
 
 
@@ -80,6 +83,11 @@ class TaskViewSet(viewsets.ModelViewSet):
         category_filter = self.request.query_params.get('category', None)
         if category_filter:
             queryset = queryset.filter(category=category_filter)
+            
+        # Filter by research project
+        research_project_filter = self.request.query_params.get('research_project', None)
+        if research_project_filter:
+            queryset = queryset.filter(research_project=research_project_filter)
         
         # Filter by visibility based on user type
         if not (user.is_staff or user.is_admin):
@@ -213,7 +221,7 @@ class TaskViewSet(viewsets.ModelViewSet):
             
             # Auto-grade if it's a choice question and has a correct choice
             score = 0.0
-            if 'answer_choice' in qr_data and qr_data['answer_choice'] and qr_data['answer_choice'].is_correct:
+            if 'answer_choice' in qr_data and qr_data['answer_choice'] and getattr(qr_data['answer_choice'], 'is_correct', False):
                 score = 1.0 # Default point for correct choice
             
             qr_data['score'] = score
@@ -266,47 +274,260 @@ class TaskViewSet(viewsets.ModelViewSet):
         serializer = TaskResponseSerializer(responses, many=True)
         return Response(serializer.data)
         
-    @action(detail=True, methods=['post'])
+    @action(detail=True, methods=['post'], url_path='grade_response')
     def grade_response(self, request, pk=None):
-        """Submit grades for a specific TaskResponse"""
-        task_response = self.get_object()
-        task = task_response.task
-        
-        # Only task creator or staff can grade
-        if not (request.user.is_staff or request.user.is_admin or request.user == task.user):
-            return Response(
-                {'error': 'Permission denied. Only the task creator can grade submissions.'},
-                status=status.HTTP_403_FORBIDDEN
-            )
-            
-        grades_data = request.data.get('grades', [])
-        if not isinstance(grades_data, list):
-            return Response({'error': 'Invalid grades format. Expected a list.'}, status=status.HTTP_400_BAD_REQUEST)
-            
-        total_score = 0.0
-        
-        # Update individual question scores
-        for grade_obj in grades_data:
-            qr_id = grade_obj.get('question_response_id')
-            score = grade_obj.get('score', 0.0)
-            
+        """Grade a specific response"""
+        task = self.get_object()
+        response_id = request.data.get('response_id')
+        scores = request.data.get('scores', {})
+        feedback = request.data.get('feedback', '')
+
+        try:
+            task_response = TaskResponse.objects.get(pk=response_id, task=task)
+        except TaskResponse.DoesNotExist:
+            return Response({'error': 'Response not found'}, status=status.HTTP_404_NOT_FOUND)
+
+        total = 0
+        for qr_id, score_val in scores.items():
             try:
-                qr = task_response.question_responses.get(id=qr_id)
-                qr.score = float(score)
+                qr = QuestionResponse.objects.get(pk=int(qr_id))
+                qr.score = float(score_val)
                 qr.save()
+                total += float(score_val)
             except (QuestionResponse.DoesNotExist, ValueError):
                 continue
-                
-        # Recalculate total score
-        for qr in task_response.question_responses.all():
-            total_score += qr.score
-            
-        task_response.total_score = total_score
-        task_response.status = 'graded' # Or leave as 'pending' depending on requirement
+
+        task_response.total_score = total
+        task_response.review_status = 'graded'
+        task_response.feedback = feedback
+        task_response.graded_at = datetime.now()
+        task_response.graded_by = request.user
         task_response.save()
-        
+
         serializer = TaskResponseSerializer(task_response)
-        return Response(serializer.data, status=status.HTTP_200_OK)
+        return Response(serializer.data)
+
+    @action(detail=False, methods=['post'], url_path='(?P<response_id>[^/.]+)/update_status')
+    def update_response_status(self, request, response_id=None):
+        """Update review status of a response"""
+        new_status = request.data.get('review_status')
+        feedback = request.data.get('feedback', '')
+
+        valid_statuses = ['pending', 'received', 'under_review', 'complete', 'confirmed', 'graded']
+        if new_status not in valid_statuses:
+            return Response({'error': f'Invalid status. Must be one of: {valid_statuses}'}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            task_response = TaskResponse.objects.get(pk=response_id)
+        except TaskResponse.DoesNotExist:
+            return Response({'error': 'Response not found'}, status=status.HTTP_404_NOT_FOUND)
+
+        task_response.review_status = new_status
+        if feedback:
+            task_response.feedback = feedback
+        if new_status == 'graded':
+            task_response.graded_at = datetime.now()
+            task_response.graded_by = request.user
+        task_response.save()
+
+        serializer = TaskResponseSerializer(task_response)
+        return Response(serializer.data)
+
+    @action(detail=True, methods=['post'])
+    def auto_grade(self, request, pk=None):
+        """Auto-grade all responses for a task based on correct choices"""
+        task = self.get_object()
+        responses = TaskResponse.objects.filter(task=task)
+        graded_count = 0
+
+        for task_response in responses:
+            if task_response.review_status != 'graded':
+                self._auto_grade_response(task_response, task)
+                graded_count += 1
+
+        return Response({
+            'message': f'Auto-graded {graded_count} responses',
+            'graded_count': graded_count
+        })
+
+    def _auto_grade_response(self, task_response, task):
+        """Internal helper for auto-grading a single response"""
+        total = 0.0
+        for qr in task_response.question_responses.all():
+            if hasattr(qr, 'answer_choice') and qr.answer_choice and getattr(qr.answer_choice, 'is_correct', False):
+                qr.score = float(getattr(qr.question, 'points', 1.0))
+            elif hasattr(qr.question, 'question_type') and qr.question.question_type in ('radio', 'check') and hasattr(qr, 'answer_choice') and qr.answer_choice:
+                qr.score = 0.0
+            
+            # If no actual score could be derived, ensure score holds its current value or 0
+            score_val = qr.score if hasattr(qr, 'score') and qr.score is not None else 0.0
+            qr.score = float(score_val)
+            qr.save()
+            total += float(score_val)
+
+        task_response.total_score = total
+        task_response.review_status = 'graded'
+        task_response.graded_at = datetime.now()
+        task_response.feedback = 'Auto-graded'
+        task_response.save()
+
+    @action(detail=True, methods=['get', 'post', 'patch'], url_path='grading_config')
+    def grading_config(self, request, pk=None):
+        """Get or set grading config for a task"""
+        task = self.get_object()
+
+        if request.method == 'GET':
+            try:
+                config = TaskGradingConfig.objects.get(task=task)
+                serializer = TaskGradingConfigSerializer(config)
+                return Response(serializer.data)
+            except TaskGradingConfig.DoesNotExist:
+                return Response({'detail': 'No grading config'}, status=status.HTTP_404_NOT_FOUND)
+
+        # POST or PATCH
+        config, created = TaskGradingConfig.objects.get_or_create(task=task)
+        serializer = TaskGradingConfigSerializer(config, data=request.data, partial=True)
+        if serializer.is_valid():
+            serializer.save()
+
+            # If scheduled grading, start background thread
+            if config.auto_grade and config.scheduled_grade_at and not config.grade_immediately:
+                import threading
+                import time
+                def _scheduled_grade(task_id, target_time):
+                    while True:
+                        if datetime.now() >= target_time:
+                            try:
+                                t = Task.objects.get(pk=task_id)
+                                resps = TaskResponse.objects.filter(task=t)
+                                for r in resps:
+                                    if r.review_status != 'graded':
+                                        self._auto_grade_response(r, t)
+                            except Exception:
+                                pass
+                            break
+                        time.sleep(30)
+
+                t = threading.Thread(target=_scheduled_grade, args=(task.id, config.scheduled_grade_at), daemon=True)
+                t.start()
+
+            return Response(serializer.data, status=status.HTTP_200_OK if not created else status.HTTP_201_CREATED)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+    @action(detail=True, methods=['post'], url_path='ai_grade')
+    def ai_grade(self, request, pk=None):
+        """
+        AI-powered grading for text/paragraph answers.
+        Uses Gemini to compare student answers against expected answers and assign scores.
+        """
+        import os, json
+        task = self.get_object()
+        response_id = request.data.get('response_id')
+
+        try:
+            task_response = TaskResponse.objects.get(pk=response_id, task=task)
+        except TaskResponse.DoesNotExist:
+            return Response({'error': 'Response not found'}, status=status.HTTP_404_NOT_FOUND)
+
+        try:
+            import google.generativeai as genai
+            api_key = os.environ.get('GEMINI_API_KEY', '')
+            if not api_key:
+                return Response({'error': 'GEMINI_API_KEY not configured on the server'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+            genai.configure(api_key=api_key)
+            model = genai.GenerativeModel('gemini-2.0-flash')
+
+            total_score = 0
+            grading_results = []
+
+            for qr in task_response.question_responses.all():
+                question = qr.question
+                points = getattr(question, 'points', 1.0)
+                # For choice-based questions, use standard auto-grade
+                if hasattr(question, 'question_type') and question.question_type in ('radio', 'check'):
+                    if hasattr(qr, 'answer_choice') and qr.answer_choice and getattr(qr.answer_choice, 'is_correct', False):
+                        qr.score = float(points)
+                    else:
+                        qr.score = 0.0
+                    qr.save()
+                    total_score += float(qr.score)
+                    grading_results.append({
+                        'question': question.heading,
+                        'score': qr.score,
+                        'max': points,
+                        'method': 'auto'
+                    })
+                    continue
+
+                # For text-based questions, use AI grading
+                expected = getattr(question, 'correct_answer_text', '')
+                student_answer = qr.answer_text or ''
+
+                if not student_answer.strip():
+                    qr.score = 0.0
+                    qr.save()
+                    grading_results.append({
+                        'question': question.heading,
+                        'score': 0,
+                        'max': points,
+                        'feedback': 'No answer provided',
+                        'method': 'ai'
+                    })
+                    continue
+
+                prompt = f"""Grade the following student answer on a scale of 0 to {points}.
+Return ONLY a JSON object with "score" (number) and "feedback" (brief explanation string).
+
+Question: {question.heading}
+{f'Expected answer: {expected}' if expected else 'No specific expected answer provided - grade based on quality and relevance.'}
+Student answer: {student_answer}
+
+JSON response:"""
+
+                try:
+                    ai_response = model.generate_content(prompt)
+                    ai_text = ai_response.text.strip()
+                    if ai_text.startswith('```'):
+                        ai_text = ai_text.split('\n', 1)[1] if '\n' in ai_text else ai_text[3:]
+                    if ai_text.endswith('```'):
+                        ai_text = ai_text[:-3]
+                    if ai_text.startswith('json'):
+                        ai_text = ai_text[4:]
+
+                    result = json.loads(ai_text.strip())
+                    score = min(float(result.get('score', 0)), points)
+                    feedback = result.get('feedback', '')
+                except Exception:
+                    score = 0.0
+                    feedback = 'AI grading failed for this question'
+
+                qr.score = score
+                qr.save()
+                total_score += score
+                grading_results.append({
+                    'question': question.heading,
+                    'score': score,
+                    'max': points,
+                    'feedback': feedback,
+                    'method': 'ai'
+                })
+
+            task_response.total_score = total_score
+            task_response.review_status = 'graded'
+            task_response.graded_at = datetime.now()
+            task_response.graded_by = request.user
+            task_response.feedback = 'AI-graded'
+            task_response.save()
+
+            serializer = TaskResponseSerializer(task_response)
+            return Response({
+                'response': serializer.data,
+                'grading_details': grading_results,
+                'total_score': total_score
+            })
+
+        except Exception as e:
+            return Response({'error': f'AI grading failed: {str(e)}'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
     
     @action(detail=True, methods=['get'])
     def my_response(self, request, pk=None):
@@ -442,6 +663,176 @@ class TaskViewSet(viewsets.ModelViewSet):
             metadata={'responses': request.data.get('responses', [])}
         )
         return Response({'status': 'draft_saved'})
+
+    # ====== AI-POWERED ENDPOINTS ======
+
+    @action(detail=False, methods=['post'], url_path='generate_from_document')
+    def generate_from_document(self, request):
+        """
+        AI-powered: Upload a document (PDF, DOCX, image) and auto-generate a task with questions.
+        Returns structured JSON that the frontend can use to pre-populate the CreateTask form.
+        """
+        import os, json
+        file_obj = request.FILES.get('file')
+        if not file_obj:
+            return Response({'error': 'No file uploaded'}, status=status.HTTP_400_BAD_REQUEST)
+
+        extracted_text = ""
+        try:
+            fname = file_obj.name.lower()
+            if fname.endswith('.pdf'):
+                import PyPDF2
+                reader = PyPDF2.PdfReader(file_obj)
+                for page in reader.pages:
+                    extracted_text += (page.extract_text() or '') + '\n'
+            elif fname.endswith('.docx'):
+                from docx import Document as DocxDocument
+                doc = DocxDocument(file_obj)
+                for para in doc.paragraphs:
+                    extracted_text += para.text + '\n'
+            elif fname.endswith(('.png', '.jpg', '.jpeg', '.gif', '.bmp', '.webp')):
+                try:
+                    from PIL import Image
+                    import pytesseract
+                    img = Image.open(file_obj)
+                    extracted_text = pytesseract.image_to_string(img)
+                except Exception:
+                    extracted_text = ""
+            else:
+                extracted_text = file_obj.read().decode('utf-8', errors='ignore')
+        except Exception as e:
+            return Response({'error': f'Failed to parse file: {str(e)}'}, status=status.HTTP_400_BAD_REQUEST)
+
+        if not extracted_text.strip():
+            return Response({'error': 'Could not extract text from the uploaded file'}, status=status.HTTP_400_BAD_REQUEST)
+
+        # Use Gemini to generate a task
+        try:
+            import google.generativeai as genai
+            api_key = os.environ.get('GEMINI_API_KEY', '')
+            if not api_key:
+                return Response({'error': 'GEMINI_API_KEY not configured on the server'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+            genai.configure(api_key=api_key)
+            model = genai.GenerativeModel('gemini-2.0-flash')
+
+            prompt = f"""Analyze the following document text and create a structured educational task from it.
+Return a JSON object (no markdown, just raw JSON) with this exact structure:
+{{
+  "heading": "Task title based on the content",
+  "description": "A brief description/instructions for the task",
+  "category": "exam" or "test" or "survey" or "questionnaire" or "other",
+  "difficulty": "beginner" or "intermediate" or "advanced",
+  "questions": [
+    {{
+      "heading": "Question text",
+      "description": "Additional question context if needed",
+      "question_type": "radio" or "check" or "short_text" or "text",
+      "points": 1.0,
+      "correct_answer_text": "The correct answer for text questions",
+      "choices": [
+        {{"content": "Choice A text", "is_correct": false}},
+        {{"content": "Choice B text", "is_correct": true}}
+      ]
+    }}
+  ]
+}}
+
+Generate 5-10 good questions covering the key topics. Use "radio" for single-choice, "check" for multiple-choice, and "short_text" or "text" for open-ended. Always mark the correct choice(s) with is_correct=true. For text questions provide correct_answer_text.
+
+DOCUMENT TEXT:
+{extracted_text[:8000]}"""
+
+            response = model.generate_content(prompt)
+            response_text = response.text.strip()
+            # Clean markdown code fences if present
+            if response_text.startswith('```'):
+                response_text = response_text.split('\n', 1)[1] if '\n' in response_text else response_text[3:]
+            if response_text.endswith('```'):
+                response_text = response_text[:-3]
+            if response_text.startswith('json'):
+                response_text = response_text[4:]
+
+            task_data = json.loads(response_text.strip())
+            return Response(task_data, status=status.HTTP_200_OK)
+
+        except json.JSONDecodeError:
+            return Response({'error': 'AI returned invalid JSON. Please try again.', 'raw': response_text[:500]}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        except Exception as e:
+            return Response({'error': f'AI generation failed: {str(e)}'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+    @action(detail=False, methods=['post'], url_path='generate_questions')
+    def generate_questions(self, request):
+        """
+        AI-powered: Generate questions from notes/text with specified difficulty and count.
+        """
+        import os, json
+        notes_text = request.data.get('text', '')
+        difficulty = request.data.get('difficulty', 'mixed')  # beginner, intermediate, advanced, mixed
+        count = min(int(request.data.get('count', 5)), 20)
+        question_types = request.data.get('question_types', 'mixed')  # mixed, radio, text, check
+
+        if not notes_text.strip():
+            return Response({'error': 'No text provided'}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            import google.generativeai as genai
+            api_key = os.environ.get('GEMINI_API_KEY', '')
+            if not api_key:
+                return Response({'error': 'GEMINI_API_KEY not configured on the server'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+            genai.configure(api_key=api_key)
+            model = genai.GenerativeModel('gemini-2.0-flash')
+
+            diff_instruction = f'difficulty level: {difficulty}' if difficulty != 'mixed' else 'a mix of beginner, intermediate, and advanced difficulty levels'
+            type_instruction = {
+                'radio': 'Use only single-choice (radio) questions.',
+                'check': 'Use only multiple-choice (check) questions.',
+                'text': 'Use only open-ended text questions.',
+                'mixed': 'Use a mix of single-choice (radio), multiple-choice (check), and open-ended text questions.'
+            }.get(question_types, 'Use a mix of question types.')
+
+            prompt = f"""Based on the following study notes/content, generate exactly {count} educational questions.
+{diff_instruction}. {type_instruction}
+
+Return a JSON array (no markdown, just raw JSON) with this exact structure:
+[
+  {{
+    "heading": "Question text",
+    "description": "",
+    "question_type": "radio" or "check" or "short_text" or "text",
+    "points": 1.0,
+    "correct_answer_text": "The correct answer for text-based questions",
+    "choices": [
+      {{"content": "Choice text", "is_correct": false}},
+      {{"content": "Correct choice", "is_correct": true}}
+    ]
+  }}
+]
+
+Rules:
+- For radio/check questions, provide 4 choices with correct one(s) marked is_correct=true
+- For text/short_text questions, provide the answer in correct_answer_text and leave choices empty
+- Questions should test understanding, not just recall
+- Make questions progressively cover different topics from the material
+
+CONTENT:
+{notes_text[:8000]}"""
+
+            response = model.generate_content(prompt)
+            response_text = response.text.strip()
+            if response_text.startswith('```'):
+                response_text = response_text.split('\n', 1)[1] if '\n' in response_text else response_text[3:]
+            if response_text.endswith('```'):
+                response_text = response_text[:-3]
+            if response_text.startswith('json'):
+                response_text = response_text[4:]
+
+            questions = json.loads(response_text.strip())
+            return Response({'questions': questions}, status=status.HTTP_200_OK)
+
+        except json.JSONDecodeError:
+            return Response({'error': 'AI returned invalid JSON. Please try again.'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        except Exception as e:
+            return Response({'error': f'AI generation failed: {str(e)}'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
 class QuestionViewSet(viewsets.ModelViewSet):

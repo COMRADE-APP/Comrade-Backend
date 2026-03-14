@@ -273,6 +273,12 @@ class CapitalVenture(models.Model):
     min_investment = models.DecimalField(max_digits=12, decimal_places=2, default=0)
     max_investment = models.DecimalField(max_digits=15, decimal_places=2)
     
+    # Enterprise custom investment form (optional, replaces default template)
+    custom_investment_form = models.TextField(
+        blank=True, default='',
+        help_text='Custom investment agreement terms. Leave blank to use the default template.'
+    )
+    
     is_active = models.BooleanField(default=True)
     is_verified = models.BooleanField(default=False)
     created_at = models.DateTimeField(auto_now_add=True)
@@ -330,4 +336,57 @@ class VentureBid(models.Model):
 
     def __str__(self):
         return f"{self.venture.name} bid on {self.funding_request}"
+
+
+# ==============================================================================
+# INVESTMENT AGREEMENTS (persistent, replaces localStorage consent)
+# ==============================================================================
+
+class InvestmentAgreement(models.Model):
+    """Binding investment agreement deed — signed once per investor per venture.
+    On subsequent investments, the investor skips KYC/terms and goes directly
+    to the amount + checkout page."""
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    investor = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.CASCADE,
+        related_name='investment_agreements'
+    )
+    venture = models.ForeignKey(
+        CapitalVenture, on_delete=models.CASCADE,
+        related_name='investor_agreements'
+    )
+    
+    # KYC snapshot
+    kyc_data = models.JSONField(
+        default=dict,
+        help_text='KYC data submitted during signing (name, id, nationality, etc.)'
+    )
+    
+    # Signature
+    digital_signature = models.CharField(max_length=500)
+    
+    # Agreement version — bumped when enterprise updates custom terms
+    terms_version = models.CharField(max_length=50, default='v1')
+    custom_terms_snapshot = models.TextField(
+        blank=True, default='',
+        help_text='Snapshot of the enterprise custom terms at time of signing'
+    )
+    
+    # Flags set during signing
+    terms_accepted = models.BooleanField(default=True)
+    risk_acknowledged = models.BooleanField(default=True)
+    ethical_compliance = models.BooleanField(default=True)
+    aml_compliance = models.BooleanField(default=True)
+    
+    signed_at = models.DateTimeField(auto_now_add=True)
+    
+    class Meta:
+        unique_together = ['investor', 'venture']
+        indexes = [
+            models.Index(fields=['investor', 'venture']),
+        ]
+        ordering = ['-signed_at']
+    
+    def __str__(self):
+        return f"Agreement: {self.investor} → {self.venture.name}"
 

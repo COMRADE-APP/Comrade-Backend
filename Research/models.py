@@ -65,10 +65,13 @@ class ResearchProject(models.Model):
     updated_at = models.DateTimeField(auto_now=True)
     
     # Ethics and compliance
+    requires_irb = models.BooleanField(default=False)
+    irb_approval_number = models.CharField(max_length=100, blank=True)
+    ethics_statement = models.TextField(blank=True)
+    consent_required = models.BooleanField(default=True)
+    consent_form_template = models.FileField(upload_to='research/consent_templates/', null=True, blank=True)
+    irb_document = models.FileField(upload_to='research/irb/', null=True, blank=True)
     ethics_approved = models.BooleanField(default=False)
-    ethics_approval_number = models.CharField(max_length=100, blank=True)
-    consent_form = models.FileField(upload_to='research/consent_forms/', null=True, blank=True)
-    irb_approval_document = models.FileField(upload_to='research/irb/', null=True, blank=True)
     
     # Publication
     is_published = models.BooleanField(default=False)

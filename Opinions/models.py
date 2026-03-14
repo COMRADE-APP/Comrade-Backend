@@ -442,11 +442,21 @@ class HiddenContent(models.Model):
         return f"{self.user.email} hid opinion {self.opinion.id}"
 
 
+STORY_VISIBILITY_CHOICES = (
+    ('public', 'Public'),
+    ('followers', 'Followers Only'),
+    ('close_friends', 'Close Friends'),
+    ('private', 'Private'),
+)
+
 STORY_MEDIA_CHOICES = (
     ('image', 'Image'),
     ('video', 'Video'),
     ('text', 'Text Only'),
 )
+
+from django.contrib.contenttypes.fields import GenericForeignKey
+from django.contrib.contenttypes.models import ContentType
 
 
 class Story(models.Model):
@@ -471,7 +481,22 @@ class Story(models.Model):
         default='#1a1a2e',
         help_text='Hex color for text-only stories'
     )
+    visibility = models.CharField(
+        max_length=20,
+        choices=STORY_VISIBILITY_CHOICES,
+        default='followers'
+    )
+    
+    # Generic entity sharing (Opinion, Event, Product, FundingRequest, etc.)
+    shared_entity_type = models.ForeignKey(
+        ContentType, on_delete=models.SET_NULL,
+        null=True, blank=True, related_name='shared_in_stories'
+    )
+    shared_entity_id = models.CharField(max_length=255, blank=True, null=True)
+    shared_entity = GenericForeignKey('shared_entity_type', 'shared_entity_id')
+
     views_count = models.PositiveIntegerField(default=0)
+    likes_count = models.PositiveIntegerField(default=0)
     is_active = models.BooleanField(default=True)
     created_at = models.DateTimeField(default=timezone.now)
     expires_at = models.DateTimeField(blank=True, null=True)
@@ -518,4 +543,26 @@ class StoryView(models.Model):
 
     def __str__(self):
         return f"{self.viewer.email} viewed story {self.story.id}"
+
+
+class StoryLike(models.Model):
+    """Track who has liked each story"""
+    story = models.ForeignKey(
+        Story,
+        on_delete=models.CASCADE,
+        related_name='story_likes'
+    )
+    user = models.ForeignKey(
+        CustomUser,
+        on_delete=models.CASCADE,
+        related_name='liked_stories'
+    )
+    liked_at = models.DateTimeField(default=timezone.now)
+
+    class Meta:
+        unique_together = ('story', 'user')
+        ordering = ['-liked_at']
+
+    def __str__(self):
+        return f"{self.user.email} liked story {self.story.id}"
 

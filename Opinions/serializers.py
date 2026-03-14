@@ -420,15 +420,18 @@ class StorySerializer(serializers.ModelSerializer):
     media_url = serializers.SerializerMethodField()
     has_viewed = serializers.SerializerMethodField()
     time_ago = serializers.SerializerMethodField()
+    is_liked = serializers.SerializerMethodField()
+    shared_entity_data = serializers.SerializerMethodField()
 
     class Meta:
         model = Story
         fields = [
             'id', 'user', 'media_url', 'media_type', 'caption',
-            'background_color', 'views_count', 'has_viewed',
-            'is_active', 'created_at', 'expires_at', 'time_ago'
+            'background_color', 'visibility', 'views_count', 'likes_count',
+            'has_viewed', 'is_liked', 'shared_entity_type', 'shared_entity_id',
+            'shared_entity_data', 'is_active', 'created_at', 'expires_at', 'time_ago'
         ]
-        read_only_fields = ['id', 'user', 'views_count', 'created_at', 'expires_at']
+        read_only_fields = ['id', 'user', 'views_count', 'likes_count', 'created_at', 'expires_at']
 
     def get_media_url(self, obj):
         if obj.media:
@@ -457,10 +460,86 @@ class StorySerializer(serializers.ModelSerializer):
             return f'{int(diff.total_seconds() / 3600)}h'
         return obj.created_at.strftime('%b %d')
 
+    def get_is_liked(self, obj):
+        request = self.context.get('request')
+        if request and request.user.is_authenticated:
+            from .models import StoryLike
+            return StoryLike.objects.filter(story=obj, user=request.user).exists()
+        return False
+
+    def get_shared_entity_data(self, obj):
+        """Serialize the embedded entity safely depending on its type"""
+        if not obj.shared_entity:
+            return None
+        
+        try:
+            entity_type = obj.shared_entity_type.model
+            
+            if entity_type == 'opinion':
+                from .serializers import OpinionSerializer
+                return {
+                    'type': 'opinion',
+                    'data': OpinionSerializer(obj.shared_entity, context=self.context).data
+                }
+            elif entity_type == 'event':
+                return {
+                    'type': 'event',
+                    'data': {
+                        'id': obj.shared_entity.id,
+                        'name': obj.shared_entity.name,
+                        'description': str(obj.shared_entity.description)[:100],
+                        'cover_url': getattr(obj.shared_entity.cover_image, 'url', None) if obj.shared_entity.cover_image else None
+                    }
+                }
+            elif entity_type == 'product':
+                return {
+                    'type': 'product',
+                    'data': {
+                        'id': obj.shared_entity.id,
+                        'name': obj.shared_entity.name,
+                        'price': float(obj.shared_entity.price) if hasattr(obj.shared_entity, 'price') else None,
+                        'image_url': obj.shared_entity.image_url if hasattr(obj.shared_entity, 'image_url') else None
+                    }
+                }
+            elif entity_type == 'announcements':
+                return {
+                    'type': 'announcement',
+                    'data': {
+                        'id': obj.shared_entity.id,
+                        'heading': getattr(obj.shared_entity, 'heading', ''),
+                        'content': str(getattr(obj.shared_entity, 'content', ''))[:100]
+                    }
+                }
+            elif entity_type == 'paymentgroups':
+                return {
+                    'type': 'payment_group',
+                    'data': {
+                        'id': str(obj.shared_entity.id),
+                        'name': obj.shared_entity.name,
+                        'target_amount': float(obj.shared_entity.target_amount) if obj.shared_entity.target_amount else None
+                    }
+                }
+            elif entity_type == 'fundingrequest':
+                return {
+                    'type': 'funding_request',
+                    'data': {
+                        'id': str(obj.shared_entity.id),
+                        'business_name': obj.shared_entity.business.name if obj.shared_entity.business else '',
+                        'amount_needed': float(obj.shared_entity.amount_needed)
+                    }
+                }
+        except Exception as e:
+            return None
+            
+        return None
+
 
 class StoryCreateSerializer(serializers.ModelSerializer):
     """Serializer for creating stories"""
     class Meta:
         model = Story
-        fields = ['media', 'media_type', 'caption', 'background_color']
+        fields = [
+            'media', 'media_type', 'caption', 'background_color',
+            'visibility', 'expires_at', 'shared_entity_type', 'shared_entity_id'
+        ]
 
