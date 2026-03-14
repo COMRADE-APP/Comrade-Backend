@@ -101,6 +101,7 @@ class Task(models.Model):
     # Entity Authorship
     institution = models.ForeignKey('Institution.Institution', on_delete=models.CASCADE, null=True, blank=True, related_name='tasks')
     organisation = models.ForeignKey('Organisation.Organisation', on_delete=models.CASCADE, null=True, blank=True, related_name='tasks')
+    research_project = models.ForeignKey('Research.ResearchProject', on_delete=models.CASCADE, null=True, blank=True, related_name='associated_tasks')
     heading = models.CharField(max_length=200, null=False)
     description = models.TextField(max_length=5000, null=False)
     image_url = models.URLField(max_length=500, null=True, blank=True)

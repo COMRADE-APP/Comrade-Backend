@@ -2,7 +2,7 @@ from rest_framework import serializers
 from .models import (
     Business, FundingDocument, FundingRequest, InvestmentOpportunity,
     FundingResponse, FundingNegotiation, NegotiationMessage, FundingReaction,
-    CapitalVenture, VentureBid, FundingRequestReview
+    CapitalVenture, VentureBid, FundingRequestReview, InvestmentAgreement
 )
 
 class FundingDocumentSerializer(serializers.ModelSerializer):
@@ -156,7 +156,9 @@ class CapitalVentureSerializer(serializers.ModelSerializer):
         model = CapitalVenture
         fields = ['id', 'name', 'description', 'organisation', 'organisation_name', 'institution',
                   'created_by', 'total_fund', 'available_fund', 'investment_criteria',
-                  'investment_focus', 'min_investment', 'max_investment', 'is_active', 'is_verified',
+                  'investment_focus', 'min_investment', 'max_investment',
+                  'custom_investment_form',
+                  'is_active', 'is_verified',
                   'received_requests_count', 'created_at', 'updated_at']
         read_only_fields = ['id', 'created_by', 'created_at', 'updated_at']
     
@@ -193,6 +195,27 @@ class VentureBidSerializer(serializers.ModelSerializer):
                   'proposed_amount', 'proposed_equity', 'terms', 'status',
                   'created_at', 'updated_at']
         read_only_fields = ['id', 'created_at', 'updated_at']
+
+    def get_venture_name(self, obj):
+        return obj.venture.name
+
+
+class InvestmentAgreementSerializer(serializers.ModelSerializer):
+    investor_name = serializers.SerializerMethodField()
+    venture_name = serializers.SerializerMethodField()
+
+    class Meta:
+        model = InvestmentAgreement
+        fields = [
+            'id', 'investor', 'investor_name', 'venture', 'venture_name',
+            'kyc_data', 'digital_signature', 'terms_version',
+            'custom_terms_snapshot', 'terms_accepted', 'risk_acknowledged',
+            'ethical_compliance', 'aml_compliance', 'signed_at',
+        ]
+        read_only_fields = ['id', 'investor', 'signed_at']
+
+    def get_investor_name(self, obj):
+        return f"{obj.investor.first_name} {obj.investor.last_name}".strip() or obj.investor.email
 
     def get_venture_name(self, obj):
         return obj.venture.name

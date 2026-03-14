@@ -10,7 +10,8 @@ from Announcements.models import (
     QuestionResponse, 
     TaskResponse,
     TaskSettings,
-    TaskAnalytics
+    TaskAnalytics,
+    TaskGradingConfig
 )
 from Authentication.serializers import CustomUserSerializer
 
@@ -20,6 +21,13 @@ class ChoiceSerializer(serializers.ModelSerializer):
         model = Choice
         fields = ['id', 'content', 'is_correct', 'selected', 'time_stamp']
         read_only_fields = ['time_stamp']
+
+
+class TaskGradingConfigSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = TaskGradingConfig
+        fields = '__all__'
+        read_only_fields = ['id', 'task', 'time_stamp']
 
 
 class SubQuestionSerializer(serializers.ModelSerializer):
@@ -54,7 +62,7 @@ class TaskSerializer(serializers.ModelSerializer):
         fields = ['id', 'user', 'heading', 'description', 'visibility', 
                   'status', 'state', 'category', 'difficulty', 'is_activity', 'start_date', 'due_date',
                   'time_stamp', 'questions', 'question_count', 'response_count',
-                  'settings', 'institution', 'organisation']
+                  'settings', 'institution', 'organisation', 'research_project']
         read_only_fields = ['time_stamp', 'user']
     
     def get_question_count(self, obj):
@@ -78,7 +86,7 @@ class TaskCreateSerializer(serializers.ModelSerializer):
     class Meta:
         model = Task
         fields = ['heading', 'description', 'visibility', 'category', 'difficulty',
-                  'is_activity', 'start_date', 'due_date', 'questions', 'settings', 'institution', 'organisation']
+                  'is_activity', 'start_date', 'due_date', 'questions', 'settings', 'institution', 'organisation', 'research_project']
     
     def create(self, validated_data):
         questions_data = validated_data.pop('questions', [])

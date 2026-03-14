@@ -20,6 +20,7 @@ from .serializers import (
     ResearchAnalyticsSerializer, RecruitmentPostSerializer,
     ResearcherApplicationSerializer
 )
+from Announcements.models import Task, TaskResponse
 
 class IsPrincipalInvestigatorOrReadOnly(permissions.BasePermission):
     def has_object_permission(self, request, view, obj):
@@ -157,6 +158,11 @@ class ResearchProjectViewSet(viewsets.ModelViewSet):
             .order_by('date').values('date', 'count')[:30]
         )
         
+        # Task/Survey completion stats
+        tasks = Task.objects.filter(research_project=project)
+        total_tasks = tasks.count()
+        total_survey_responses = TaskResponse.objects.filter(task__in=tasks).count()
+        
         return Response({
             'views': project.views,
             'action_counts': action_counts,
@@ -165,6 +171,8 @@ class ResearchProjectViewSet(viewsets.ModelViewSet):
             'accepted_applications': ParticipantApplication.objects.filter(position__research=project, status='accepted').count(),
             'total_participants': ResearchParticipant.objects.filter(research=project).count(),
             'positions_count': project.positions.count(),
+            'total_tasks': total_tasks,
+            'total_survey_responses': total_survey_responses
         })
 
 class ParticipantPositionViewSet(viewsets.ModelViewSet):

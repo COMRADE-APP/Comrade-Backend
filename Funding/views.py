@@ -7,14 +7,15 @@ from django_filters.rest_framework import DjangoFilterBackend
 from .models import (
     Business, FundingDocument, FundingRequest, InvestmentOpportunity,
     FundingResponse, FundingNegotiation, NegotiationMessage, FundingReaction,
-    CapitalVenture, VentureBid
+    CapitalVenture, VentureBid, InvestmentAgreement
 )
 from .serializers import (
     BusinessSerializer, BusinessCreateSerializer, 
     FundingDocumentSerializer, FundingRequestSerializer,
     InvestmentOpportunitySerializer, FundingResponseSerializer,
     FundingNegotiationSerializer, NegotiationMessageSerializer,
-    FundingReactionSerializer, CapitalVentureSerializer, VentureBidSerializer
+    FundingReactionSerializer, CapitalVentureSerializer, VentureBidSerializer,
+    InvestmentAgreementSerializer
 )
 
 class IsFounderOrReadOnly(permissions.BasePermission):
@@ -450,6 +451,67 @@ class CapitalVentureViewSet(viewsets.ModelViewSet):
             'room_id': str(room.id),
             'room_name': room.name
         })
+
+    @action(detail=True, methods=['get'], permission_classes=[permissions.IsAuthenticated])
+    def check_agreement(self, request, pk=None):
+        """Check if the investor already has a signed agreement for this venture"""
+        venture = self.get_object()
+        agreement = InvestmentAgreement.objects.filter(
+            investor=request.user, venture=venture
+        ).first()
+        
+        if agreement:
+            return Response({
+                'has_agreement': True,
+                'agreement': InvestmentAgreementSerializer(agreement).data
+            })
+        return Response({
+            'has_agreement': False,
+            'custom_terms': venture.custom_investment_form or '',
+        })
+
+    @action(detail=True, methods=['post'], permission_classes=[permissions.IsAuthenticated])
+    def sign_agreement(self, request, pk=None):
+        """Sign an investment agreement deed — only once per investor per venture"""
+        venture = self.get_object()
+        
+        # Check if already signed
+        existing = InvestmentAgreement.objects.filter(
+            investor=request.user, venture=venture
+        ).first()
+        if existing:
+            return Response({
+                'message': 'Agreement already signed',
+                'agreement': InvestmentAgreementSerializer(existing).data
+            }, status=status.HTTP_200_OK)
+        
+        # Validate required fields
+        kyc_data = request.data.get('kyc_data', {})
+        digital_signature = request.data.get('digital_signature', '')
+        
+        if not digital_signature:
+            return Response(
+                {'error': 'digital_signature is required'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        agreement = InvestmentAgreement.objects.create(
+            investor=request.user,
+            venture=venture,
+            kyc_data=kyc_data,
+            digital_signature=digital_signature,
+            terms_version=request.data.get('terms_version', 'v1'),
+            custom_terms_snapshot=venture.custom_investment_form or '',
+            terms_accepted=request.data.get('terms_accepted', True),
+            risk_acknowledged=request.data.get('risk_acknowledged', True),
+            ethical_compliance=request.data.get('ethical_compliance', True),
+            aml_compliance=request.data.get('aml_compliance', True),
+        )
+        
+        return Response({
+            'message': 'Investment agreement signed successfully',
+            'agreement': InvestmentAgreementSerializer(agreement).data
+        }, status=status.HTTP_201_CREATED)
 
 
 class VentureBidViewSet(viewsets.ModelViewSet):

@@ -2,6 +2,7 @@ from django.db import models
 from Authentication.models import Profile
 from datetime import datetime
 from django.utils import timezone
+from django.contrib.contenttypes.fields import GenericForeignKey
 
 # Create your models here.
 PAY_OPT = (
@@ -212,8 +213,17 @@ class PaymentGroups(models.Model):
     GROUP_TYPE_CHOICES = (
         ('standard', 'Standard Group'),
         ('piggy_bank', 'Piggy Bank Group'),
+        ('kitty', 'Entity Kitty'),
     )
     group_type = models.CharField(max_length=20, choices=GROUP_TYPE_CHOICES, default='standard')
+    
+    # Generic relation to any entity (Business, CapitalVenture, Shop, Org, etc.)
+    entity_content_type = models.ForeignKey(
+        'contenttypes.ContentType', on_delete=models.SET_NULL,
+        null=True, blank=True, related_name='kitty_groups'
+    )
+    entity_object_id = models.CharField(max_length=255, blank=True, null=True)
+    entity = GenericForeignKey('entity_content_type', 'entity_object_id')
     
     # Group lifecycle / maturation
     is_matured = models.BooleanField(default=False)  # True when deadline has passed
