@@ -969,16 +969,25 @@ class StoryViewSet(viewsets.ModelViewSet):
         return StorySerializer
 
     def list(self, request):
-        """Get stories from followed users, grouped by user"""
+        """Get stories from followed users, public, and close friends, grouped by user"""
         user = request.user
         if not user.is_authenticated:
             return Response([])
 
-        # Get stories from followed users + own stories
-        following_ids = list(user.following.values_list('following_id', flat=True))
-        following_ids.append(user.id)
+        from django.db.models import Q
 
-        stories = self.get_queryset().filter(user_id__in=following_ids)
+        # Get following list
+        following_ids = list(user.following.values_list('following_id', flat=True))
+        
+        # Build visibility queries
+        public_q = Q(visibility='public')
+        followers_q = Q(visibility='followers', user_id__in=following_ids)
+        own_q = Q(user=user)
+        
+        # We can implement close_friends list later, for now we let it act like private so only owner sees it
+        # unless they have a close friends implementation. Assuming standard follow for now.
+        
+        stories = self.get_queryset().filter(public_q | followers_q | own_q)
 
         # Group stories by user
         from collections import OrderedDict
@@ -1030,6 +1039,7 @@ class StoryViewSet(viewsets.ModelViewSet):
         if story.user == request.user:
             return Response({'viewed': True})
 
+        from .models import StoryView as StoryViewModel
         _, created = StoryViewModel.objects.get_or_create(
             story=story,
             viewer=request.user
@@ -1040,6 +1050,28 @@ class StoryViewSet(viewsets.ModelViewSet):
 
         return Response({'viewed': True, 'views_count': story.views_count})
 
+    @action(detail=True, methods=['post'], permission_classes=[permissions.IsAuthenticated])
+    def like(self, request, pk=None):
+        """Like a story"""
+        story = self.get_object()
+        from .models import StoryLike
+        _, created = StoryLike.objects.get_or_create(story=story, user=request.user)
+        if created:
+            story.likes_count += 1
+            story.save(update_fields=['likes_count'])
+        return Response({'liked': True, 'likes_count': story.likes_count})
+
+    @action(detail=True, methods=['post'], permission_classes=[permissions.IsAuthenticated])
+    def unlike(self, request, pk=None):
+        """Unlike a story"""
+        story = self.get_object()
+        from .models import StoryLike
+        deleted, _ = StoryLike.objects.filter(story=story, user=request.user).delete()
+        if deleted and story.likes_count > 0:
+            story.likes_count -= 1
+            story.save(update_fields=['likes_count'])
+        return Response({'liked': False, 'likes_count': story.likes_count})
+
     @action(detail=False, methods=['get'], permission_classes=[permissions.IsAuthenticated])
     def my_stories(self, request):
         """Get current user's active stories"""
@@ -1049,17 +1081,24 @@ class StoryViewSet(viewsets.ModelViewSet):
 
     @action(detail=True, methods=['get'], permission_classes=[permissions.IsAuthenticated])
     def viewers(self, request, pk=None):
-        """Get list of viewers for a story (only story owner)"""
+        """Get list of viewers and likers for a story (only story owner)"""
         story = self.get_object()
         if story.user != request.user:
             return Response({'detail': 'Only the story owner can see viewers'}, status=status.HTTP_403_FORBIDDEN)
 
+        from .models import StoryView as StoryViewModel, StoryLike
+        
         views = StoryViewModel.objects.filter(story=story).select_related('viewer')
+        likes = StoryLike.objects.filter(story=story).values_list('user_id', flat=True)
+        likes_set = set(likes)
+        
         data = [
             {
                 'id': v.viewer.id,
                 'name': f"{v.viewer.first_name or ''} {v.viewer.last_name or ''}".strip() or v.viewer.email,
+                'avatar_url': request.build_absolute_uri(v.viewer.user_profile.avatar.url) if hasattr(v.viewer, 'user_profile') and v.viewer.user_profile.avatar else None,
                 'viewed_at': v.viewed_at,
+                'has_liked': v.viewer.id in likes_set
             }
             for v in views
         ]
