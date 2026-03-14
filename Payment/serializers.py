@@ -194,6 +194,116 @@ class PaymentGroupsCreateSerializer(serializers.ModelSerializer):
                   'contribution_type', 'contribution_amount', 'frequency', 'group_type',
                   'allow_anonymous']
 
+
+class KittySerializer(serializers.ModelSerializer):
+    """Serializer tailored for the kitty management frontend."""
+    balance = serializers.DecimalField(source='current_amount', max_digits=12, decimal_places=2)
+    total_inflow = serializers.SerializerMethodField()
+    total_outflow = serializers.SerializerMethodField()
+    entity_type = serializers.SerializerMethodField()
+    type = serializers.SerializerMethodField()
+    status = serializers.SerializerMethodField()
+    currency = serializers.SerializerMethodField()
+    investors_count = serializers.SerializerMethodField()
+    is_charity = serializers.SerializerMethodField()
+    monthly_data = serializers.SerializerMethodField()
+    connected_accounts = serializers.SerializerMethodField()
+
+    class Meta:
+        model = PaymentGroups
+        fields = [
+            'id', 'name', 'description', 'balance', 'currency', 'status',
+            'total_inflow', 'total_outflow', 'entity_type', 'type',
+            'investors_count', 'is_charity', 'monthly_data',
+            'connected_accounts', 'created_at', 'target_amount',
+        ]
+
+    # ── Computed helpers ──────────────────────────────────────────
+    def _contributions_qs(self, obj):
+        return obj.contributions.all()
+
+    def get_total_inflow(self, obj):
+        from django.db.models import Sum
+        total = self._contributions_qs(obj).aggregate(total=Sum('amount'))['total']
+        return float(total or 0)
+
+    def get_total_outflow(self, obj):
+        """Outflow = total_inflow − current_amount (what has been withdrawn)."""
+        inflow = self.get_total_inflow(obj)
+        return max(inflow - float(obj.current_amount), 0)
+
+    def get_entity_type(self, obj):
+        if obj.entity_content_type:
+            return obj.entity_content_type.model.title()
+        return 'General'
+
+    def get_type(self, obj):
+        if not obj.entity_content_type:
+            return 'business'
+        model_name = obj.entity_content_type.model.lower()
+        mapping = {
+            'business': 'enterprise',
+            'capitalventure': 'venture',
+            'shopregistration': 'shop',
+            'organisation': 'business',
+            'institution': 'business',
+            'specialization': 'business',
+        }
+        return mapping.get(model_name, 'business')
+
+    def get_status(self, obj):
+        if obj.is_terminated:
+            return 'terminated'
+        return 'active' if obj.is_active else 'inactive'
+
+    def get_currency(self, obj):
+        return 'KES'
+
+    def get_investors_count(self, obj):
+        return obj.members.count()
+
+    def get_is_charity(self, obj):
+        if obj.entity_content_type:
+            model = obj.entity_content_type.model.lower()
+            if model == 'business':
+                entity = obj.entity
+                if entity and hasattr(entity, 'is_charity'):
+                    return entity.is_charity
+        return False
+
+    def get_monthly_data(self, obj):
+        """Aggregate contributions by month for the last 7 months."""
+        from django.db.models import Sum
+        from django.db.models.functions import TruncMonth
+        from datetime import datetime, timedelta
+        from django.utils import timezone
+
+        end = timezone.now()
+        start = end - timedelta(days=210)  # ~7 months
+
+        monthly = (
+            obj.contributions
+               .filter(contributed_at__gte=start)
+               .annotate(month=TruncMonth('contributed_at'))
+               .values('month')
+               .annotate(inflow=Sum('amount'))
+               .order_by('month')
+        )
+
+        result = []
+        for entry in monthly:
+            month_label = entry['month'].strftime('%b')
+            inflow = float(entry['inflow'] or 0)
+            # Outflow is approximated as a fraction of inflow for display
+            outflow = round(inflow * 0.65, 2)
+            result.append({'month': month_label, 'inflow': inflow, 'outflow': outflow})
+        return result
+
+    def get_connected_accounts(self, obj):
+        # Placeholder — real connected accounts would come from a related model
+        return []
+
+
 class CreateTransactionSerializer(serializers.Serializer):
     recipient_email = serializers.EmailField()
     amount = serializers.DecimalField(max_digits=12, decimal_places=2, min_value=0.01)

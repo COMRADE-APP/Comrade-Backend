@@ -32,7 +32,8 @@ from Payment.serializers import (
     StandingOrderSerializer, GroupInvitationSerializer, GroupTargetSerializer,
     PaymentGroupsCreateSerializer, CreateTransactionSerializer,
     ProductSerializer, UserSubscriptionSerializer, PartnerSerializer, PartnerApplicationSerializer, PartnerApplicationCreateSerializer,
-    AgentApplicationSerializer, SupplierApplicationSerializer, ShopRegistrationSerializer
+    AgentApplicationSerializer, SupplierApplicationSerializer, ShopRegistrationSerializer,
+    KittySerializer
 )
 from Authentication.models import Profile, CustomUser
 from Messages.models import Conversation, Message
@@ -581,6 +582,141 @@ class PaymentGroupsViewSet(ModelViewSet):
         groups = self.get_queryset()
         serializer = self.get_serializer(groups, many=True)
         return Response(serializer.data)
+
+    # ── Kitty-specific endpoints ──────────────────────────────────
+
+    @action(detail=False, methods=['get'])
+    def my_kitties(self, request):
+        """Return all kitties owned by (or where the user is a member of) the current user."""
+        user = request.user
+        payment_profile = get_or_create_payment_profile(user)
+        if not payment_profile:
+            return Response([], status=status.HTTP_200_OK)
+
+        kitties = PaymentGroups.objects.filter(
+            group_type='kitty'
+        ).filter(
+            Q(creator=payment_profile) | Q(members__payment_profile=payment_profile)
+        ).distinct().select_related('entity_content_type').order_by('-created_at')
+
+        serializer = KittySerializer(kitties, many=True)
+        return Response(serializer.data)
+
+    @action(detail=True, methods=['post'])
+    @db_transaction.atomic
+    def kitty_withdraw(self, request, pk=None):
+        """Withdraw funds from a kitty to the user's personal wallet."""
+        kitty = self.get_object()
+        user = request.user
+        payment_profile = get_or_create_payment_profile(user)
+        if not payment_profile:
+            return Response({'error': 'Could not resolve payment profile'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+        # Only creator/admin can withdraw
+        is_admin = kitty.creator == payment_profile
+        if not is_admin:
+            try:
+                member = PaymentGroupMember.objects.get(payment_group=kitty, payment_profile=payment_profile)
+                if not member.is_admin:
+                    return Response({'error': 'Only admins can withdraw from this kitty'}, status=status.HTTP_403_FORBIDDEN)
+            except PaymentGroupMember.DoesNotExist:
+                return Response({'error': 'Not a member of this kitty'}, status=status.HTTP_403_FORBIDDEN)
+
+        amount = request.data.get('amount')
+        if not amount:
+            return Response({'error': 'Amount is required'}, status=status.HTTP_400_BAD_REQUEST)
+        try:
+            amount = float(amount)
+            if amount <= 0:
+                return Response({'error': 'Amount must be positive'}, status=status.HTTP_400_BAD_REQUEST)
+        except (ValueError, TypeError):
+            return Response({'error': 'Invalid amount'}, status=status.HTTP_400_BAD_REQUEST)
+
+        if float(kitty.current_amount) < amount:
+            return Response({
+                'error': 'Insufficient kitty balance',
+                'current_balance': float(kitty.current_amount),
+            }, status=status.HTTP_400_BAD_REQUEST)
+
+        # Deduct from kitty
+        kitty.current_amount = float(kitty.current_amount) - amount
+        kitty.save()
+
+        # Credit user's personal wallet
+        payment_profile.comrade_balance += amount
+        payment_profile.save()
+
+        # Create audit transaction
+        tx = TransactionToken.objects.create(
+            payment_profile=payment_profile,
+            transaction_code=f'kitty_wd_{uuid.uuid4().hex[:12]}',
+            amount=amount,
+            transaction_type='withdrawal',
+            notes=f'Kitty withdrawal from: {kitty.name}'
+        )
+
+        TransactionHistory.objects.create(
+            payment_profile=payment_profile,
+            transaction_token=tx,
+            authorization_token=PaymentAuthorization.objects.create(
+                payment_profile=payment_profile,
+                authorization_code=secrets.token_hex(16)
+            ),
+            verification_token=PaymentVerification.objects.create(
+                payment_profile=payment_profile,
+                verification_code=secrets.token_hex(16)
+            ),
+            amount=amount,
+            status='completed'
+        )
+
+        return Response({
+            'status': 'success',
+            'message': f'KES {amount:,.2f} withdrawn to your personal wallet',
+            'new_kitty_balance': float(kitty.current_amount),
+            'new_wallet_balance': float(payment_profile.comrade_balance),
+            'transaction_id': str(tx.transaction_code),
+        })
+
+    @action(detail=True, methods=['get'])
+    def kitty_transactions(self, request, pk=None):
+        """Get transaction history for a specific kitty."""
+        kitty = self.get_object()
+        contributions = kitty.contributions.all().order_by('-contributed_at')
+
+        result = []
+        for c in contributions:
+            result.append({
+                'id': str(c.id),
+                'type': 'inflow',
+                'amount': float(c.amount),
+                'description': f'Contribution from {c.member.payment_profile.user.user.first_name} {c.member.payment_profile.user.user.last_name}' if not c.member.is_anonymous else f'Contribution from {c.member.anonymous_alias}',
+                'date': c.contributed_at.strftime('%Y-%m-%d'),
+                'status': 'completed',
+                'method': 'wallet',
+                'notes': c.notes,
+            })
+
+        # Also include withdrawal transactions
+        withdrawal_txns = TransactionToken.objects.filter(
+            notes__icontains=f'Kitty withdrawal from: {kitty.name}',
+            transaction_type='withdrawal',
+        ).order_by('-created_at')
+
+        for tx in withdrawal_txns:
+            result.append({
+                'id': str(tx.transaction_code),
+                'type': 'outflow',
+                'amount': float(tx.amount),
+                'description': f'Withdrawal by {tx.payment_profile.user.user.first_name} {tx.payment_profile.user.user.last_name}',
+                'date': tx.created_at.strftime('%Y-%m-%d'),
+                'status': 'completed',
+                'method': 'wallet',
+            })
+
+        # Sort by date descending
+        result.sort(key=lambda x: x['date'], reverse=True)
+        return Response(result)
     
     @action(detail=True, methods=['get'])
     def members(self, request, pk=None):
