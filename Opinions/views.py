@@ -872,11 +872,9 @@ class UnifiedFeedView(APIView):
     
     def _get_announcements(self, request, limit):
         try:
-            from Announcements.models import Announcement
+            from Announcements.models import Announcements
             
-            announcements = Announcement.objects.filter(
-                is_active=True
-            ).order_by('-created_at')[:limit]
+            announcements = Announcements.objects.all().order_by('-time_stamp')[:limit]
             
             items = []
             for a in announcements:
@@ -885,38 +883,42 @@ class UnifiedFeedView(APIView):
                     'content_type': 'announcement',
                     'category_label': 'Announcement',
                     'category_color': 'yellow',
-                    'title': a.title,
+                    'title': a.heading,
                     'content': a.content[:300] + '...' if len(a.content) > 300 else a.content,
-                    'created_at': a.created_at.isoformat(),
+                    'created_at': a.time_stamp.isoformat() if a.time_stamp else '',
                     'action_url': f'/announcements/{a.id}'
                 })
             return items
-        except Exception:
+        except Exception as e:
+            import traceback; traceback.print_exc()
             return []
     
     def _get_products(self, request, limit):
         try:
             from Payment.models import Product
             
-            products = Product.objects.filter(
-                is_active=True
-            ).order_by('-created_at')[:limit]
+            products = Product.objects.all().order_by('-created_at')[:limit]
             
             items = []
             for p in products:
                 items.append({
                     'id': str(p.id),
                     'content_type': 'product',
-                    'category_label': 'Product',
+                    'category_label': p.get_product_type_display() if hasattr(p, 'get_product_type_display') else (p.product_type or 'Product'),
+                    'product_type': p.product_type or 'physical',
                     'category_color': 'green',
                     'title': p.name,
                     'content': p.description[:200] + '...' if len(p.description) > 200 else p.description,
                     'price': str(p.price),
-                    'created_at': p.created_at.isoformat(),
+                    'image_url': p.image_url or '',
+                    'stock_quantity': p.stock_quantity,
+                    'is_available': p.stock_quantity > 0 if p.product_type == 'physical' else True,
+                    'created_at': p.created_at.isoformat() if p.created_at else '',
                     'action_url': f'/shop/{p.id}'
                 })
             return items
-        except Exception:
+        except Exception as e:
+            import traceback; traceback.print_exc()
             return []
 
 
