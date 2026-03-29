@@ -30,7 +30,7 @@ from datetime import timedelta
 from django.db.models import Count, Q
 try:
     from Announcements.models import Task, Announcements
-    from Messages.models import ConversationParticipant, Message
+    from Messages.models import ConversationParticipant
     from Events.models import Event
 except ImportError:
     pass

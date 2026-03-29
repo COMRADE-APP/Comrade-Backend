@@ -29,6 +29,7 @@ from Events.models import Event
 from rest_framework.permissions import IsAuthenticated
 from Resources.views import VISIBILITY_MAP
 from datetime import datetime, timedelta
+from django.utils import timezone
 
 
 

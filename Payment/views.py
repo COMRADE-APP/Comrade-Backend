@@ -9,11 +9,15 @@ import csv
 import pandas as pd
 from rest_framework.permissions import IsAuthenticated
 from django.db import transaction as db_transaction
-from django.db.models import Q, Sum
+from django.db.models import Q, Sum, F
 from django.utils import timezone
 from datetime import timedelta
+from decimal import Decimal
 import uuid
 import secrets
+
+from django.contrib.contenttypes.models import ContentType
+from Funding.models import Business, CapitalVenture
 
 from Payment.models import (
     PaymentProfile, PaymentItem, PaymentLog, PaymentGroups,
@@ -21,7 +25,13 @@ from Payment.models import (
     TransactionHistory, TransactionTracker, PaymentGroupMember,
     Contribution, StandingOrder, GroupInvitation, GroupTarget,
     Product, UserSubscription, IndividualShare, Partner, PartnerApplication,
-    AgentApplication, SupplierApplication, ShopRegistration
+    AgentApplication, SupplierApplication, ShopRegistration,
+    Order, OrderItem, MenuItem, GroupCheckoutRequest,
+    GroupJoinRequest, GroupVote,
+    BillProvider, BillPayment,
+    LoanProduct, CreditScore, LoanApplication, LoanRepayment,
+    EscrowTransaction, EscrowDispute,
+    InsuranceProduct, InsurancePolicy, InsuranceClaim
 )
 from Payment.serializers import (
     PaymentProfileSerializer, PaymentItemSerializer, PaymentLogSerializer,
@@ -33,7 +43,12 @@ from Payment.serializers import (
     PaymentGroupsCreateSerializer, CreateTransactionSerializer,
     ProductSerializer, UserSubscriptionSerializer, PartnerSerializer, PartnerApplicationSerializer, PartnerApplicationCreateSerializer,
     AgentApplicationSerializer, SupplierApplicationSerializer, ShopRegistrationSerializer,
-    KittySerializer
+    KittySerializer, GroupCheckoutRequestSerializer,
+    GroupJoinRequestSerializer, GroupVoteSerializer,
+    BillProviderSerializer, BillPaymentSerializer,
+    LoanProductSerializer, CreditScoreSerializer, LoanApplicationSerializer, LoanRepaymentSerializer,
+    EscrowTransactionSerializer, EscrowDisputeSerializer,
+    InsuranceProductSerializer, InsurancePolicySerializer, InsuranceClaimSerializer
 )
 from Authentication.models import Profile, CustomUser
 from Messages.models import Conversation, Message
@@ -67,6 +82,134 @@ class PaymentProfileViewSet(ModelViewSet):
              
         return Response({'balance': payment_profile.comrade_balance})
 
+
+    @action(detail=False, methods=['post'])
+    @db_transaction.atomic
+    def checkout(self, request):
+        """Unified checkout process."""
+        user = request.user
+        payment_profile = get_or_create_payment_profile(user)
+        if not payment_profile:
+             return Response({'error': 'Could not create payment profile'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+             
+        data = request.data
+        amount = Decimal(str(data.get('amount', 0)))
+        payment_method = data.get('payment_method', 'wallet')
+        
+        # Check balance if using wallet
+        if payment_method == 'wallet':
+            # Lock the row to prevent race conditions (double-spend)
+            payment_profile = PaymentProfile.objects.select_for_update().get(pk=payment_profile.pk)
+            if payment_profile.comrade_balance < amount:
+                return Response({'error': 'Insufficient wallet balance'}, status=status.HTTP_400_BAD_REQUEST)
+                
+            # Atomic deduction using F() expression
+            PaymentProfile.objects.filter(pk=payment_profile.pk).update(
+                comrade_balance=F('comrade_balance') - amount
+            )
+            payment_profile.refresh_from_db()
+            
+            # Log deduction
+            PaymentLog.objects.create(
+                payment_profile=payment_profile,
+                amount=amount,
+                payment_type='individual',
+                recipient=payment_profile,
+                notes='Unified checkout purchase via wallet'
+            )
+            
+            # Record in Transaction History
+            TransactionToken.objects.create(
+                payment_profile=payment_profile,
+                amount=amount,
+                transaction_type='purchase',
+                pay_from='comrade_balance',
+                payment_option='comrade_balance',
+                description='Unified checkout purchase via wallet'
+            )
+            
+        try:
+            profile = Profile.objects.get(user=user)
+        except Profile.DoesNotExist:
+            return Response({'error': 'Profile not found'}, status=status.HTTP_400_BAD_REQUEST)
+            
+        # Create Order and OrderItem records from cart items
+        from Payment.models import Order, OrderItem, Product, MenuItem
+        
+        items_data = data.get('items', [])
+        
+        # Determine primary order type from the items
+        item_types = set(item.get('type', 'product') for item in items_data)
+        if 'service' in item_types:
+            order_type = 'service_appointment'
+        elif 'booking' in item_types or 'room' in item_types:
+            order_type = 'hotel_booking'
+        else:
+            order_type = 'product'
+        
+        order = Order.objects.create(
+            buyer=profile,
+            order_type=order_type,
+            delivery_mode='pickup',
+            payment_type=data.get('payment_type', 'individual'),
+            total_amount=amount,
+            status='confirmed',
+            notes=f'Checkout via {payment_method}',
+        )
+        
+        # Create individual order items
+        for item in items_data:
+            product = None
+            item_type = item.get('type', 'product')
+            item_id = item.get('id')
+            
+            # Try to link product FK for product-type items
+            if item_type == 'product' and item_id:
+                try:
+                    product = Product.objects.get(id=item_id)
+                except (Product.DoesNotExist, ValueError):
+                    pass
+            
+            # Handle group entry fee payment
+            if item_type == 'join_fee' and item_id:
+                from Payment.models import GroupJoinRequest
+                try:
+                    join_request = GroupJoinRequest.objects.get(id=item_id, requester=payment_profile)
+                    join_request.has_paid_entry_fee = True
+                    join_request.status = 'pending'
+                    join_request.save()
+                except (GroupJoinRequest.DoesNotExist, ValueError):
+                    pass
+            
+            OrderItem.objects.create(
+                order=order,
+                product=product,
+                name=item.get('name', 'Item'),
+                quantity=item.get('qty', 1),
+                unit_price=Decimal(str(item.get('price', 0))),
+                item_type=item_type,
+                metadata=item.get('payload', item.get('metadata', {})),
+            )
+        
+        return Response({
+            'success': True,
+            'message': 'Checkout completed successfully',
+            'order_id': str(order.id),
+        })
+
+    @action(detail=False, methods=['get'])
+    def my_checkout_requests(self, request):
+        """Fetch all checkout requests from all groups the user is a member of or creator."""
+        payment_profile = get_or_create_payment_profile(request.user)
+        if not payment_profile:
+            return Response({'error': 'Payment profile not found'}, status=status.HTTP_404_NOT_FOUND)
+        
+        requests = GroupCheckoutRequest.objects.filter(
+            Q(group__members__payment_profile=payment_profile) | Q(group__creator=payment_profile)
+        ).distinct().order_by('-created_at')
+        
+        serializer = GroupCheckoutRequestSerializer(requests, many=True, context={'request': request})
+        return Response(serializer.data)
 
 from Payment.utils import check_purchase_limit, increment_purchase_count, check_group_creation_limit, get_max_group_members, get_or_create_payment_profile
 
@@ -121,16 +264,20 @@ class TransactionViewSet(ModelViewSet):
         
         # Check balance for internal transfers/payments
         if payment_option == 'comrade_balance':
+            # Lock rows to prevent race conditions
+            sender_payment_profile = PaymentProfile.objects.select_for_update().get(pk=sender_payment_profile.pk)
             if sender_payment_profile.comrade_balance < amount:
                 return Response({'error': 'Insufficient balance'}, status=status.HTTP_400_BAD_REQUEST)
                 
-            # Deduct balance
-            sender_payment_profile.comrade_balance -= amount
-            sender_payment_profile.save()
-            
-            # Add to recipient
-            recipient_payment_profile.comrade_balance += amount
-            recipient_payment_profile.save()
+            # Atomic balance transfer using F() expressions
+            PaymentProfile.objects.filter(pk=sender_payment_profile.pk).update(
+                comrade_balance=F('comrade_balance') - amount
+            )
+            PaymentProfile.objects.filter(pk=recipient_payment_profile.pk).update(
+                comrade_balance=F('comrade_balance') + amount
+            )
+            sender_payment_profile.refresh_from_db()
+            recipient_payment_profile.refresh_from_db()
         
         # Create Transaction Record
         transaction = TransactionToken.objects.create(
@@ -252,7 +399,8 @@ class TransactionViewSet(ModelViewSet):
         if not payment_profile:
              return Response({'error': 'Could not create payment profile'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
         
-        # Check balance
+        # Lock row to prevent race conditions (double-spend)
+        payment_profile = PaymentProfile.objects.select_for_update().get(pk=payment_profile.pk)
         if payment_profile.comrade_balance < amount:
             return Response({
                 'error': 'Insufficient balance',
@@ -269,9 +417,11 @@ class TransactionViewSet(ModelViewSet):
             pay_from='internal'
         )
         
-        # Deduct balance
-        payment_profile.comrade_balance -= amount
-        payment_profile.save()
+        # Atomic deduction using F() expression
+        PaymentProfile.objects.filter(pk=payment_profile.pk).update(
+            comrade_balance=F('comrade_balance') - Decimal(str(amount))
+        )
+        payment_profile.refresh_from_db()
         
         # Create history record
         TransactionHistory.objects.create(
@@ -498,26 +648,40 @@ class PaymentGroupsViewSet(ModelViewSet):
         except PaymentGroupMember.DoesNotExist:
             return Response({'error': 'Not a member'}, status=status.HTTP_403_FORBIDDEN)
         
-        invited_email = request.data.get('email')
+        invited_identifier = request.data.get('email')
         force_external = request.data.get('force_external', False)
         
         invited_payment_profile = None
         user_exists = False
+        invited_email = None
         
-        try:
-            invited_user = CustomUser.objects.get(email=invited_email)
-            invited_profile = Profile.objects.get(user=invited_user)
-            invited_payment_profile = PaymentProfile.objects.get(user=invited_profile)
-            user_exists = True
-        except (CustomUser.DoesNotExist, Profile.DoesNotExist, PaymentProfile.DoesNotExist):
-            user_exists = False
+        if invited_identifier and '@' in invited_identifier:
+            invited_email = invited_identifier
+            try:
+                invited_user = CustomUser.objects.get(email=invited_email)
+                invited_profile = Profile.objects.get(user=invited_user)
+                invited_payment_profile = PaymentProfile.objects.get(user=invited_profile)
+                user_exists = True
+            except (CustomUser.DoesNotExist, Profile.DoesNotExist, PaymentProfile.DoesNotExist):
+                user_exists = False
+        elif invited_identifier:
+            try:
+                invited_user = CustomUser.objects.get(username=invited_identifier)
+                invited_email = invited_user.email
+                invited_profile = Profile.objects.get(user=invited_user)
+                invited_payment_profile = PaymentProfile.objects.get(user=invited_profile)
+                user_exists = True
+            except (CustomUser.DoesNotExist, Profile.DoesNotExist, PaymentProfile.DoesNotExist):
+                user_exists = False
         
         if not user_exists:
-            if not force_external:
+            # We cannot send external invites if we don't have an email address
+            if not force_external or not invited_email:
+                 err_msg = 'User not found. Do you want to send an invitation to their email address?' if invited_email else 'Username not found.'
                  return Response({
-                     'error': 'User not found',
-                     'requires_confirmation': True,
-                     'message': 'User does not exist. Do you want to send an invitation to their email address?'
+                     'error': 'User not found' if invited_email else 'Username not found',
+                     'requires_confirmation': True if invited_email else False,
+                     'message': err_msg
                  }, status=status.HTTP_404_NOT_FOUND)
             
             # Create external invitation
@@ -576,12 +740,299 @@ class PaymentGroupsViewSet(ModelViewSet):
 
         return Response(GroupInvitationSerializer(invitation).data, status=status.HTTP_201_CREATED)
     
+    @action(detail=True, methods=['patch'], url_path='update_group')
+    def update_group(self, request, pk=None):
+        """Update group name, description, or cover photo."""
+        group = self.get_object()
+        payment_profile = get_or_create_payment_profile(request.user)
+        if not payment_profile:
+            return Response({'error': 'Payment profile not found'}, status=status.HTTP_400_BAD_REQUEST)
+        
+        # Only creator or admin can update
+        is_creator = group.creator == payment_profile
+        is_admin = PaymentGroupMember.objects.filter(
+            payment_group=group, payment_profile=payment_profile, is_admin=True
+        ).exists()
+        if not is_creator and not is_admin:
+            return Response({'error': 'Only group creator or admin can update the group'}, status=status.HTTP_403_FORBIDDEN)
+        
+        # Update allowed fields
+        if 'name' in request.data:
+            group.name = request.data['name']
+        if 'description' in request.data:
+            group.description = request.data['description']
+        if 'cover_photo' in request.FILES:
+            group.cover_photo = request.FILES['cover_photo']
+        
+        group.save()
+        serializer = self.get_serializer(group)
+        return Response(serializer.data)
+
     @action(detail=False, methods=['get'])
     def my_groups(self, request):
         """Get user's groups"""
         groups = self.get_queryset()
         serializer = self.get_serializer(groups, many=True)
         return Response(serializer.data)
+
+    @action(detail=True, methods=['post'])
+    def group_checkout(self, request, pk=None):
+        """Initiate group checkout for unified cart."""
+        group = self.get_object()
+        user = request.user
+        payment_profile = get_or_create_payment_profile(user)
+        if not payment_profile:
+             return Response({'error': 'Could not create payment profile'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+             
+        # Check if member
+        try:
+            member = PaymentGroupMember.objects.get(payment_group=group, payment_profile=payment_profile)
+        except PaymentGroupMember.DoesNotExist:
+            return Response({'error': 'Not a member of this group'}, status=status.HTTP_403_FORBIDDEN)
+            
+        data = request.data
+        amount = Decimal(str(data.get('amount', 0)))
+        items_data = data.get('items', [])
+        
+        # If amount > 500 or group requires strict approval
+        requires_approval = group.requires_approval or (amount > 500)
+        
+        if requires_approval:
+            checkout_req = GroupCheckoutRequest.objects.create(
+                group=group,
+                initiator=payment_profile,
+                amount=amount,
+                items_payload=items_data
+            )
+            # Auto-approve by initiator
+            checkout_req.approvals.add(payment_profile)
+            
+            # Check if this 1 approval is enough (e.g. 1-member group)
+            total_members = group.members.count()
+            if checkout_req.approvals.count() >= total_members:
+                success, error_or_order = self._execute_group_checkout(group, payment_profile, amount, items_data, user)
+                if success:
+                    checkout_req.status = 'approved'
+                    checkout_req.save()
+                    return Response({
+                        'success': True, 
+                        'message': 'Group checkout completed successfully',
+                        'order_id': error_or_order
+                    })
+                else:
+                    checkout_req.status = 'failed'
+                    checkout_req.save()
+                    return Response({'error': error_or_order}, status=status.HTTP_400_BAD_REQUEST)
+
+            return Response({
+                'success': True, 
+                'approval_pending': True,
+                'checkout_request_id': checkout_req.id,
+                'message': 'Group checkout requires member approval.'
+            })
+            
+        success, error_or_order = self._execute_group_checkout(group, payment_profile, amount, items_data, user)
+        if success:
+            return Response({
+                'success': True, 
+                'message': 'Group checkout completed successfully',
+                'order_id': error_or_order
+            })
+        else:
+            return Response({'error': error_or_order}, status=status.HTTP_400_BAD_REQUEST)
+
+    def _execute_group_checkout(self, group, payment_profile, amount, items_data, user):
+        # Process directly from group current_amount
+        if group.current_amount < amount:
+            return False, 'Insufficient group funds. Members need to contribute.'
+            
+        # Deduct from group
+        group.current_amount -= amount
+        group.save()
+        
+        # Log group purchase
+        from Payment.models import TransactionToken, Order, OrderItem, Product
+        from Authentication.models import Profile
+        
+        TransactionToken.objects.create(
+            payment_profile=payment_profile,
+            amount=amount,
+            transaction_type='purchase',
+            pay_from='group_wallet',
+            payment_option='group_wallet',
+            description=f'Group checkout for {group.name}',
+            payment_group=group
+        )
+        
+        try:
+            profile = Profile.objects.get(user=user)
+        except Profile.DoesNotExist:
+            return False, 'Profile not found'
+            
+        # Determine primary order type from the items
+        item_types = set(item.get('type', 'product') for item in items_data)
+        if 'service' in item_types:
+            order_type = 'service_appointment'
+        elif 'booking' in item_types or 'room' in item_types:
+            order_type = 'hotel_booking'
+        else:
+            order_type = 'product'
+        
+        order = Order.objects.create(
+            buyer=profile,
+            order_type=order_type,
+            delivery_mode='pickup',
+            payment_type='group',
+            total_amount=amount,
+            status='confirmed',
+            notes=f'Group checkout via {group.name}',
+        )
+        
+        # Create individual order items
+        for item in items_data:
+            product = None
+            item_type = item.get('type', 'product')
+            item_id = item.get('id')
+            
+            # Try to link product FK for product-type items
+            if item_type == 'product' and item_id:
+                try:
+                    product = Product.objects.get(id=item_id)
+                except (Product.DoesNotExist, ValueError):
+                    pass
+            
+            elif item_type == 'funding' and item_id:
+                from Funding.models import Business, CapitalVenture
+                from django.contrib.contenttypes.models import ContentType
+                from Payment.models import PaymentGroups
+                from decimal import Decimal
+                
+                # Update the target Kitty and Charity stats if applicable
+                try:
+                    business = Business.objects.filter(id=item_id).first()
+                    qty = int(item.get('qty', 1))
+                    item_total = Decimal(str(float(item.get('price', 0)) * qty))
+                    if business:
+                        ct = ContentType.objects.get_for_model(Business)
+                        kitty = PaymentGroups.objects.filter(entity_content_type=ct, entity_object_id=str(business.id), group_type='kitty').first()
+                        if kitty:
+                            kitty.current_amount += item_total
+                            kitty.save()
+                        if business.is_charity:
+                            business.charity_raised += item_total
+                            business.save()
+                    else:
+                        venture = CapitalVenture.objects.filter(id=item_id).first()
+                        if venture:
+                            ct = ContentType.objects.get_for_model(CapitalVenture)
+                            kitty = PaymentGroups.objects.filter(entity_content_type=ct, entity_object_id=str(venture.id), group_type='kitty').first()
+                            if kitty:
+                                kitty.current_amount += item_total
+                                kitty.save()
+                except Exception as e:
+                    import logging
+                    logging.getLogger(__name__).error(f"Failed to process funding item: {e}")
+            
+            from decimal import Decimal
+            OrderItem.objects.create(
+                order=order,
+                product=product,
+                name=item.get('name', 'Item'),
+                quantity=item.get('qty', 1),
+                unit_price=Decimal(str(item.get('price', 0))),
+                item_type=item_type,
+                metadata=item.get('metadata', {})
+            )
+        
+        return True, str(order.id)
+
+    @action(detail=True, methods=['get'])
+    def checkout_requests(self, request, pk=None):
+        """Fetch all checkout requests for a specific group."""
+        group = self.get_object()
+        
+        # Verify membership or creator
+        payment_profile = get_or_create_payment_profile(request.user)
+        if not payment_profile:
+            return Response({'error': 'Payment profile not found'}, status=status.HTTP_400_BAD_REQUEST)
+
+        is_creator = group.creator == payment_profile
+        is_member = PaymentGroupMember.objects.filter(payment_group=group, payment_profile=payment_profile).exists()
+        if not is_creator and not is_member:
+            return Response({'error': 'Not a member of this group'}, status=status.HTTP_403_FORBIDDEN)
+            
+        requests = GroupCheckoutRequest.objects.filter(group=group).order_by('-created_at')
+        serializer = GroupCheckoutRequestSerializer(requests, many=True, context={'request': request})
+        return Response(serializer.data)
+    
+    @action(detail=True, methods=['post'], url_path=r'checkout_requests/(?P<request_id>\d+)/(?P<action_type>approve|reject)')
+    def review_checkout_request(self, request, pk=None, request_id=None, action_type=None):
+        group = self.get_object()
+        user = request.user
+        payment_profile = get_or_create_payment_profile(user)
+        if not payment_profile:
+             return Response({'error': 'Payment profile not found'}, status=status.HTTP_400_BAD_REQUEST)
+             
+        is_creator = group.creator == payment_profile
+        is_member = PaymentGroupMember.objects.filter(payment_group=group, payment_profile=payment_profile).exists()
+        if not is_creator and not is_member:
+            return Response({'error': 'Not a member of this group'}, status=status.HTTP_403_FORBIDDEN)
+
+        try:
+            checkout_req = GroupCheckoutRequest.objects.get(id=request_id, group=group)
+        except GroupCheckoutRequest.DoesNotExist:
+            return Response({'error': 'Checkout request not found'}, status=status.HTTP_404_NOT_FOUND)
+
+        if checkout_req.status != 'pending':
+            return Response({'error': f'Request is already {checkout_req.status}'}, status=status.HTTP_400_BAD_REQUEST)
+
+        if action_type == 'approve':
+            checkout_req.approvals.add(payment_profile)
+            checkout_req.rejections.remove(payment_profile)
+        elif action_type == 'reject':
+            checkout_req.rejections.add(payment_profile)
+            checkout_req.approvals.remove(payment_profile)
+            
+        total_members = group.members.count()
+        if checkout_req.approvals.count() >= total_members:
+            # Need to get user object of initiator, handling edge cases
+            initiator_user = None
+            if checkout_req.initiator:
+                from Authentication.models import CustomUser
+                try:
+                    initiator_user = checkout_req.initiator.user.user
+                except AttributeError:
+                    initiator_user = user
+            else:
+                initiator_user = user
+
+            success, error_or_order = self._execute_group_checkout(
+                group, 
+                checkout_req.initiator or payment_profile, 
+                checkout_req.amount, 
+                checkout_req.items_payload, 
+                initiator_user
+            )
+            if success:
+                checkout_req.status = 'approved'
+                checkout_req.save()
+                return Response({'success': True, 'message': 'Checkout approved and executed successfully!'})
+            else:
+                checkout_req.status = 'failed'
+                checkout_req.save()
+                return Response({'error': error_or_order}, status=status.HTTP_400_BAD_REQUEST)
+        elif checkout_req.rejections.count() > 0:
+            checkout_req.status = 'rejected'
+            checkout_req.save()
+            return Response({'success': True, 'message': 'Checkout request rejected.'})
+            
+        return Response({
+            'success': True, 
+            'message': f'Successfully {action_type}d request.',
+            'status': checkout_req.status,
+            'approvals': checkout_req.approvals.count(),
+            'total_members': total_members
+        })
 
     # ── Kitty-specific endpoints ──────────────────────────────────
 
@@ -649,10 +1100,9 @@ class PaymentGroupsViewSet(ModelViewSet):
         # Create audit transaction
         tx = TransactionToken.objects.create(
             payment_profile=payment_profile,
-            transaction_code=f'kitty_wd_{uuid.uuid4().hex[:12]}',
             amount=amount,
             transaction_type='withdrawal',
-            notes=f'Kitty withdrawal from: {kitty.name}'
+            description=f'Kitty withdrawal from: {kitty.name}'
         )
 
         TransactionHistory.objects.create(
@@ -1685,6 +2135,30 @@ class OrderViewSet(ModelViewSet):
             return CreateOrderSerializer
         return OrderSerializer
     
+    @action(detail=False, methods=['get'])
+    def my_orders(self, request):
+        """Get current user's orders + group orders where user is a member."""
+        user = request.user
+        if not user.is_authenticated:
+            return Response([])
+            
+        try:
+            profile = Profile.objects.get(user=user)
+            from django.db.models import Q
+            try:
+                payment_profile = PaymentProfile.objects.get(user=profile)
+                orders = Order.objects.filter(
+                    Q(buyer=profile) | 
+                    Q(payment_group__members__payment_profile=payment_profile)
+                ).distinct().order_by('-created_at')
+            except PaymentProfile.DoesNotExist:
+                orders = Order.objects.filter(buyer=profile).order_by('-created_at')
+                
+            serializer = OrderSerializer(orders, many=True)
+            return Response(serializer.data)
+        except Profile.DoesNotExist:
+            return Response([])
+    
     @db_transaction.atomic
     def create(self, request, *args, **kwargs):
         """Create a new order with items."""
@@ -1730,25 +2204,52 @@ class OrderViewSet(ModelViewSet):
             menu_item = None
             unit_price = 0
             
-            if 'product_id' in item_data:
+            item_type = item_data.get('type', 'product')
+            item_id = item_data.get('id')
+            
+            if item_type == 'product' and item_id:
                 try:
-                    product = Product.objects.get(id=item_data['product_id'])
+                    product = Product.objects.get(id=item_id)
                     unit_price = float(product.price)
                 except Product.DoesNotExist:
-                    pass
+                    unit_price = float(item_data.get('price', 0))
             
-            if 'menu_item_id' in item_data:
+            elif item_type == 'funding' and item_id:
+                unit_price = float(item_data.get('price', 0))
+                # Update the target Kitty and Charity stats if applicable
                 try:
-                    menu_item = MenuItem.objects.get(id=item_data['menu_item_id'])
-                    unit_price = float(menu_item.price)
-                except MenuItem.DoesNotExist:
-                    pass
+                    business = Business.objects.filter(id=item_id).first()
+                    qty = int(item_data.get('quantity', 1))
+                    item_total = Decimal(str(unit_price * qty))
+                    if business:
+                        ct = ContentType.objects.get_for_model(Business)
+                        kitty = PaymentGroups.objects.filter(entity_content_type=ct, entity_object_id=str(business.id), group_type='kitty').first()
+                        if kitty:
+                            kitty.current_amount += item_total
+                            kitty.save()
+                        if business.is_charity:
+                            business.charity_raised += item_total
+                            business.save()
+                    else:
+                        venture = CapitalVenture.objects.filter(id=item_id).first()
+                        if venture:
+                            ct = ContentType.objects.get_for_model(CapitalVenture)
+                            kitty = PaymentGroups.objects.filter(entity_content_type=ct, entity_object_id=str(venture.id), group_type='kitty').first()
+                            if kitty:
+                                kitty.current_amount += item_total
+                                kitty.save()
+                except Exception as e:
+                    import logging
+                    logging.getLogger(__name__).error(f"Failed to process funding item: {e}")
+            else:
+                unit_price = float(item_data.get('price', 0))
             
-            qty = int(item_data.get('quantity', 1))
+            qty = int(item_data.get('quantity', item_data.get('qty', 1)))
             order_item = OrderItem.objects.create(
                 order=order,
                 product=product,
                 menu_item=menu_item,
+                name=item_data.get('name', ''),
                 quantity=qty,
                 unit_price=unit_price
             )
@@ -1785,6 +2286,16 @@ class OrderViewSet(ModelViewSet):
                 return Response({'error': 'Insufficient balance'}, status=status.HTTP_400_BAD_REQUEST)
             payment_profile.comrade_balance -= total
             payment_profile.save()
+            
+            # Create a TransactionToken for the purchase
+            TransactionToken.objects.create(
+                payment_profile=payment_profile,
+                amount=Decimal(str(total)),
+                transaction_type='purchase',
+                pay_from='wallet',
+                payment_option='comrade_balance',
+                description='Online purchase order'
+            )
         
         order.status = 'confirmed'
         order.save()
@@ -1833,12 +2344,7 @@ class OrderViewSet(ModelViewSet):
             'offline_orders': orders.filter(sales_channel__in=['in_store', 'pop_up']).count(),
         })
     
-    @action(detail=False, methods=['get'])
-    def my_orders(self, request):
-        """Get current user's orders."""
-        orders = self.get_queryset()
-        serializer = OrderSerializer(orders, many=True)
-        return Response(serializer.data)
+
 
 
 class ReviewViewSet(ModelViewSet):
@@ -2124,3 +2630,500 @@ class MLDashboardView(views.APIView):
                 "pipeline_logs": pipeline_logs
             }
         })
+
+
+# ============================================================================
+# GROUP DISCOURSE & VOTING VIEWSETS
+# ============================================================================
+
+class GroupJoinRequestViewSet(ModelViewSet):
+    """Public discourse for joining payment groups — post requests, track approvals."""
+    serializer_class = GroupJoinRequestSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        user = self.request.user
+        payment_profile = get_or_create_payment_profile(user)
+        if not payment_profile:
+            return GroupJoinRequest.objects.none()
+        # Show: requests the user made, or requests for groups the user admins
+        admin_groups = PaymentGroups.objects.filter(
+            Q(creator=payment_profile) |
+            Q(members__payment_profile=payment_profile, members__is_admin=True)
+        ).distinct()
+        return GroupJoinRequest.objects.filter(
+            Q(requester=payment_profile) | Q(group__in=admin_groups)
+        ).distinct().order_by('-created_at')
+
+    def perform_create(self, serializer):
+        user = self.request.user
+        payment_profile = get_or_create_payment_profile(user)
+        if not payment_profile:
+            raise serializers.ValidationError("Payment profile not found")
+        
+        # Determine initial status based on entry fee
+        group_id = self.request.data.get('group')
+        group = PaymentGroups.objects.get(id=group_id) if group_id else None
+        
+        if group and group.entry_fee_required and group.entry_fee_amount > 0:
+            serializer.save(requester=payment_profile, status='pending_payment')
+        else:
+            serializer.save(requester=payment_profile, status='pending')
+
+    @action(detail=False, methods=['get'])
+    def public_groups(self, request):
+        """List all public groups available for joining."""
+        user = request.user
+        payment_profile = get_or_create_payment_profile(user)
+        groups = PaymentGroups.objects.filter(
+            is_public=True, is_active=True, is_terminated=False
+        ).exclude(group_type='kitty')
+        if payment_profile:
+            groups = groups.exclude(members__payment_profile=payment_profile)
+        serializer = PaymentGroupsSerializer(groups, many=True, context={'request': request})
+        return Response(serializer.data)
+
+    @action(detail=True, methods=['post'])
+    def approve(self, request, pk=None):
+        """Approve a join request (admin only)."""
+        join_request = self.get_object()
+        user = request.user
+        payment_profile = get_or_create_payment_profile(user)
+        if not payment_profile:
+            return Response({'error': 'Payment profile not found'}, status=status.HTTP_400_BAD_REQUEST)
+        # Check admin status
+        group = join_request.group
+        is_admin = (
+            group.creator == payment_profile or
+            PaymentGroupMember.objects.filter(
+                payment_group=group, payment_profile=payment_profile, is_admin=True
+            ).exists()
+        )
+        if not is_admin:
+            return Response({'error': 'Only group admins can approve requests'}, status=status.HTTP_403_FORBIDDEN)
+        # Approve and add member
+        join_request.status = 'approved'
+        join_request.reviewed_by = payment_profile
+        join_request.review_notes = request.data.get('notes', '')
+        join_request.save()
+        # Add requester to group
+        PaymentGroupMember.objects.get_or_create(
+            payment_group=group,
+            payment_profile=join_request.requester
+        )
+        # Also add to linked room if exists
+        if group.linked_room and join_request.requester.user:
+            group.linked_room.members.add(join_request.requester.user.user)
+        return Response(GroupJoinRequestSerializer(join_request, context={'request': request}).data)
+
+    @action(detail=True, methods=['post'])
+    def reject(self, request, pk=None):
+        """Reject a join request (admin only)."""
+        join_request = self.get_object()
+        user = request.user
+        payment_profile = get_or_create_payment_profile(user)
+        if not payment_profile:
+            return Response({'error': 'Payment profile not found'}, status=status.HTTP_400_BAD_REQUEST)
+        group = join_request.group
+        is_admin = (
+            group.creator == payment_profile or
+            PaymentGroupMember.objects.filter(
+                payment_group=group, payment_profile=payment_profile, is_admin=True
+            ).exists()
+        )
+        if not is_admin:
+            return Response({'error': 'Only group admins can reject requests'}, status=status.HTTP_403_FORBIDDEN)
+        join_request.status = 'rejected'
+        join_request.reviewed_by = payment_profile
+        join_request.review_notes = request.data.get('notes', '')
+        join_request.save()
+        return Response(GroupJoinRequestSerializer(join_request, context={'request': request}).data)
+
+    @action(detail=True, methods=['post'])
+    def withdraw(self, request, pk=None):
+        """Withdraw own join request."""
+        join_request = self.get_object()
+        user = request.user
+        payment_profile = get_or_create_payment_profile(user)
+        if join_request.requester != payment_profile:
+            return Response({'error': 'Not your request'}, status=status.HTTP_403_FORBIDDEN)
+        join_request.status = 'withdrawn'
+        join_request.save()
+        return Response(GroupJoinRequestSerializer(join_request, context={'request': request}).data)
+
+
+class GroupVoteViewSet(ModelViewSet):
+    """Voting system for group investment/savings/withdrawal decisions."""
+    serializer_class = GroupVoteSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        user = self.request.user
+        payment_profile = get_or_create_payment_profile(user)
+        if not payment_profile:
+            return GroupVote.objects.none()
+        my_groups = PaymentGroups.objects.filter(
+            members__payment_profile=payment_profile
+        ).distinct()
+        return GroupVote.objects.filter(group__in=my_groups).order_by('-created_at')
+
+    def perform_create(self, serializer):
+        user = self.request.user
+        payment_profile = get_or_create_payment_profile(user)
+        if not payment_profile:
+            raise serializers.ValidationError("Payment profile not found")
+        serializer.save(created_by=payment_profile)
+
+    @action(detail=True, methods=['post'])
+    def cast_vote(self, request, pk=None):
+        """Cast a vote (for/against/abstain)."""
+        vote_obj = self.get_object()
+        user = request.user
+        payment_profile = get_or_create_payment_profile(user)
+        if not payment_profile:
+            return Response({'error': 'Payment profile not found'}, status=status.HTTP_400_BAD_REQUEST)
+        # Check membership
+        if not PaymentGroupMember.objects.filter(
+            payment_group=vote_obj.group, payment_profile=payment_profile
+        ).exists():
+            return Response({'error': 'Not a group member'}, status=status.HTTP_403_FORBIDDEN)
+        vote_choice = request.data.get('vote', '')  # 'for', 'against', 'abstain'
+        if vote_choice not in ('for', 'against', 'abstain'):
+            return Response({'error': 'Vote must be: for, against, or abstain'}, status=status.HTTP_400_BAD_REQUEST)
+        # Remove previous votes
+        vote_obj.votes_for.remove(payment_profile)
+        vote_obj.votes_against.remove(payment_profile)
+        vote_obj.votes_abstain.remove(payment_profile)
+        # Cast new vote
+        if vote_choice == 'for':
+            vote_obj.votes_for.add(payment_profile)
+        elif vote_choice == 'against':
+            vote_obj.votes_against.add(payment_profile)
+        else:
+            vote_obj.votes_abstain.add(payment_profile)
+        return Response(GroupVoteSerializer(vote_obj, context={'request': request}).data)
+
+    @action(detail=False, methods=['get'])
+    def by_group(self, request):
+        """Get votes for a specific group."""
+        group_id = request.query_params.get('group_id')
+        if not group_id:
+            return Response({'error': 'group_id is required'}, status=status.HTTP_400_BAD_REQUEST)
+        votes = self.get_queryset().filter(group_id=group_id)
+        serializer = self.get_serializer(votes, many=True)
+        return Response(serializer.data)
+
+
+class GroupPortfolioView(APIView):
+    """Portfolio analytics for a payment group's linked room."""
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, group_id):
+        payment_profile = get_or_create_payment_profile(request.user)
+        if not payment_profile:
+            return Response({'error': 'Payment profile not found'}, status=status.HTTP_400_BAD_REQUEST)
+        try:
+            group = PaymentGroups.objects.get(pk=group_id)
+        except PaymentGroups.DoesNotExist:
+            return Response({'error': 'Group not found'}, status=status.HTTP_404_NOT_FOUND)
+        # Build portfolio analytics
+        members = group.members.all()
+        contributions = Contribution.objects.filter(payment_group=group)
+        total_contributed = contributions.aggregate(total=Sum('amount'))['total'] or 0
+        analytics = {
+            'group_name': group.name,
+            'total_balance': float(group.current_amount),
+            'target_amount': float(group.target_amount or 0),
+            'total_contributed': float(total_contributed),
+            'member_count': members.count(),
+            'linked_room_id': group.linked_room_id,
+            'contributions_by_member': [],
+            'recent_votes': [],
+        }
+        # Per-member contributions
+        for m in members:
+            analytics['contributions_by_member'].append({
+                'name': f"{m.payment_profile.user.user.first_name} {m.payment_profile.user.user.last_name}" if not m.is_anonymous else m.anonymous_alias,
+                'amount': float(m.total_contributed),
+                'is_admin': m.is_admin,
+            })
+        # Recent votes
+        recent_votes = GroupVote.objects.filter(group=group).order_by('-created_at')[:5]
+        for v in recent_votes:
+            analytics['recent_votes'].append({
+                'title': v.title,
+                'type': v.vote_type,
+                'status': v.status,
+                'approval': v.approval_percentage,
+            })
+        return Response(analytics)
+
+
+# ==================== BILL PAYMENT VIEWSETS ====================
+
+class BillProviderViewSet(ModelViewSet):
+    serializer_class = BillProviderSerializer
+    permission_classes = [IsAuthenticated]
+    
+    def get_queryset(self):
+        qs = BillProvider.objects.filter(is_active=True)
+        category = self.request.query_params.get('category')
+        if category:
+            qs = qs.filter(category=category)
+        return qs
+
+
+class BillPaymentViewSet(ModelViewSet):
+    serializer_class = BillPaymentSerializer
+    permission_classes = [IsAuthenticated]
+    
+    def get_queryset(self):
+        profile = Profile.objects.get(user=self.request.user)
+        return BillPayment.objects.filter(user=profile)
+    
+    def perform_create(self, serializer):
+        profile = Profile.objects.get(user=self.request.user)
+        bill = serializer.save(user=profile, status='processing')
+        # Simulate processing — in production, integrate with actual bill payment API
+        try:
+            pp = PaymentProfile.objects.get(user=profile)
+            if pp.comrade_balance >= bill.total_amount:
+                pp.comrade_balance -= bill.total_amount
+                pp.save()
+                bill.status = 'completed'
+                bill.completed_at = timezone.now()
+                bill.save()
+            else:
+                bill.status = 'failed'
+                bill.error_message = 'Insufficient balance'
+                bill.save()
+        except PaymentProfile.DoesNotExist:
+            bill.status = 'failed'
+            bill.error_message = 'Payment profile not found'
+            bill.save()
+
+
+# ==================== LOAN VIEWSETS ====================
+
+class LoanProductViewSet(ModelViewSet):
+    serializer_class = LoanProductSerializer
+    permission_classes = [IsAuthenticated]
+    
+    def get_queryset(self):
+        qs = LoanProduct.objects.filter(is_active=True)
+        is_group = self.request.query_params.get('group')
+        if is_group:
+            qs = qs.filter(is_group_loan=is_group.lower() == 'true')
+        return qs
+
+
+class CreditScoreViewSet(ModelViewSet):
+    serializer_class = CreditScoreSerializer
+    permission_classes = [IsAuthenticated]
+    http_method_names = ['get']
+    
+    def get_queryset(self):
+        profile = Profile.objects.get(user=self.request.user)
+        return CreditScore.objects.filter(user=profile)
+    
+    @action(detail=False, methods=['get'])
+    def my_score(self, request):
+        profile = Profile.objects.get(user=request.user)
+        score, created = CreditScore.objects.get_or_create(user=profile)
+        if created:
+            # Compute initial score based on platform activity
+            import random
+            base = 300
+            savings = random.randint(20, 80)
+            repayment = random.randint(30, 90)
+            group_s = random.randint(10, 60)
+            txn = random.randint(20, 70)
+            tenure = random.randint(5, 40)
+            total = base + savings + repayment + group_s + txn + tenure
+            risk = 'very_low' if total > 700 else 'low' if total > 600 else 'moderate' if total > 450 else 'high' if total > 300 else 'very_high'
+            score.score = min(total, 900)
+            score.risk_level = risk
+            score.savings_score = savings
+            score.repayment_score = repayment
+            score.group_score = group_s
+            score.transaction_score = txn
+            score.tenure_score = tenure
+            score.factors = {
+                'savings_consistency': f'{savings}%',
+                'repayment_history': f'{repayment}%',
+                'group_participation': f'{group_s}%',
+                'transaction_volume': f'{txn}%',
+                'platform_tenure': f'{tenure}%',
+            }
+            score.save()
+        return Response(CreditScoreSerializer(score).data)
+
+
+class LoanApplicationViewSet(ModelViewSet):
+    serializer_class = LoanApplicationSerializer
+    permission_classes = [IsAuthenticated]
+    
+    def get_queryset(self):
+        profile = Profile.objects.get(user=self.request.user)
+        return LoanApplication.objects.filter(user=profile)
+    
+    def perform_create(self, serializer):
+        profile = Profile.objects.get(user=self.request.user)
+        credit, _ = CreditScore.objects.get_or_create(user=profile)
+        loan = serializer.save(
+            user=profile,
+            status='pending',
+            credit_score_at_application=credit.score
+        )
+        # Auto-generate repayment schedule
+        from dateutil.relativedelta import relativedelta
+        from datetime import date
+        for i in range(1, loan.tenure_months + 1):
+            LoanRepayment.objects.create(
+                loan=loan,
+                installment_number=i,
+                amount_due=loan.monthly_payment,
+                due_date=date.today() + relativedelta(months=i),
+            )
+    
+    @action(detail=True, methods=['post'])
+    def approve(self, request, pk=None):
+        loan = self.get_object()
+        loan.status = 'approved'
+        loan.save()
+        return Response({'status': 'approved'})
+    
+    @action(detail=True, methods=['post'])
+    def disburse(self, request, pk=None):
+        loan = self.get_object()
+        if loan.status != 'approved':
+            return Response({'error': 'Loan must be approved first'}, status=status.HTTP_400_BAD_REQUEST)
+        loan.status = 'disbursed'
+        loan.disbursed_at = timezone.now()
+        loan.save()
+        # Credit user balance
+        try:
+            pp = PaymentProfile.objects.get(user=loan.user)
+            pp.comrade_balance += loan.amount - loan.processing_fee_amount
+            pp.save()
+        except PaymentProfile.DoesNotExist:
+            pass
+        return Response({'status': 'disbursed', 'amount': str(loan.amount)})
+
+
+# ==================== ESCROW VIEWSETS ====================
+
+class EscrowTransactionViewSet(ModelViewSet):
+    serializer_class = EscrowTransactionSerializer
+    permission_classes = [IsAuthenticated]
+    
+    def get_queryset(self):
+        profile = Profile.objects.get(user=self.request.user)
+        return EscrowTransaction.objects.filter(Q(buyer=profile) | Q(seller=profile))
+    
+    def perform_create(self, serializer):
+        profile = Profile.objects.get(user=self.request.user)
+        serializer.save(buyer=profile)
+    
+    @action(detail=True, methods=['post'])
+    def fund(self, request, pk=None):
+        escrow = self.get_object()
+        profile = Profile.objects.get(user=request.user)
+        if escrow.buyer != profile:
+            return Response({'error': 'Only buyer can fund'}, status=status.HTTP_403_FORBIDDEN)
+        try:
+            pp = PaymentProfile.objects.get(user=profile)
+            if pp.comrade_balance >= escrow.total_amount:
+                pp.comrade_balance -= escrow.total_amount
+                pp.save()
+                escrow.status = 'funded'
+                escrow.funded_at = timezone.now()
+                escrow.save()
+                return Response({'status': 'funded'})
+            return Response({'error': 'Insufficient balance'}, status=status.HTTP_400_BAD_REQUEST)
+        except PaymentProfile.DoesNotExist:
+            return Response({'error': 'Payment profile not found'}, status=status.HTTP_404_NOT_FOUND)
+    
+    @action(detail=True, methods=['post'])
+    def deliver(self, request, pk=None):
+        escrow = self.get_object()
+        escrow.status = 'delivered'
+        escrow.delivered_at = timezone.now()
+        escrow.delivery_proof = request.data.get('proof', '')
+        escrow.save()
+        return Response({'status': 'delivered'})
+    
+    @action(detail=True, methods=['post'])
+    def release(self, request, pk=None):
+        escrow = self.get_object()
+        profile = Profile.objects.get(user=request.user)
+        if escrow.buyer != profile:
+            return Response({'error': 'Only buyer can release'}, status=status.HTTP_403_FORBIDDEN)
+        # Release funds to seller
+        try:
+            seller_pp = PaymentProfile.objects.get(user=escrow.seller)
+            seller_pp.comrade_balance += escrow.amount
+            seller_pp.save()
+            escrow.status = 'released'
+            escrow.released_at = timezone.now()
+            escrow.save()
+            return Response({'status': 'released'})
+        except PaymentProfile.DoesNotExist:
+            return Response({'error': 'Seller profile not found'}, status=status.HTTP_404_NOT_FOUND)
+    
+    @action(detail=True, methods=['post'])
+    def dispute(self, request, pk=None):
+        escrow = self.get_object()
+        profile = Profile.objects.get(user=request.user)
+        EscrowDispute.objects.create(
+            escrow=escrow,
+            raised_by=profile,
+            reason=request.data.get('reason', ''),
+            evidence=request.data.get('evidence', []),
+        )
+        escrow.status = 'disputed'
+        escrow.save()
+        return Response({'status': 'disputed'})
+
+
+# ==================== INSURANCE VIEWSETS ====================
+
+class InsuranceProductViewSet(ModelViewSet):
+    serializer_class = InsuranceProductSerializer
+    permission_classes = [IsAuthenticated]
+    
+    def get_queryset(self):
+        qs = InsuranceProduct.objects.filter(is_active=True)
+        category = self.request.query_params.get('category')
+        if category:
+            qs = qs.filter(category=category)
+        group = self.request.query_params.get('group')
+        if group:
+            qs = qs.filter(is_group_product=group.lower() == 'true')
+        return qs
+
+
+class InsurancePolicyViewSet(ModelViewSet):
+    serializer_class = InsurancePolicySerializer
+    permission_classes = [IsAuthenticated]
+    
+    def get_queryset(self):
+        profile = Profile.objects.get(user=self.request.user)
+        return InsurancePolicy.objects.filter(user=profile)
+    
+    def perform_create(self, serializer):
+        profile = Profile.objects.get(user=self.request.user)
+        serializer.save(user=profile, status='active')
+
+
+class InsuranceClaimViewSet(ModelViewSet):
+    serializer_class = InsuranceClaimSerializer
+    permission_classes = [IsAuthenticated]
+    
+    def get_queryset(self):
+        profile = Profile.objects.get(user=self.request.user)
+        return InsuranceClaim.objects.filter(claimant=profile)
+    
+    def perform_create(self, serializer):
+        profile = Profile.objects.get(user=self.request.user)
+        serializer.save(claimant=profile)

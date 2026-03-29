@@ -3,11 +3,12 @@ Kenya Region Pricing Scrapers
 Platforms: Jumia KE, Kilimall, Copia, Jiji KE
 """
 
-from .base_scraper import BaseScraper
+from .base_scraper import BaseScraper, register_scraper
 import re
 import datetime
 import random
 
+@register_scraper
 class JumiaKEScraper(BaseScraper):
     def __init__(self):
         super().__init__("JumiaKE", "https://www.jumia.co.ke", delay_range=(2.0, 4.0))
@@ -102,6 +103,7 @@ class JumiaKEScraper(BaseScraper):
             page += 1
 
 
+@register_scraper
 class KilimallScraper(BaseScraper):
     def __init__(self):
         super().__init__("Kilimall", "https://www.kilimall.co.ke", delay_range=(3.0, 6.0))
@@ -170,6 +172,7 @@ class KilimallScraper(BaseScraper):
             page += 1
 
 
+@register_scraper
 class CopiaScraper(BaseScraper):
     def __init__(self):
         super().__init__("Copia", "https://copia.co.ke", delay_range=(3.0, 6.0))
@@ -222,6 +225,7 @@ class CopiaScraper(BaseScraper):
             page += 1
 
 
+@register_scraper
 class JijiKEScraper(BaseScraper):
     def __init__(self):
         super().__init__("JijiKE", "https://jiji.co.ke", delay_range=(4.0, 8.0))

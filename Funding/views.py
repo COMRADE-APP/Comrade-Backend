@@ -1,13 +1,14 @@
 from rest_framework import viewsets, permissions, status, filters
 from rest_framework.decorators import action
 from rest_framework.response import Response
+from rest_framework.views import APIView
 from django.db.models import Q
 from django_filters.rest_framework import DjangoFilterBackend
 
 from .models import (
     Business, FundingDocument, FundingRequest, InvestmentOpportunity,
     FundingResponse, FundingNegotiation, NegotiationMessage, FundingReaction,
-    CapitalVenture, VentureBid, InvestmentAgreement
+    CapitalVenture, VentureBid, InvestmentAgreement, InvestorProfile
 )
 from .serializers import (
     BusinessSerializer, BusinessCreateSerializer, 
@@ -15,7 +16,7 @@ from .serializers import (
     InvestmentOpportunitySerializer, FundingResponseSerializer,
     FundingNegotiationSerializer, NegotiationMessageSerializer,
     FundingReactionSerializer, CapitalVentureSerializer, VentureBidSerializer,
-    InvestmentAgreementSerializer
+    InvestmentAgreementSerializer, InvestorProfileSerializer
 )
 
 class IsFounderOrReadOnly(permissions.BasePermission):
@@ -551,3 +552,68 @@ class VentureBidViewSet(viewsets.ModelViewSet):
         serializer = VentureBidSerializer(bid)
         return Response(serializer.data)
 
+
+# ==============================================================================
+# INVESTOR PROFILE
+# ==============================================================================
+
+class InvestorProfileView(APIView):
+    """GET/POST/PATCH the current user's universal investor profile."""
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request):
+        try:
+            profile = InvestorProfile.objects.get(user=request.user)
+            return Response(InvestorProfileSerializer(profile).data)
+        except InvestorProfile.DoesNotExist:
+            return Response({'detail': 'No investor profile found.'}, status=status.HTTP_404_NOT_FOUND)
+
+    def post(self, request):
+        if InvestorProfile.objects.filter(user=request.user).exists():
+            return Response({'detail': 'Profile already exists. Use PATCH to update.'},
+                            status=status.HTTP_400_BAD_REQUEST)
+        serializer = InvestorProfileSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        serializer.save(user=request.user)
+        return Response(serializer.data, status=status.HTTP_201_CREATED)
+
+    def patch(self, request):
+        try:
+            profile = InvestorProfile.objects.get(user=request.user)
+        except InvestorProfile.DoesNotExist:
+            return Response({'detail': 'No investor profile found.'}, status=status.HTTP_404_NOT_FOUND)
+        serializer = InvestorProfileSerializer(profile, data=request.data, partial=True)
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+        return Response(serializer.data)
+
+
+class InvestmentHistoryView(APIView):
+    """GET the current user's investment/donation history from completed orders."""
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request):
+        from Payment.models import Order, OrderItem
+        # Get all orders with funding-type items for this user
+        orders = Order.objects.filter(
+            buyer__user=request.user,
+            items__item_type='funding'
+        ).distinct().order_by('-created_at')
+
+        history = []
+        for order in orders:
+            funding_items = order.items.filter(item_type='funding')
+            for item in funding_items:
+                history.append({
+                    'id': str(order.id),
+                    'date': order.created_at.isoformat(),
+                    'name': item.name,
+                    'amount': str(item.subtotal),
+                    'type': item.metadata.get('investment_type', 'equity') if item.metadata else 'equity',
+                    'status': order.status,
+                    'order_id': str(order.id),
+                    'is_donation': item.metadata.get('is_donation', False) if item.metadata else False,
+                    'gains': None,  # Placeholder for future gains tracking
+                })
+
+        return Response(history)

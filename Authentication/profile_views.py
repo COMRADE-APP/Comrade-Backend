@@ -74,8 +74,16 @@ class UserProfileDetailView(APIView):
     """Get a specific user's profile (respects privacy settings)"""
     permission_classes = [permissions.IsAuthenticatedOrReadOnly]
     
-    def get(self, request, user_id):
-        user = get_object_or_404(CustomUser, id=user_id, account_status='active')
+    def get(self, request, user_identifier):
+        user_identifier_str = str(user_identifier)
+        if user_identifier_str.startswith('@'):
+            user_identifier_str = user_identifier_str[1:]
+        
+        if user_identifier_str.isdigit():
+            user = get_object_or_404(CustomUser, id=user_identifier_str, account_status='active')
+        else:
+            user = get_object_or_404(CustomUser, username__iexact=user_identifier_str, account_status='active')
+            
         profile, created = UserProfile.objects.get_or_create(user=user)
         
         # Create profile view notification (once every 24h per viewer)
@@ -507,21 +515,21 @@ class ArchivedUserViewSet(viewsets.ReadOnlyModelViewSet):
 
 
 class UserSearchView(APIView):
-    """Search for users by name or email (for messaging, following, etc.)"""
+    """Search for users by name, username, or email (for messaging, following, etc.)"""
     permission_classes = [permissions.IsAuthenticated]
     
     def get(self, request):
         query = request.query_params.get('q', '').strip()
-        if len(query) < 2:
+        if len(query) < 1:
             return Response([])
         
-        from django.db.models import Q, Value
-        from django.db.models.functions import Concat
+        from django.db.models import Q
         
         users = CustomUser.objects.filter(
             Q(first_name__icontains=query) |
             Q(last_name__icontains=query) |
-            Q(email__icontains=query)
+            Q(email__icontains=query) |
+            Q(username__icontains=query)
         ).exclude(id=request.user.id).filter(is_active=True)[:20]
         
         results = []
@@ -539,6 +547,7 @@ class UserSearchView(APIView):
                 'last_name': u.last_name,
                 'full_name': f"{u.first_name or ''} {u.last_name or ''}".strip() or u.email,
                 'email': u.email,
+                'username': u.username or '',
                 'avatar_url': avatar_url,
                 'user_type': u.user_type
             })

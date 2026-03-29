@@ -14,10 +14,16 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 load_dotenv(os.path.join(BASE_DIR, '.env'))
 
 # SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = os.getenv('SECRET_KEY', 'django-insecure-c+%9#v0&z&-av-84em1*d3aazv4$-v&z=8b1&93r%iw*0js+m=')
+# In production, SECRET_KEY MUST be set via environment variable.
+_secret = os.getenv('SECRET_KEY', '')
+if not _secret:
+    import warnings
+    warnings.warn('SECRET_KEY not set! Using insecure fallback for local dev only.', stacklevel=1)
+    _secret = 'django-insecure-LOCAL-DEV-ONLY-c+%9#v0&z&-av-84em1*d3aazv4$'
+SECRET_KEY = _secret
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = os.getenv('DEBUG', 'True') == 'True'
+DEBUG = os.getenv('DEBUG', 'False') == 'True'
 
 # Application definition
 INSTALLED_APPS = [
@@ -146,15 +152,28 @@ CORS_ALLOWED_ORIGIN_REGEXES = [
     r"^https?://localhost:8080$",
     r"^https?://localhost:5173$",
     r"^https?://localhost:3000$",
-    r"^https://.*\.vercel\.app$",
+    r"^https://comrade-frontend-ochre\.vercel\.app$",
     r"^https://qomrade\.onrender\.com$",
 ]
 
-# Security settings for production behind Render's reverse proxy
+# ── Security settings ───────────────────────────────────────────────────────
+# SSL / HTTPS
 SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
-SECURE_SSL_REDIRECT = os.getenv('SECURE_SSL_REDIRECT', 'False') == 'True'
+SECURE_SSL_REDIRECT = not DEBUG
 SESSION_COOKIE_SECURE = not DEBUG
 CSRF_COOKIE_SECURE = not DEBUG
+
+# HSTS — instruct browsers to only connect via HTTPS
+SECURE_HSTS_SECONDS = 0 if DEBUG else 31536000  # 1 year in production
+SECURE_HSTS_INCLUDE_SUBDOMAINS = not DEBUG
+SECURE_HSTS_PRELOAD = not DEBUG
+
+# Prevent MIME-type sniffing
+SECURE_CONTENT_TYPE_NOSNIFF = True
+
+# Request body size limits (prevent oversized uploads / DoS)
+DATA_UPLOAD_MAX_MEMORY_SIZE = 10 * 1024 * 1024   # 10 MB
+FILE_UPLOAD_MAX_MEMORY_SIZE = 10 * 1024 * 1024    # 10 MB
 
 CORS_ALLOW_CREDENTIALS = os.getenv("CORS_ALLOW_CREDENTIALS", "True") == "True"
 
@@ -244,8 +263,8 @@ REST_FRAMEWORK = {
 }
 
 SIMPLE_JWT = {
-    'ACCESS_TOKEN_LIFETIME': timedelta(days=30),
-    'REFRESH_TOKEN_LIFETIME': timedelta(days=30),
+    'ACCESS_TOKEN_LIFETIME': timedelta(minutes=15),
+    'REFRESH_TOKEN_LIFETIME': timedelta(days=7),
     'ROTATE_REFRESH_TOKENS': True,
     'BLACKLIST_AFTER_ROTATION': True,
     'AUTH_HEADER_TYPES': ('Bearer',),
@@ -350,7 +369,7 @@ SOCIALACCOUNT_ADAPTER = 'Authentication.adapters.MySocialAccountAdapter'
 ACCOUNT_USER_MODEL_USERNAME_FIELD = None
 ACCOUNT_LOGIN_METHODS = {'email'}  # New v0.50+ syntax
 ACCOUNT_SIGNUP_FIELDS = ['email*', 'password1*', 'password2*']  # New v0.50+ syntax
-ACCOUNT_EMAIL_VERIFICATION = 'optional'  # Can be 'mandatory' for production
+ACCOUNT_EMAIL_VERIFICATION = 'optional' if DEBUG else 'mandatory'
 ACCOUNT_UNIQUE_EMAIL = True
 ACCOUNT_EMAIL_SUBJECT_PREFIX = '[Qomrade] '
 
@@ -384,17 +403,12 @@ SITE_ID = 1
 ACCOUNT_DEFAULT_HTTP_PROTOCOL = 'http' if DEBUG else 'https'
 
 # These settings help with cross-origin requests
-ACCOUNT_EMAIL_VERIFICATION = 'optional'  # Set to 'mandatory' in production
+# ACCOUNT_EMAIL_VERIFICATION already set above (optional in dev, mandatory in prod)
 ACCOUNT_SESSION_REMEMBER = True
 
-# Cookie settings for development
-# CSRF_COOKIE_SAMESITE = 'Lax'
-# SESSION_COOKIE_SAMESITE = 'Lax'
-# CSRF_COOKIE_HTTPONLY = False  # Allows JS to read CSRF token
-# SESSION_COOKIE_HTTPONLY = True
-# CSRF_COOKIE_SECURE = False  # Set to True in production with HTTPS
-# SESSION_COOKIE_SECURE = False  # Set to True in production with HTTPS
-# CSRF_COOKIE_DOMAIN = None  # Use None for localhost
-# SESSION_COOKIE_DOMAIN = None  # Use None for localhost
-
+# Cookie SameSite policy — required for cross-origin httpOnly JWT cookies
+CSRF_COOKIE_SAMESITE = 'Lax'
+SESSION_COOKIE_SAMESITE = 'Lax'
+CSRF_COOKIE_HTTPONLY = False   # Allow JS to read CSRF token
+SESSION_COOKIE_HTTPONLY = True  # Session cookie is httpOnly
 

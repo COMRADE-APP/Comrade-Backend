@@ -3,7 +3,7 @@ North America Region Pricing Scrapers
 Platforms: Amazon US, Walmart, Target, BestBuy
 """
 
-from .base_scraper import BaseScraper
+from .base_scraper import BaseScraper, register_scraper
 from .africa_scrapers import generic_discover, generic_scrape
 
 class AmazonUSScraper(BaseScraper):

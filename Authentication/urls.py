@@ -69,9 +69,6 @@ urlpatterns = [
     # Django allauth URLs (includes social login URLs)
     path('', include('allauth.urls')),
     
-    # Router URLs
-    path('', include(router.urls)),
-    
     # Core Authentication
     path('register/', RegisterView.as_view(), name='register'),
     path('register-verify/', RegisterVerifyView.as_view(), name='register-verify'),
@@ -83,6 +80,9 @@ urlpatterns = [
     path('check-email/', CheckEmailView.as_view(), name='check-email'),
     path('me/', MeView.as_view(), name='me'),
     path('heartbeat/', HeartbeatView.as_view(), name='heartbeat'),
+    
+    # User Search (must be before router URLs to not be intercepted by users/<pk>/)
+    path('users/search/', UserSearchView.as_view(), name='user-search'),
     
     # 2FA/OTP Verification
     path('verify-2fa/', Verify2FAView.as_view(), name='verify-2fa'),
@@ -105,7 +105,7 @@ urlpatterns = [
     path('change-password/', ChangePasswordView.as_view(), name='change-password'),
     path('update-profile/', UpdateProfileView.as_view(), name='update-profile'),
     path('profile/', UserProfileView.as_view(), name='user-profile'),
-    path('profile/<int:user_id>/', UserProfileDetailView.as_view(), name='user-profile-detail'),
+    path('profile/<str:user_identifier>/', UserProfileDetailView.as_view(), name='user-profile-detail'),
     path('profile/avatar/', UploadAvatarView.as_view(), name='upload-avatar'),
     path('profile/cover/', UploadCoverView.as_view(), name='upload-cover'),
     path('profile-setup/', ProfileSetupView.as_view(), name='profile-setup'),
@@ -125,9 +125,6 @@ urlpatterns = [
     
     # User List (Admin)
     path('user-list/', UserListView.as_view(), name='user-list'),
-    
-    # User Search
-    path('users/search/', UserSearchView.as_view(), name='user-search'),
     
     # Role Change Requests
     path('role-change-request/', RoleChangeRequestView.as_view(), name='role-change-request'),
@@ -163,5 +160,8 @@ urlpatterns = [
     path('portal/institution/dashboard/', InstitutionPortalDashboardView.as_view(), name='institution-portal-dashboard'),
     path('portal/organisation/dashboard/', OrganisationPortalDashboardView.as_view(), name='organisation-portal-dashboard'),
     path('portal/partner/dashboard/', PartnerPortalDashboardView.as_view(), name='partner-portal-dashboard'),
+    
+    # Router URLs fallback
+    path('', include(router.urls)),
 ]
 

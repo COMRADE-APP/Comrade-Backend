@@ -3,7 +3,7 @@ South America Region Pricing Scrapers
 Platforms: MercadoLibre, Americanas, Linio, Falabella
 """
 
-from .base_scraper import BaseScraper
+from .base_scraper import BaseScraper, register_scraper
 from .africa_scrapers import generic_discover, generic_scrape
 
 class MercadoLibreScraper(BaseScraper):

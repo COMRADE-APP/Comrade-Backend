@@ -12,6 +12,10 @@ from django.conf import settings
 import stripe
 import json
 import re
+import hmac
+import hashlib
+import logging
+import requests as http_requests
 from Payment.models import (
     TransactionToken, TransactionHistory, PaymentProfile, PaymentLog,
     SavedPaymentMethod
@@ -27,6 +31,16 @@ from datetime import datetime
 
 # Configure Stripe
 stripe.api_key = getattr(settings, 'STRIPE_SECRET_KEY', '')
+
+logger = logging.getLogger(__name__)
+
+# Safaricom M-Pesa production IP ranges (for webhook IP whitelisting)
+MPESA_ALLOWED_IPS = [
+    '196.201.214.',   # Safaricom production
+    '196.201.213.',   # Safaricom production
+    '192.168.',       # Local dev / tunnel
+    '127.0.0.1',      # Localhost
+]
 
 
 # ============================================================================
@@ -506,10 +520,74 @@ class StripeWebhookView(APIView):
 
 
 class PayPalWebhookView(APIView):
-    """Handle PayPal webhooks"""
+    """Handle PayPal webhooks with signature verification"""
     permission_classes = []
     
+    def _verify_paypal_signature(self, request):
+        """Verify PayPal webhook signature using the PayPal API."""
+        webhook_id = getattr(settings, 'PAYPAL_WEBHOOK_ID', '')
+        if not webhook_id:
+            logger.warning('PAYPAL_WEBHOOK_ID not configured — skipping signature verification')
+            return True  # Allow in dev when webhook ID isn't set
+        
+        # PayPal sends these headers for verification
+        transmission_id = request.META.get('HTTP_PAYPAL_TRANSMISSION_ID', '')
+        timestamp = request.META.get('HTTP_PAYPAL_TRANSMISSION_TIME', '')
+        cert_url = request.META.get('HTTP_PAYPAL_CERT_URL', '')
+        auth_algo = request.META.get('HTTP_PAYPAL_AUTH_ALGO', '')
+        transmission_sig = request.META.get('HTTP_PAYPAL_TRANSMISSION_SIG', '')
+        
+        if not all([transmission_id, timestamp, cert_url, transmission_sig]):
+            logger.warning('PayPal webhook missing verification headers')
+            return False
+        
+        # Verify via PayPal's verification endpoint
+        try:
+            paypal_api_url = getattr(settings, 'PAYPAL_API_URL', 'https://api-m.sandbox.paypal.com')
+            client_id = getattr(settings, 'PAYPAL_CLIENT_ID', '')
+            client_secret = getattr(settings, 'PAYPAL_CLIENT_SECRET', '')
+            
+            # Get access token
+            auth_resp = http_requests.post(
+                f'{paypal_api_url}/v1/oauth2/token',
+                data={'grant_type': 'client_credentials'},
+                auth=(client_id, client_secret),
+                timeout=10
+            )
+            if auth_resp.status_code != 200:
+                logger.error('PayPal auth failed during webhook verification')
+                return False
+            
+            access_token = auth_resp.json().get('access_token')
+            
+            # Verify the webhook signature
+            verify_resp = http_requests.post(
+                f'{paypal_api_url}/v1/notifications/verify-webhook-signature',
+                json={
+                    'auth_algo': auth_algo,
+                    'cert_url': cert_url,
+                    'transmission_id': transmission_id,
+                    'transmission_sig': transmission_sig,
+                    'transmission_time': timestamp,
+                    'webhook_id': webhook_id,
+                    'webhook_event': request.data,
+                },
+                headers={'Authorization': f'Bearer {access_token}'},
+                timeout=10
+            )
+            
+            result = verify_resp.json()
+            return result.get('verification_status') == 'SUCCESS'
+        except Exception as e:
+            logger.error(f'PayPal webhook verification error: {e}')
+            return False
+    
     def post(self, request):
+        # Verify signature
+        if not self._verify_paypal_signature(request):
+            logger.warning('PayPal webhook signature verification failed')
+            return Response({'error': 'Invalid signature'}, status=status.HTTP_403_FORBIDDEN)
+        
         event_type = request.data.get('event_type', '')
         resource = request.data.get('resource', {})
         
@@ -530,10 +608,31 @@ class PayPalWebhookView(APIView):
 
 
 class MpesaCallbackView(APIView):
-    """Handle M-Pesa callback"""
+    """Handle M-Pesa callback with IP whitelist verification"""
     permission_classes = []
     
+    def _verify_mpesa_source(self, request):
+        """Verify the request comes from Safaricom's IP range."""
+        # Get the real IP (behind reverse proxy)
+        forwarded_for = request.META.get('HTTP_X_FORWARDED_FOR', '')
+        client_ip = forwarded_for.split(',')[0].strip() if forwarded_for else request.META.get('REMOTE_ADDR', '')
+        
+        # In DEBUG mode, allow all IPs for sandbox testing
+        if getattr(settings, 'DEBUG', False):
+            return True
+        
+        for allowed in MPESA_ALLOWED_IPS:
+            if client_ip.startswith(allowed):
+                return True
+        
+        logger.warning(f'M-Pesa callback from unauthorized IP: {client_ip}')
+        return False
+    
     def post(self, request):
+        # Verify source IP
+        if not self._verify_mpesa_source(request):
+            return Response({'ResultCode': 1, 'ResultDesc': 'Unauthorized'}, status=status.HTTP_403_FORBIDDEN)
+        
         body = request.data.get('Body', {})
         callback = body.get('stkCallback', {})
         result_code = callback.get('ResultCode', -1)
@@ -550,8 +649,9 @@ class MpesaCallbackView(APIView):
                     transaction_token=transaction,
                     status='completed',
                 )
+                logger.info(f'M-Pesa payment completed: {checkout_request_id}')
             except TransactionToken.DoesNotExist:
-                pass
+                logger.warning(f'M-Pesa callback for unknown checkout: {checkout_request_id}')
         
         return Response({
             'ResultCode': 0,
