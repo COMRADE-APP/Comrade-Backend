@@ -66,7 +66,7 @@ class CustomUserSerializer(serializers.ModelSerializer):
     class Meta:
         model = CustomUser
         fields = [
-            'id', 'email', 'first_name', 'last_name', 'other_names',
+            'id', 'email', 'first_name', 'last_name', 'other_names', 'username',
             'phone_number', 'user_type', 'is_active', 'is_staff', 'is_superuser',
             'date_of_birth', 'preferred_currency', 'preferred_language',
         ]
@@ -218,6 +218,7 @@ class UserProfileSerializer(serializers.ModelSerializer):
     last_name = serializers.CharField(source='user.last_name', read_only=True)
     other_names = serializers.CharField(source='user.other_names', read_only=True)
     user_type = serializers.CharField(source='user.user_type', read_only=True)
+    username = serializers.CharField(source='user.username', read_only=True)
     date_of_birth = serializers.DateField(source='user.date_of_birth', read_only=True)
     preferred_currency = serializers.CharField(source='user.preferred_currency', read_only=True)
     preferred_language = serializers.CharField(source='user.preferred_language', read_only=True)
@@ -234,7 +235,7 @@ class UserProfileSerializer(serializers.ModelSerializer):
         model = UserProfile
         fields = [
             'user_id', 'email', 'phone_number', 'first_name', 'last_name', 
-            'other_names', 'user_type', 'full_name', 'is_owner',
+            'other_names', 'user_type', 'username', 'full_name', 'is_owner',
             'date_of_birth', 'preferred_currency', 'preferred_language',
             'avatar', 'avatar_url', 'cover_image', 'cover_url',
             'bio', 'location', 'occupation', 'website', 'interests',
@@ -387,11 +388,12 @@ class UserProfileUpdateSerializer(serializers.ModelSerializer):
     first_name = serializers.CharField(write_only=True, required=False)
     last_name = serializers.CharField(write_only=True, required=False)
     other_names = serializers.CharField(write_only=True, required=False, allow_blank=True)
+    username = serializers.CharField(write_only=True, required=False)
     
     class Meta:
         model = UserProfile
         fields = [
-            'first_name', 'last_name', 'other_names',
+            'first_name', 'last_name', 'other_names', 'username',
             'bio', 'location', 'occupation', 'website', 'interests',
             'religion', 'hobbies', 'certifications', 'work_experience',
             'show_email', 'show_phone', 'allow_messages',
@@ -407,6 +409,8 @@ class UserProfileUpdateSerializer(serializers.ModelSerializer):
             user.last_name = validated_data.pop('last_name')
         if 'other_names' in validated_data:
             user.other_names = validated_data.pop('other_names')
+        if 'username' in validated_data:
+            user.username = validated_data.pop('username')
         user.save()
         
         # Update profile fields

@@ -131,3 +131,46 @@ def create_specialization_kitty(sender, instance, created, **kwargs):
         owner_user,
         target_amount=target,
     )
+
+
+# ──────────────────────────────────────────────
+# 7. Auto-create Room when PaymentGroup is created
+# ──────────────────────────────────────────────
+@receiver(post_save, sender='Payment.PaymentGroups')
+def auto_create_room_for_group(sender, instance, created, **kwargs):
+    """Auto-create a linked Room when a PaymentGroup is created (if auto_create_room=True)."""
+    if not created:
+        return
+    if not instance.auto_create_room or instance.linked_room:
+        return
+    # Skip kitties – they don't need rooms
+    if instance.group_type == 'kitty':
+        return
+    try:
+        from Rooms.models import Room
+
+        # Resolve the creator's CustomUser
+        creator_user = None
+        if instance.creator and instance.creator.user:
+            creator_user = instance.creator.user.user  # PaymentProfile -> Profile -> CustomUser
+
+        room = Room(
+            name=instance.name,
+            description=instance.description or f"Room for {instance.name} group",
+            created_by=creator_user,
+        )
+        room.save()
+
+        # Add creator as admin and member
+        if creator_user:
+            room.admins.add(creator_user)
+            room.members.add(creator_user)
+
+        # Link room to group (use update to avoid re-triggering signal)
+        from Payment.models import PaymentGroups as PG
+        PG.objects.filter(pk=instance.pk).update(linked_room=room)
+        instance.refresh_from_db()
+        logger.info(f"Auto-created room '{room.name}' for group '{instance.name}'")
+    except Exception as e:
+        logger.warning(f"Failed to auto-create room for group {instance.name}: {e}")
+

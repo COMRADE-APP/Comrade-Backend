@@ -3,7 +3,7 @@ Africa Region Pricing Scrapers (Excluding Kenya)
 Platforms: Takealot (SA), Konga (NG), Jumia (EG), Zando (SA)
 """
 
-from .base_scraper import BaseScraper
+from .base_scraper import BaseScraper, register_scraper
 import re
 import datetime
 import random
@@ -62,6 +62,7 @@ def generic_scrape(scraper, category_url, max_items):
                     pass
         page += 1
 
+@register_scraper
 class TakealotScraper(BaseScraper):
     def __init__(self):
         super().__init__("Takealot", "https://www.takealot.com", delay_range=(4.0, 8.0))
@@ -72,6 +73,7 @@ class TakealotScraper(BaseScraper):
     def scrape_category(self, category_url, max_items=1000):
         yield from generic_scrape(self, category_url, max_items)
 
+@register_scraper
 class KongaScraper(BaseScraper):
     def __init__(self):
         super().__init__("Konga", "https://www.konga.com", delay_range=(3.0, 6.0))
@@ -82,6 +84,7 @@ class KongaScraper(BaseScraper):
     def scrape_category(self, category_url, max_items=1000):
         yield from generic_scrape(self, category_url, max_items)
 
+@register_scraper
 class JumiaEGScraper(BaseScraper):
     def __init__(self):
         super().__init__("JumiaEG", "https://www.jumia.com.eg", delay_range=(2.0, 5.0))
@@ -92,6 +95,7 @@ class JumiaEGScraper(BaseScraper):
     def scrape_category(self, category_url, max_items=1000):
         yield from generic_scrape(self, category_url, max_items)
 
+@register_scraper
 class ZandoScraper(BaseScraper):
     def __init__(self):
         super().__init__("Zando", "https://www.zando.co.za", delay_range=(3.0, 6.0))

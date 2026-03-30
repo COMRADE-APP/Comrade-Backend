@@ -362,6 +362,7 @@ class RoomDetailSerializer(RoomSerializer):
     tasks_count = serializers.SerializerMethodField()
     announcements_count = serializers.SerializerMethodField()
     chats_count = serializers.SerializerMethodField()
+    linked_payment_group_id = serializers.SerializerMethodField()
     
     class Meta(RoomSerializer.Meta):
         fields = '__all__'
@@ -428,6 +429,10 @@ class RoomDetailSerializer(RoomSerializer):
     
     def get_chats_count(self, obj):
         return obj.chats.filter(is_deleted=False).count()
+        
+    def get_linked_payment_group_id(self, obj):
+        pg = obj.linked_payment_group.first()
+        return str(pg.id) if pg else None
 
 
 class MemberDetailSerializer(serializers.ModelSerializer):

@@ -46,6 +46,30 @@ from Authentication.activity_logger import (
 logger = logging.getLogger(__name__)
 
 
+def _set_token_cookies(response, access_token, refresh_token):
+    """Set JWT tokens as httpOnly secure cookies on the response.
+    Tokens are ALSO returned in the response body for backward compatibility
+    while the frontend transitions away from localStorage."""
+    is_production = not getattr(settings, 'DEBUG', False)
+    cookie_kwargs = {
+        'httponly': True,
+        'secure': is_production,
+        'samesite': 'Lax',
+        'path': '/',
+    }
+    response.set_cookie(
+        'access_token', access_token,
+        max_age=60 * 15,  # 15 minutes (matches ACCESS_TOKEN_LIFETIME)
+        **cookie_kwargs
+    )
+    response.set_cookie(
+        'refresh_token', refresh_token,
+        max_age=60 * 60 * 24 * 7,  # 7 days (matches REFRESH_TOKEN_LIFETIME)
+        **cookie_kwargs
+    )
+    return response
+
+
 @method_decorator(csrf_exempt, name='dispatch')
 class RegisterView(APIView):
     permission_classes = [AllowAny]
@@ -190,7 +214,7 @@ class RegisterVerifyView(APIView):
         # Generate JWT tokens so user is auto-logged in
         refresh = RefreshToken.for_user(user)
         
-        return Response({
+        resp = Response({
             "message": "Email verified successfully!",
             "email": user.email,
             "user_id": user.id,
@@ -200,6 +224,7 @@ class RegisterVerifyView(APIView):
             "refresh_token": str(refresh),
             "next_step": "profile_setup"
         })
+        return _set_token_cookies(resp, str(refresh.access_token), str(refresh))
 
 
 class VerifyView(APIView):
@@ -411,7 +436,7 @@ class LoginVerifyView(APIView):
         
         refresh = RefreshToken.for_user(user)
         
-        return Response({
+        resp = Response({
             "user_id": user.id,
             "email": user.email,
             "first_name": user.first_name,
@@ -420,6 +445,7 @@ class LoginVerifyView(APIView):
             "refresh_token": str(refresh),
             "next_step": "complete"
         })
+        return _set_token_cookies(resp, str(refresh.access_token), str(refresh))
 
 
 @method_decorator(csrf_exempt, name='dispatch')
@@ -498,7 +524,7 @@ class Verify2FAView(APIView):
             register_device(user, request)
             
             refresh = RefreshToken.for_user(user)
-            return Response({
+            resp = Response({
                 "user_id": user.id,
                 "email": user.email,
                 "first_name": user.first_name,
@@ -507,6 +533,7 @@ class Verify2FAView(APIView):
                 "refresh_token": str(refresh),
                 "next_step": "complete"
             })
+            return _set_token_cookies(resp, str(refresh.access_token), str(refresh))
         
         return Response({"detail": "Invalid 2FA code."}, status=status.HTTP_400_BAD_REQUEST)
 
@@ -542,7 +569,7 @@ class VerifySMSOTPView(APIView):
         log_login_attempt(user, request, True, method='sms_otp')
         
         refresh = RefreshToken.for_user(user)
-        return Response({
+        resp = Response({
             "user_id": user.id,
             "email": user.email,
             "first_name": user.first_name,
@@ -551,6 +578,7 @@ class VerifySMSOTPView(APIView):
             "refresh_token": str(refresh),
             "next_step": "complete"
         })
+        return _set_token_cookies(resp, str(refresh.access_token), str(refresh))
 
 
 class PasswordResetRequestView(APIView):
@@ -684,9 +712,13 @@ class LogoutView(APIView):
             
             log_user_activity(request.user, 'logout', request)
             
-            return Response({
+            resp = Response({
                 "message": "Logout successful."
             }, status=status.HTTP_205_RESET_CONTENT)
+            # Clear httpOnly cookies
+            resp.delete_cookie('access_token', path='/')
+            resp.delete_cookie('refresh_token', path='/')
+            return resp
         except Exception as e:
             logger.error(f"Logout error: {e}")
             return Response({

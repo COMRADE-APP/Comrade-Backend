@@ -1,0 +1,20 @@
+
+--- Fetching: http://localhost:8000/api/opinions/feed/?type=all&limit=30 ---
+Status: 200
+Type: Dict. Keys: ['results', 'count']
+Results length: 11
+
+--- Fetching: http://localhost:8000/api/tasks/tasks/ ---
+Status: 200
+Type: Dict. Keys: ['count', 'next', 'previous', 'results']
+Results length: 20
+
+--- Fetching: http://localhost:8000/api/events/events/ ---
+Status: 200
+Type: Dict. Keys: ['count', 'next', 'previous', 'results']
+Results length: 20
+
+--- Fetching: http://localhost:8000/api/rooms/rooms/ ---
+Status: 200
+Type: Dict. Keys: ['count', 'next', 'previous', 'results']
+Results length: 20

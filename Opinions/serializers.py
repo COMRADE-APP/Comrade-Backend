@@ -11,7 +11,7 @@ class UserMiniSerializer(serializers.ModelSerializer):
     
     class Meta:
         model = CustomUser
-        fields = ['id', 'email', 'first_name', 'last_name', 'full_name', 'avatar_url', 'user_type', 'is_following']
+        fields = ['id', 'email', 'first_name', 'last_name', 'username', 'full_name', 'avatar_url', 'user_type', 'is_following']
     
     def get_full_name(self, obj):
         return f"{obj.first_name or ''} {obj.last_name or ''}".strip() or obj.email
@@ -64,6 +64,7 @@ class OpinionSerializer(serializers.ModelSerializer):
     original_content = serializers.SerializerMethodField()
     entity_author = serializers.SerializerMethodField()
     user_type = serializers.SerializerMethodField()
+    _reposters = serializers.SerializerMethodField()
     
     class Meta:
         model = Opinion
@@ -73,7 +74,7 @@ class OpinionSerializer(serializers.ModelSerializer):
             'is_liked', 'is_reposted', 'is_bookmarked',
             'quoted_opinion', 'is_pinned', 'is_repost', 'reposted_by_user', 'original_content',
             'media_files', 'created_at', 'time_ago', 'entity_author', 'poster_role',
-            'is_anonymous', 'room', 'tagged_rooms', 'user_type'
+            'is_anonymous', 'room', 'tagged_rooms', 'user_type', '_reposters'
         ]
         read_only_fields = ['id', 'user', 'likes_count', 'comments_count', 'reposts_count', 'created_at']
     
@@ -117,6 +118,9 @@ class OpinionSerializer(serializers.ModelSerializer):
                 data['is_liked'] = OpinionLike.objects.filter(user=request.user, opinion=orig).exists()
                 data['is_reposted'] = OpinionRepost.objects.filter(user=request.user, opinion=orig).exists()
                 data['is_bookmarked'] = Bookmark.objects.filter(user=request.user, opinion=orig).exists()
+        
+        # Determine effective repost status for the frontend UI
+        data['is_repost'] = instance.is_repost or bool(data.get('_reposters'))
         
         return data
     
@@ -234,6 +238,43 @@ class OpinionSerializer(serializers.ModelSerializer):
             return f'{days}d'
         else:
             return obj.created_at.strftime('%b %d')
+
+    def get__reposters(self, obj):
+        request = self.context.get('request')
+        if not request or not request.user.is_authenticated:
+            return []
+            
+        following_ids = list(request.user.following.values_list('following_id', flat=True))
+        following_ids.append(request.user.id)
+        
+        reposts = OpinionRepost.objects.filter(
+            opinion=obj, 
+            user__in=following_ids
+        ).select_related('user').order_by('-created_at')
+        
+        reposters = []
+        for repost in reposts:
+            user = repost.user
+            avatar_url = None
+            try:
+                profile = getattr(user, 'user_profile', None) or getattr(user, 'profile', None)
+                if profile and profile.avatar:
+                    if request:
+                        avatar_url = request.build_absolute_uri(profile.avatar.url)
+                    else:
+                        avatar_url = profile.avatar.url
+            except:
+                pass
+                
+            reposters.append({
+                'id': user.id,
+                'first_name': user.first_name,
+                'last_name': user.last_name,
+                'name': f"{user.first_name or ''} {user.last_name or ''}".strip() or user.email,
+                'avatar_url': avatar_url,
+            })
+            
+        return reposters
 
 
 class OpinionCreateSerializer(serializers.ModelSerializer):

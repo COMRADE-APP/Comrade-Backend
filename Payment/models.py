@@ -111,6 +111,7 @@ class TransactionToken(models.Model):
     description = models.TextField(blank=True, null=True)
     created_at = models.DateTimeField(default=timezone.now)
     recipient_profile = models.ForeignKey(PaymentProfile, on_delete=models.CASCADE, related_name='recipient_profile', null=True, blank=True)
+    payment_group = models.ForeignKey('PaymentGroups', on_delete=models.SET_NULL, null=True, blank=True, related_name='transactions')
     
     class Meta:
         indexes = [
@@ -187,11 +188,19 @@ class PaymentGroups(models.Model):
     
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     name = models.CharField(max_length=5000)
+    cover_photo = models.ImageField(upload_to='group_covers/', blank=True, null=True)
     description = models.TextField(blank=True)
     creator = models.ForeignKey(PaymentProfile, on_delete=models.CASCADE, related_name='created_groups', blank=True, null=True)
     max_capacity = models.IntegerField(default=3) # Default to Free tier limit
     tier = models.CharField(max_length=200, choices=TIER_OPT, default='free')
     item_grouping = models.ManyToManyField(PaymentItem, blank=True)
+    
+    # Room linkage – auto-create a Room alongside this group
+    linked_room = models.ForeignKey(
+        'Rooms.Room', on_delete=models.SET_NULL,
+        null=True, blank=True, related_name='linked_payment_group'
+    )
+    auto_create_room = models.BooleanField(default=True)
     
     # Group settings
     target_amount = models.DecimalField(decimal_places=2, max_digits=12, null=True, blank=True)
@@ -203,6 +212,11 @@ class PaymentGroups(models.Model):
     auto_purchase = models.BooleanField(default=False)
     requires_approval = models.BooleanField(default=True)
     allow_anonymous = models.BooleanField(default=False)  # Allow anonymous membership
+    
+    # Application & Entry Fee Requirements
+    entry_fee_required = models.BooleanField(default=False)
+    entry_fee_amount = models.DecimalField(decimal_places=2, max_digits=12, default=0.00)
+    custom_application_questions = models.JSONField(default=list, blank=True, help_text='List of questions for applicants')
     
     # Contribution settings
     contribution_type = models.CharField(max_length=20, choices=CONTRIBUTION_TYPE_CHOICES, default='flexible')
@@ -245,6 +259,36 @@ class PaymentGroups(models.Model):
     
     def __str__(self):
         return self.name
+
+class GroupCheckoutRequest(models.Model):
+    """Tracks a proposed group checkout that requires member approval."""
+    group = models.ForeignKey(PaymentGroups, on_delete=models.CASCADE, related_name='checkout_requests')
+    initiator = models.ForeignKey(PaymentProfile, on_delete=models.SET_NULL, null=True, related_name='initiated_checkouts')
+    amount = models.DecimalField(max_digits=12, decimal_places=2)
+    items_payload = models.JSONField(default=list, help_text="Cart items and checkout payload")
+    
+    STATUS_CHOICES = [
+        ('pending', 'Pending Approval'),
+        ('approved', 'Approved & Processed'),
+        ('rejected', 'Rejected'),
+        ('failed', 'Processing Failed')
+    ]
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending')
+    
+    approvals = models.ManyToManyField(PaymentProfile, related_name='approved_checkouts', blank=True)
+    rejections = models.ManyToManyField(PaymentProfile, related_name='rejected_checkouts', blank=True)
+    
+    created_at = models.DateTimeField(default=timezone.now)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return f"Checkout Request for {self.group.name} - KES {self.amount}"
+
+    def get_approval_percentage(self):
+        total_members = self.group.members.count()
+        if total_members == 0:
+            return 0
+        return (self.approvals.count() / total_members) * 100
 
 # Payment Group Members
 class PaymentGroupMember(models.Model):
@@ -983,6 +1027,8 @@ class OrderItem(models.Model):
     quantity = models.IntegerField(default=1)
     unit_price = models.DecimalField(decimal_places=2, max_digits=12, default=0)
     subtotal = models.DecimalField(decimal_places=2, max_digits=12, default=0)
+    item_type = models.CharField(max_length=50, default='product')
+    metadata = models.JSONField(default=dict, blank=True)
     
     def save(self, *args, **kwargs):
         self.subtotal = self.unit_price * self.quantity
@@ -1253,3 +1299,543 @@ class UserPricingFeature(models.Model):
     
     def __str__(self):
         return f"Features for {self.user} (tier={self.tier}, student={self.is_student})"
+
+
+# ============================================================================
+# GROUP DISCOURSE: Public join requests & portfolio display
+# ============================================================================
+
+class GroupJoinRequest(models.Model):
+    """Public request to join a payment group / piggy bank — includes portfolio details."""
+    import uuid
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    group = models.ForeignKey(PaymentGroups, on_delete=models.CASCADE, related_name='join_requests')
+    requester = models.ForeignKey(PaymentProfile, on_delete=models.CASCADE, related_name='group_join_requests')
+    
+    # Portfolio & motivation
+    message = models.TextField(help_text='Why do you want to join? Include portfolio details.')
+    portfolio_details = models.JSONField(default=dict, blank=True, help_text='Structured portfolio info')
+    
+    # Custom Application & Fees
+    application_answers = models.JSONField(default=dict, blank=True, help_text='Answers to custom group questions')
+    has_paid_entry_fee = models.BooleanField(default=False)
+    
+    STATUS_CHOICES = (
+        ('pending_payment', 'Pending Payment'),
+        ('pending', 'Pending Review'),
+        ('approved', 'Approved'),
+        ('rejected', 'Rejected'),
+        ('withdrawn', 'Withdrawn'),
+    )
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending')
+    reviewed_by = models.ForeignKey(
+        PaymentProfile, on_delete=models.SET_NULL,
+        null=True, blank=True, related_name='reviewed_join_requests'
+    )
+    review_notes = models.TextField(blank=True)
+    
+    created_at = models.DateTimeField(default=timezone.now)
+    updated_at = models.DateTimeField(auto_now=True)
+    
+    class Meta:
+        unique_together = ['group', 'requester']
+        indexes = [
+            models.Index(fields=['group', 'status']),
+            models.Index(fields=['requester', 'status']),
+            models.Index(fields=['-created_at']),
+        ]
+    
+    def __str__(self):
+        return f"Join request to {self.group.name} by {self.requester}"
+
+
+# ============================================================================
+# GROUP VOTING: Approvals for investments, savings, withdrawals, etc.
+# ============================================================================
+
+class GroupVote(models.Model):
+    """A vote/poll within a payment group room for actions requiring approval."""
+    import uuid
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    group = models.ForeignKey(PaymentGroups, on_delete=models.CASCADE, related_name='votes')
+    created_by = models.ForeignKey(PaymentProfile, on_delete=models.CASCADE, related_name='created_votes')
+    
+    title = models.CharField(max_length=500)
+    description = models.TextField(blank=True)
+    
+    VOTE_TYPE_CHOICES = (
+        ('investment', 'Investment Decision'),
+        ('savings', 'Savings Decision'),
+        ('withdrawal', 'Withdrawal Request'),
+        ('purchase', 'Purchase Approval'),
+        ('expansion', 'Expansion / Scaling'),
+        ('remuneration', 'Remuneration / Payout'),
+        ('other', 'Other'),
+    )
+    vote_type = models.CharField(max_length=20, choices=VOTE_TYPE_CHOICES, default='other')
+    
+    # Amount associated with the vote (optional)
+    amount = models.DecimalField(decimal_places=2, max_digits=12, null=True, blank=True)
+    
+    # Voting results
+    votes_for = models.ManyToManyField(PaymentProfile, blank=True, related_name='voted_for')
+    votes_against = models.ManyToManyField(PaymentProfile, blank=True, related_name='voted_against')
+    votes_abstain = models.ManyToManyField(PaymentProfile, blank=True, related_name='voted_abstain')
+    
+    STATUS_CHOICES = (
+        ('open', 'Open for Voting'),
+        ('passed', 'Passed'),
+        ('rejected', 'Rejected'),
+        ('expired', 'Expired'),
+    )
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='open')
+    
+    deadline = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(default=timezone.now)
+    updated_at = models.DateTimeField(auto_now=True)
+    
+    class Meta:
+        indexes = [
+            models.Index(fields=['group', 'status']),
+            models.Index(fields=['-created_at']),
+        ]
+        ordering = ['-created_at']
+    
+    def __str__(self):
+        return f"Vote: {self.title} ({self.group.name})"
+    
+    @property
+    def total_votes(self):
+        return self.votes_for.count() + self.votes_against.count() + self.votes_abstain.count()
+    
+    @property
+    def approval_percentage(self):
+        total = self.votes_for.count() + self.votes_against.count()
+        if total == 0:
+            return 0
+        return round((self.votes_for.count() / total) * 100, 1)
+
+
+# ==================== BILL PAYMENTS ====================
+
+BILL_CATEGORY = (
+    ('electricity', 'Electricity'),
+    ('water', 'Water'),
+    ('tv', 'TV & Streaming'),
+    ('airtime', 'Airtime & Data'),
+    ('internet', 'Internet'),
+    ('school_fees', 'School Fees'),
+    ('rent', 'Rent'),
+    ('government', 'Government Services'),
+    ('other', 'Other'),
+)
+
+BILL_STATUS = (
+    ('pending', 'Pending'),
+    ('processing', 'Processing'),
+    ('completed', 'Completed'),
+    ('failed', 'Failed'),
+    ('reversed', 'Reversed'),
+)
+
+class BillProvider(models.Model):
+    name = models.CharField(max_length=200)
+    category = models.CharField(max_length=50, choices=BILL_CATEGORY)
+    logo = models.ImageField(upload_to='bill_providers/', blank=True, null=True)
+    account_label = models.CharField(max_length=100, default='Account Number')
+    account_format = models.CharField(max_length=200, blank=True, help_text='Regex pattern for account validation')
+    min_amount = models.DecimalField(decimal_places=2, max_digits=10, default=10.00)
+    max_amount = models.DecimalField(decimal_places=2, max_digits=10, default=100000.00)
+    commission_rate = models.DecimalField(decimal_places=4, max_digits=6, default=0.0150)
+    is_active = models.BooleanField(default=True)
+    description = models.TextField(blank=True)
+    created_at = models.DateTimeField(default=timezone.now)
+
+    class Meta:
+        ordering = ['category', 'name']
+
+    def __str__(self):
+        return f"{self.name} ({self.get_category_display()})"
+
+
+class BillPayment(models.Model):
+    user = models.ForeignKey(Profile, on_delete=models.CASCADE, related_name='bill_payments')
+    provider = models.ForeignKey(BillProvider, on_delete=models.CASCADE, related_name='payments')
+    account_number = models.CharField(max_length=200)
+    account_name = models.CharField(max_length=200, blank=True)
+    amount = models.DecimalField(decimal_places=2, max_digits=12)
+    commission = models.DecimalField(decimal_places=2, max_digits=10, default=0)
+    total_amount = models.DecimalField(decimal_places=2, max_digits=12, default=0)
+    status = models.CharField(max_length=20, choices=BILL_STATUS, default='pending')
+    reference = models.CharField(max_length=100, unique=True)
+    payment_method = models.CharField(max_length=50, choices=PAY_OPT, default='comrade_balance')
+    transaction = models.ForeignKey(TransactionToken, on_delete=models.SET_NULL, null=True, blank=True)
+    error_message = models.TextField(blank=True)
+    created_at = models.DateTimeField(default=timezone.now)
+    completed_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['user', '-created_at']),
+            models.Index(fields=['status']),
+        ]
+
+    def save(self, *args, **kwargs):
+        if not self.reference:
+            import uuid
+            self.reference = f"BILL-{uuid.uuid4().hex[:12].upper()}"
+        self.commission = self.amount * self.provider.commission_rate
+        self.total_amount = self.amount + self.commission
+        super().save(*args, **kwargs)
+
+    def __str__(self):
+        return f"{self.provider.name} - {self.account_number} - KES {self.amount}"
+
+
+# ==================== MICRO-LOANS & CREDIT SCORING ====================
+
+LOAN_STATUS = (
+    ('draft', 'Draft'),
+    ('pending', 'Pending Review'),
+    ('approved', 'Approved'),
+    ('disbursed', 'Disbursed'),
+    ('repaying', 'Repaying'),
+    ('completed', 'Completed'),
+    ('defaulted', 'Defaulted'),
+    ('rejected', 'Rejected'),
+    ('cancelled', 'Cancelled'),
+)
+
+REPAYMENT_STATUS = (
+    ('upcoming', 'Upcoming'),
+    ('due', 'Due'),
+    ('paid', 'Paid'),
+    ('overdue', 'Overdue'),
+    ('waived', 'Waived'),
+)
+
+RISK_LEVEL = (
+    ('very_low', 'Very Low'),
+    ('low', 'Low'),
+    ('moderate', 'Moderate'),
+    ('high', 'High'),
+    ('very_high', 'Very High'),
+)
+
+class LoanProduct(models.Model):
+    name = models.CharField(max_length=200)
+    description = models.TextField()
+    interest_rate = models.DecimalField(decimal_places=2, max_digits=6, help_text='Monthly interest rate %')
+    min_amount = models.DecimalField(decimal_places=2, max_digits=12)
+    max_amount = models.DecimalField(decimal_places=2, max_digits=12)
+    min_tenure_months = models.IntegerField(default=1)
+    max_tenure_months = models.IntegerField(default=24)
+    requires_guarantor = models.BooleanField(default=False)
+    guarantors_required = models.IntegerField(default=0)
+    min_credit_score = models.IntegerField(default=0, help_text='Minimum credit score required')
+    processing_fee = models.DecimalField(decimal_places=2, max_digits=6, default=0, help_text='Processing fee %')
+    late_penalty_rate = models.DecimalField(decimal_places=2, max_digits=6, default=1.5, help_text='Late payment penalty % per month')
+    is_group_loan = models.BooleanField(default=False)
+    eligible_tiers = models.JSONField(default=list, blank=True, help_text='List of eligible membership tiers')
+    icon = models.CharField(max_length=50, default='💰')
+    color = models.CharField(max_length=50, default='from-blue-500 to-cyan-600')
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(default=timezone.now)
+
+    class Meta:
+        ordering = ['interest_rate']
+
+    def __str__(self):
+        return f"{self.name} ({self.interest_rate}% monthly)"
+
+
+class CreditScore(models.Model):
+    user = models.OneToOneField(Profile, on_delete=models.CASCADE, related_name='credit_score')
+    score = models.IntegerField(default=300, help_text='Score from 100-900')
+    risk_level = models.CharField(max_length=20, choices=RISK_LEVEL, default='moderate')
+    factors = models.JSONField(default=dict, blank=True, help_text='Breakdown of score factors')
+    savings_score = models.IntegerField(default=0)
+    repayment_score = models.IntegerField(default=0)
+    group_score = models.IntegerField(default=0)
+    transaction_score = models.IntegerField(default=0)
+    tenure_score = models.IntegerField(default=0)
+    computed_at = models.DateTimeField(default=timezone.now)
+
+    class Meta:
+        indexes = [
+            models.Index(fields=['score']),
+        ]
+
+    def __str__(self):
+        return f"{self.user.user.email} - Score: {self.score}"
+
+
+class LoanApplication(models.Model):
+    import uuid
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    user = models.ForeignKey(Profile, on_delete=models.CASCADE, related_name='loan_applications')
+    loan_product = models.ForeignKey(LoanProduct, on_delete=models.CASCADE, related_name='applications')
+    group = models.ForeignKey('PaymentGroups', on_delete=models.SET_NULL, null=True, blank=True, related_name='group_loans')
+    amount = models.DecimalField(decimal_places=2, max_digits=12)
+    tenure_months = models.IntegerField()
+    purpose = models.TextField(blank=True)
+    monthly_payment = models.DecimalField(decimal_places=2, max_digits=12, default=0)
+    total_repayment = models.DecimalField(decimal_places=2, max_digits=12, default=0)
+    processing_fee_amount = models.DecimalField(decimal_places=2, max_digits=10, default=0)
+    credit_score_at_application = models.IntegerField(default=0)
+    guarantors = models.ManyToManyField(Profile, blank=True, related_name='guaranteed_loans')
+    status = models.CharField(max_length=20, choices=LOAN_STATUS, default='pending')
+    rejection_reason = models.TextField(blank=True)
+    disbursed_at = models.DateTimeField(null=True, blank=True)
+    completed_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(default=timezone.now)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['user', 'status']),
+            models.Index(fields=['-created_at']),
+        ]
+
+    def save(self, *args, **kwargs):
+        rate = self.loan_product.interest_rate / 100
+        self.monthly_payment = (self.amount * (1 + rate * self.tenure_months)) / self.tenure_months
+        self.total_repayment = self.monthly_payment * self.tenure_months
+        self.processing_fee_amount = self.amount * (self.loan_product.processing_fee / 100)
+        super().save(*args, **kwargs)
+
+    def __str__(self):
+        return f"Loan {self.id} - {self.user.user.email} - KES {self.amount}"
+
+
+class LoanRepayment(models.Model):
+    loan = models.ForeignKey(LoanApplication, on_delete=models.CASCADE, related_name='repayments')
+    installment_number = models.IntegerField()
+    amount_due = models.DecimalField(decimal_places=2, max_digits=12)
+    amount_paid = models.DecimalField(decimal_places=2, max_digits=12, default=0)
+    penalty = models.DecimalField(decimal_places=2, max_digits=10, default=0)
+    due_date = models.DateField()
+    paid_date = models.DateTimeField(null=True, blank=True)
+    status = models.CharField(max_length=20, choices=REPAYMENT_STATUS, default='upcoming')
+    transaction = models.ForeignKey(TransactionToken, on_delete=models.SET_NULL, null=True, blank=True)
+
+    class Meta:
+        ordering = ['due_date']
+        indexes = [
+            models.Index(fields=['loan', 'status']),
+            models.Index(fields=['due_date']),
+        ]
+
+    def __str__(self):
+        return f"Installment {self.installment_number} - Loan {self.loan.id}"
+
+
+# ==================== ESCROW SERVICES ====================
+
+ESCROW_STATUS = (
+    ('initiated', 'Initiated'),
+    ('funded', 'Funded'),
+    ('in_progress', 'In Progress'),
+    ('delivered', 'Delivered'),
+    ('released', 'Released'),
+    ('disputed', 'Disputed'),
+    ('refunded', 'Refunded'),
+    ('cancelled', 'Cancelled'),
+)
+
+ESCROW_TYPE = (
+    ('marketplace', 'Marketplace Purchase'),
+    ('gig', 'Gig / Freelance'),
+    ('p2p', 'Peer-to-Peer'),
+    ('group_investment', 'Group Investment'),
+    ('custom', 'Custom'),
+)
+
+DISPUTE_STATUS = (
+    ('open', 'Open'),
+    ('under_review', 'Under Review'),
+    ('resolved_buyer', 'Resolved — Buyer Wins'),
+    ('resolved_seller', 'Resolved — Seller Wins'),
+    ('settled', 'Settled — Split'),
+    ('closed', 'Closed'),
+)
+
+class EscrowTransaction(models.Model):
+    import uuid
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    buyer = models.ForeignKey(Profile, on_delete=models.CASCADE, related_name='escrow_as_buyer')
+    seller = models.ForeignKey(Profile, on_delete=models.CASCADE, related_name='escrow_as_seller')
+    escrow_type = models.CharField(max_length=30, choices=ESCROW_TYPE, default='marketplace')
+    title = models.CharField(max_length=300)
+    description = models.TextField(blank=True)
+    amount = models.DecimalField(decimal_places=2, max_digits=12)
+    escrow_fee = models.DecimalField(decimal_places=2, max_digits=10, default=0)
+    total_amount = models.DecimalField(decimal_places=2, max_digits=12, default=0)
+    fee_rate = models.DecimalField(decimal_places=4, max_digits=6, default=0.0200)
+    status = models.CharField(max_length=20, choices=ESCROW_STATUS, default='initiated')
+    milestones = models.JSONField(default=list, blank=True, help_text='List of milestone objects')
+    delivery_proof = models.TextField(blank=True)
+    release_conditions = models.TextField(blank=True)
+    funded_at = models.DateTimeField(null=True, blank=True)
+    delivered_at = models.DateTimeField(null=True, blank=True)
+    released_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(default=timezone.now)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['buyer', 'status']),
+            models.Index(fields=['seller', 'status']),
+            models.Index(fields=['-created_at']),
+        ]
+
+    def save(self, *args, **kwargs):
+        self.escrow_fee = self.amount * self.fee_rate
+        self.total_amount = self.amount + self.escrow_fee
+        super().save(*args, **kwargs)
+
+    def __str__(self):
+        return f"Escrow: {self.title} - KES {self.amount}"
+
+
+class EscrowDispute(models.Model):
+    escrow = models.ForeignKey(EscrowTransaction, on_delete=models.CASCADE, related_name='disputes')
+    raised_by = models.ForeignKey(Profile, on_delete=models.CASCADE, related_name='raised_disputes')
+    reason = models.TextField()
+    evidence = models.JSONField(default=list, blank=True, help_text='List of evidence URLs/descriptions')
+    status = models.CharField(max_length=30, choices=DISPUTE_STATUS, default='open')
+    resolution_notes = models.TextField(blank=True)
+    resolved_by = models.ForeignKey(Profile, on_delete=models.SET_NULL, null=True, blank=True, related_name='resolved_disputes')
+    created_at = models.DateTimeField(default=timezone.now)
+    resolved_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f"Dispute on {self.escrow.title}"
+
+
+# ==================== MICRO-INSURANCE ====================
+
+INSURANCE_CATEGORY = (
+    ('health', 'Health'),
+    ('asset', 'Asset Protection'),
+    ('crop', 'Crop Insurance'),
+    ('device', 'Device / Phone'),
+    ('travel', 'Travel'),
+    ('funeral', 'Funeral Cover'),
+    ('education', 'Education Plan'),
+    ('business', 'Business Insurance'),
+)
+
+POLICY_STATUS = (
+    ('pending', 'Pending'),
+    ('active', 'Active'),
+    ('expired', 'Expired'),
+    ('claimed', 'Claimed'),
+    ('cancelled', 'Cancelled'),
+    ('lapsed', 'Lapsed'),
+)
+
+CLAIM_STATUS = (
+    ('submitted', 'Submitted'),
+    ('under_review', 'Under Review'),
+    ('approved', 'Approved'),
+    ('paid', 'Paid'),
+    ('rejected', 'Rejected'),
+    ('withdrawn', 'Withdrawn'),
+)
+
+PREMIUM_FREQUENCY = (
+    ('monthly', 'Monthly'),
+    ('quarterly', 'Quarterly'),
+    ('semi_annual', 'Semi-Annual'),
+    ('annual', 'Annual'),
+    ('one_time', 'One-Time'),
+)
+
+class InsuranceProduct(models.Model):
+    name = models.CharField(max_length=200)
+    provider = models.CharField(max_length=200, help_text='Insurance company name')
+    category = models.CharField(max_length=30, choices=INSURANCE_CATEGORY)
+    description = models.TextField()
+    premium_amount = models.DecimalField(decimal_places=2, max_digits=10, help_text='Premium per period')
+    premium_frequency = models.CharField(max_length=20, choices=PREMIUM_FREQUENCY, default='monthly')
+    coverage_amount = models.DecimalField(decimal_places=2, max_digits=12, help_text='Maximum coverage')
+    deductible = models.DecimalField(decimal_places=2, max_digits=10, default=0)
+    waiting_period_days = models.IntegerField(default=0)
+    terms = models.TextField(blank=True, help_text='Terms and conditions')
+    benefits = models.JSONField(default=list, blank=True, help_text='List of coverage benefits')
+    exclusions = models.JSONField(default=list, blank=True, help_text='List of exclusions')
+    is_group_product = models.BooleanField(default=False)
+    min_group_size = models.IntegerField(default=0)
+    icon = models.CharField(max_length=50, default='🛡️')
+    color = models.CharField(max_length=50, default='from-teal-500 to-emerald-600')
+    is_active = models.BooleanField(default=True)
+    rating = models.DecimalField(decimal_places=1, max_digits=3, default=4.0)
+    created_at = models.DateTimeField(default=timezone.now)
+
+    class Meta:
+        ordering = ['category', 'premium_amount']
+
+    def __str__(self):
+        return f"{self.name} by {self.provider} ({self.get_category_display()})"
+
+
+class InsurancePolicy(models.Model):
+    import uuid
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    user = models.ForeignKey(Profile, on_delete=models.CASCADE, related_name='insurance_policies')
+    product = models.ForeignKey(InsuranceProduct, on_delete=models.CASCADE, related_name='policies')
+    group = models.ForeignKey('PaymentGroups', on_delete=models.SET_NULL, null=True, blank=True, related_name='insurance_policies')
+    policy_number = models.CharField(max_length=50, unique=True)
+    status = models.CharField(max_length=20, choices=POLICY_STATUS, default='pending')
+    premium_paid = models.DecimalField(decimal_places=2, max_digits=12, default=0)
+    total_premiums_due = models.DecimalField(decimal_places=2, max_digits=12, default=0)
+    start_date = models.DateField(null=True, blank=True)
+    end_date = models.DateField(null=True, blank=True)
+    next_payment_date = models.DateField(null=True, blank=True)
+    beneficiaries = models.JSONField(default=list, blank=True)
+    created_at = models.DateTimeField(default=timezone.now)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['user', 'status']),
+        ]
+
+    def save(self, *args, **kwargs):
+        if not self.policy_number:
+            import uuid
+            self.policy_number = f"POL-{uuid.uuid4().hex[:10].upper()}"
+        super().save(*args, **kwargs)
+
+    def __str__(self):
+        return f"Policy {self.policy_number} - {self.product.name}"
+
+
+class InsuranceClaim(models.Model):
+    import uuid
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    policy = models.ForeignKey(InsurancePolicy, on_delete=models.CASCADE, related_name='claims')
+    claimant = models.ForeignKey(Profile, on_delete=models.CASCADE, related_name='insurance_claims')
+    amount_claimed = models.DecimalField(decimal_places=2, max_digits=12)
+    amount_approved = models.DecimalField(decimal_places=2, max_digits=12, default=0)
+    reason = models.TextField()
+    evidence = models.JSONField(default=list, blank=True, help_text='List of supporting documents/photos')
+    status = models.CharField(max_length=20, choices=CLAIM_STATUS, default='submitted')
+    reviewer_notes = models.TextField(blank=True)
+    created_at = models.DateTimeField(default=timezone.now)
+    reviewed_at = models.DateTimeField(null=True, blank=True)
+    paid_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f"Claim on {self.policy.policy_number} - KES {self.amount_claimed}"

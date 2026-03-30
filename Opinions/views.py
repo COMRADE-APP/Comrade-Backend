@@ -291,20 +291,32 @@ class OpinionViewSet(viewsets.ModelViewSet):
     
     @action(detail=False, methods=['get'], permission_classes=[permissions.IsAuthenticated])
     def feed(self, request):
-        """Get personalized feed - opinions from followed users"""
-        following_ids = request.user.following.values_list('following_id', flat=True)
+        """Get personalized feed - opinions from followed users and their reposts"""
+        following_ids = list(request.user.following.values_list('following_id', flat=True))
+        following_ids_with_self = following_ids + [request.user.id]
+        
         blocked_ids = ContentBlock.objects.filter(user=request.user).values_list('blocked_user_id', flat=True)
         hidden_ids = HiddenContent.objects.filter(user=request.user).values_list('opinion_id', flat=True)
         
+        from django.db.models import Max, Q
+        from django.db.models.functions import Coalesce, Greatest
+        
         queryset = Opinion.objects.filter(
-            Q(user_id__in=following_ids) | Q(user=request.user),
+            Q(user_id__in=following_ids_with_self) | Q(opinionrepost__user_id__in=following_ids_with_self),
             is_deleted=False,
             visibility__in=['public', 'followers']
         ).exclude(
             user_id__in=blocked_ids
         ).exclude(
             id__in=hidden_ids
-        ).select_related('user', 'reposted_by').prefetch_related('media_files').order_by('-created_at')
+        ).annotate(
+            max_repost_date=Max(
+                'opinionrepost__created_at',
+                filter=Q(opinionrepost__user_id__in=following_ids_with_self)
+            )
+        ).annotate(
+            interaction_date=Greatest('created_at', Coalesce('max_repost_date', 'created_at'))
+        ).distinct().select_related('user', 'reposted_by').prefetch_related('media_files').order_by('-interaction_date')
         
         page = self.paginate_queryset(queryset)
         serializer = OpinionSerializer(page, many=True, context={'request': request})
@@ -872,11 +884,9 @@ class UnifiedFeedView(APIView):
     
     def _get_announcements(self, request, limit):
         try:
-            from Announcements.models import Announcement
+            from Announcements.models import Announcements
             
-            announcements = Announcement.objects.filter(
-                is_active=True
-            ).order_by('-created_at')[:limit]
+            announcements = Announcements.objects.all().order_by('-time_stamp')[:limit]
             
             items = []
             for a in announcements:
@@ -885,44 +895,49 @@ class UnifiedFeedView(APIView):
                     'content_type': 'announcement',
                     'category_label': 'Announcement',
                     'category_color': 'yellow',
-                    'title': a.title,
+                    'title': a.heading,
                     'content': a.content[:300] + '...' if len(a.content) > 300 else a.content,
-                    'created_at': a.created_at.isoformat(),
+                    'created_at': a.time_stamp.isoformat() if a.time_stamp else '',
                     'action_url': f'/announcements/{a.id}'
                 })
             return items
-        except Exception:
+        except Exception as e:
+            import traceback; traceback.print_exc()
             return []
     
     def _get_products(self, request, limit):
         try:
             from Payment.models import Product
             
-            products = Product.objects.filter(
-                is_active=True
-            ).order_by('-created_at')[:limit]
+            products = Product.objects.all().order_by('-created_at')[:limit]
             
             items = []
             for p in products:
                 items.append({
                     'id': str(p.id),
                     'content_type': 'product',
-                    'category_label': 'Product',
+                    'category_label': p.get_product_type_display() if hasattr(p, 'get_product_type_display') else (p.product_type or 'Product'),
+                    'product_type': p.product_type or 'physical',
                     'category_color': 'green',
                     'title': p.name,
                     'content': p.description[:200] + '...' if len(p.description) > 200 else p.description,
                     'price': str(p.price),
-                    'created_at': p.created_at.isoformat(),
-                    'action_url': f'/shop/{p.id}'
+                    'image_url': p.image_url or '',
+                    'stock_quantity': p.stock_quantity,
+                    'is_available': p.stock_quantity > 0 if p.product_type == 'physical' else True,
+                    'created_at': p.created_at.isoformat() if p.created_at else '',
+                    'action_url': f'/shop/item/{p.id}',
                 })
             return items
-        except Exception:
+        except Exception as e:
+            import traceback; traceback.print_exc()
             return []
 
 
 class NewContentCheckView(APIView):
     """Check for new content since last check (for refresh notification)"""
     permission_classes = [permissions.IsAuthenticated]
+    throttle_classes = []
     
     def get(self, request):
         since = request.query_params.get('since')

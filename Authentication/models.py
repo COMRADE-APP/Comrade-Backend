@@ -49,7 +49,8 @@ class CustomUserManager(BaseUserManager):
 
 
 class CustomUser(AbstractUser):
-    username = None
+    # Re-enabled: auto-generated from first_name + last_name, can be updated by user
+    username = models.CharField(max_length=100, unique=True, blank=True, null=True)
     first_name = models.CharField(max_length=200)
     other_names = models.CharField(max_length=200, null=True, default='N/A')
     last_name = models.CharField(max_length=200)
@@ -121,6 +122,27 @@ class CustomUser(AbstractUser):
     REQUIRED_FIELDS = ['first_name', 'last_name']
 
     objects = CustomUserManager()
+
+    def save(self, *args, **kwargs):
+        # Auto-generate username from first_name + last_name if not set
+        if not self.username:
+            self.username = self._generate_unique_username()
+        super().save(*args, **kwargs)
+
+    def _generate_unique_username(self):
+        """Generate a unique username from first_name + last_name."""
+        import re as _re
+        base = f"{self.first_name or ''}{self.last_name or ''}".strip()
+        base = _re.sub(r'[^a-zA-Z0-9]', '', base).lower()
+        if not base:
+            base = self.email.split('@')[0].lower() if self.email else 'user'
+        # Ensure uniqueness
+        candidate = base
+        counter = 2
+        while CustomUser.objects.filter(username=candidate).exclude(pk=self.pk).exists():
+            candidate = f"{base}{counter}"
+            counter += 1
+        return candidate
     
     class Meta:
         indexes = [
@@ -128,6 +150,7 @@ class CustomUser(AbstractUser):
             models.Index(fields=['user_type']),
             models.Index(fields=['is_active']),
             models.Index(fields=['email', 'is_active']),
+            models.Index(fields=['username']),
         ]
 
 

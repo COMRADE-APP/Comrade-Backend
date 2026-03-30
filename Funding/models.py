@@ -390,3 +390,39 @@ class InvestmentAgreement(models.Model):
     def __str__(self):
         return f"Agreement: {self.investor} → {self.venture.name}"
 
+
+class InvestorProfile(models.Model):
+    """Universal investor profile — filled once, reused across all investments.
+    Visible to recipient businesses/ventures. Editable by the owner."""
+
+    ID_TYPE_CHOICES = [
+        ('national_id', 'National ID'),
+        ('passport', 'Passport'),
+        ('military_id', 'Military ID'),
+        ('drivers_license', "Driver's License"),
+    ]
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    user = models.OneToOneField(
+        settings.AUTH_USER_MODEL, on_delete=models.CASCADE,
+        related_name='investor_profile'
+    )
+
+    full_name = models.CharField(max_length=255)
+    id_number = models.CharField(max_length=100, blank=True, default='')
+    id_type = models.CharField(max_length=30, choices=ID_TYPE_CHOICES, default='national_id')
+    nationality = models.CharField(max_length=100, blank=True, default='')
+    date_of_birth = models.DateField(null=True, blank=True)
+    address = models.TextField(blank=True, default='')
+    tax_pin = models.CharField(max_length=50, blank=True, default='')
+    source_of_funds = models.CharField(max_length=255, blank=True, default='')
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    @property
+    def is_complete(self):
+        return bool(self.full_name and self.id_number and self.nationality)
+
+    def __str__(self):
+        return f"InvestorProfile: {self.full_name} ({self.user.email})"

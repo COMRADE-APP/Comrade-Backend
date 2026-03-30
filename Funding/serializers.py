@@ -2,7 +2,8 @@ from rest_framework import serializers
 from .models import (
     Business, FundingDocument, FundingRequest, InvestmentOpportunity,
     FundingResponse, FundingNegotiation, NegotiationMessage, FundingReaction,
-    CapitalVenture, VentureBid, FundingRequestReview, InvestmentAgreement
+    CapitalVenture, VentureBid, FundingRequestReview, InvestmentAgreement,
+    InvestorProfile
 )
 
 class FundingDocumentSerializer(serializers.ModelSerializer):
@@ -219,4 +220,17 @@ class InvestmentAgreementSerializer(serializers.ModelSerializer):
 
     def get_venture_name(self, obj):
         return obj.venture.name
+
+
+class InvestorProfileSerializer(serializers.ModelSerializer):
+    is_complete = serializers.ReadOnlyField()
+
+    class Meta:
+        model = InvestorProfile
+        fields = [
+            'id', 'user', 'full_name', 'id_number', 'id_type',
+            'nationality', 'date_of_birth', 'address', 'tax_pin',
+            'source_of_funds', 'is_complete', 'created_at', 'updated_at'
+        ]
+        read_only_fields = ['id', 'user', 'created_at', 'updated_at']
 

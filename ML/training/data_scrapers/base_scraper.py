@@ -8,6 +8,7 @@ Handles:
 - Robust error handling to avoid bot detection
 - Category extraction from URL slugs
 - Separate output directories per model
+- Scraper registry for sequential orchestration
 """
 
 import os
@@ -16,8 +17,22 @@ import time
 import random
 import logging
 import requests
+from urllib.parse import urlparse
+from urllib.robotparser import RobotFileParser
 from bs4 import BeautifulSoup
 from abc import ABC, abstractmethod
+
+
+# ── Global Scraper Registry ──────────────────────────────────────────────────
+# Every BaseScraper subclass that calls @register_scraper is added here.
+# continuous_pipeline.py reads this to know which scrapers are available.
+SCRAPER_REGISTRY: dict = {}   # { "JumiaKE": <class JumiaKEScraper>, ... }
+
+
+def register_scraper(cls):
+    """Class decorator: register a BaseScraper subclass into SCRAPER_REGISTRY."""
+    SCRAPER_REGISTRY[cls.__name__] = cls
+    return cls
 
 
 # Common user agents to avoid detection
@@ -35,6 +50,26 @@ DIGITAL_CATEGORIES = {
     'streaming', 'games', 'digital-games', 'music', 'movies', 'courses',
     'online-services', 'saas', 'licenses', 'downloads', 'gift-cards',
 }
+
+
+# ── Robots.txt cache ─────────────────────────────────────────────────────────
+_robots_cache: dict = {}
+
+
+def check_robots_txt(url: str, user_agent: str = '*') -> bool:
+    """Return True if robots.txt allows scraping this URL."""
+    parsed = urlparse(url)
+    robots_url = f"{parsed.scheme}://{parsed.netloc}/robots.txt"
+    if robots_url not in _robots_cache:
+        rp = RobotFileParser()
+        rp.set_url(robots_url)
+        try:
+            rp.read()
+        except Exception:
+            return True  # If we can't read robots.txt, proceed cautiously
+        _robots_cache[robots_url] = rp
+    return _robots_cache[robots_url].can_fetch(user_agent, url)
+
 
 
 def extract_category_from_url(url):

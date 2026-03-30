@@ -4,7 +4,12 @@ from Payment.models import (
     TransactionToken, PaymentAuthorization, PaymentVerification,
     TransactionHistory, TransactionTracker, PaymentGroupMember,
     Contribution, StandingOrder, GroupInvitation, GroupTarget,
-    Product, UserSubscription, SavedPaymentMethod
+    Product, UserSubscription, SavedPaymentMethod, GroupCheckoutRequest,
+    GroupJoinRequest, GroupVote,
+    BillProvider, BillPayment,
+    LoanProduct, CreditScore, LoanApplication, LoanRepayment,
+    EscrowTransaction, EscrowDispute,
+    InsuranceProduct, InsurancePolicy, InsuranceClaim
 )
 from Payment.models import TRANSACTION_CATEGORY, PAY_OPT
 from Authentication.models import Profile, CustomUser
@@ -35,13 +40,46 @@ class PaymentLogSerializer(serializers.ModelSerializer):
         fields = '__all__'
 
 class TransactionTokenSerializer(serializers.ModelSerializer):
-    recipient_email = serializers.EmailField(source='recipient_profile.user.user.email', read_only=True)
-    sender_email = serializers.EmailField(source='payment_profile.user.user.email', read_only=True)
+    recipient_email = serializers.SerializerMethodField()
+    sender_email = serializers.SerializerMethodField()
+    group_name = serializers.SerializerMethodField()
+    group_cover_photo = serializers.SerializerMethodField()
+    group_id = serializers.SerializerMethodField()
     
     class Meta:
         model = TransactionToken
         fields = '__all__'
         read_only_fields = ['transaction_code', 'created_at']
+
+    def get_recipient_email(self, obj):
+        try:
+            return obj.recipient_profile.user.user.email if obj.recipient_profile else None
+        except Exception:
+            return None
+
+    def get_sender_email(self, obj):
+        try:
+            return obj.payment_profile.user.user.email if obj.payment_profile else None
+        except Exception:
+            return None
+
+    def get_group_name(self, obj):
+        if obj.payment_group:
+            return obj.payment_group.name
+        return None
+
+    def get_group_cover_photo(self, obj):
+        if obj.payment_group and obj.payment_group.cover_photo:
+            request = self.context.get('request')
+            if request:
+                return request.build_absolute_uri(obj.payment_group.cover_photo.url)
+            return obj.payment_group.cover_photo.url
+        return None
+
+    def get_group_id(self, obj):
+        if obj.payment_group:
+            return str(obj.payment_group.id)
+        return None
 
 class TransactionTrackerSerializer(serializers.ModelSerializer):
     transaction_details = TransactionTokenSerializer(source='transaction_token', read_only=True)
@@ -186,13 +224,87 @@ class PaymentGroupsSerializer(serializers.ModelSerializer):
             'target_amount': obj.target_amount or 0,
         }
 
+class GroupCheckoutRequestSerializer(serializers.ModelSerializer):
+    initiator_name = serializers.SerializerMethodField()
+    initiator_username = serializers.SerializerMethodField()
+    initiator_profile_picture = serializers.SerializerMethodField()
+    approvals_count = serializers.SerializerMethodField()
+    rejections_count = serializers.SerializerMethodField()
+    total_members = serializers.SerializerMethodField()
+    group_name = serializers.SerializerMethodField()
+    group_cover_photo = serializers.SerializerMethodField()
+    recipient_info = serializers.SerializerMethodField()
+
+    class Meta:
+        model = GroupCheckoutRequest
+        fields = '__all__'
+        read_only_fields = ['created_at', 'updated_at']
+
+    def get_initiator_name(self, obj):
+        if obj.initiator and obj.initiator.user:
+            return f"{obj.initiator.user.user.first_name} {obj.initiator.user.user.last_name}"
+        return "Unknown"
+
+    def get_initiator_username(self, obj):
+        try:
+            return obj.initiator.user.user.username if obj.initiator else None
+        except Exception:
+            return None
+
+    def get_initiator_profile_picture(self, obj):
+        try:
+            if obj.initiator and obj.initiator.user and obj.initiator.user.profile_picture:
+                request = self.context.get('request')
+                if request:
+                    return request.build_absolute_uri(obj.initiator.user.profile_picture.url)
+                return obj.initiator.user.profile_picture.url
+        except Exception:
+            pass
+        return None
+
+    def get_approvals_count(self, obj):
+        return obj.approvals.count()
+
+    def get_rejections_count(self, obj):
+        return obj.rejections.count()
+
+    def get_total_members(self, obj):
+        return obj.group.members.count()
+
+    def get_group_name(self, obj):
+        return obj.group.name if obj.group else None
+
+    def get_group_cover_photo(self, obj):
+        if obj.group and obj.group.cover_photo:
+            request = self.context.get('request')
+            if request:
+                return request.build_absolute_uri(obj.group.cover_photo.url)
+            return obj.group.cover_photo.url
+        return None
+
+    def get_recipient_info(self, obj):
+        """Extract recipient/business info from items_payload."""
+        if not obj.items_payload:
+            return None
+        # Try to find the first item with business/recipient info
+        for item in obj.items_payload:
+            name = item.get('name') or item.get('business_name')
+            if name:
+                return {
+                    'name': name,
+                    'id': item.get('id'),
+                    'type': item.get('type', 'product'),
+                    'profile_picture': item.get('profile_picture') or item.get('image'),
+                }
+        return None
+
 class PaymentGroupsCreateSerializer(serializers.ModelSerializer):
     class Meta:
         model = PaymentGroups
         fields = ['name', 'description', 'max_capacity', 'target_amount', 'expiry_date', 
                   'deadline', 'auto_purchase', 'requires_approval', 'is_public',
                   'contribution_type', 'contribution_amount', 'frequency', 'group_type',
-                  'allow_anonymous']
+                  'allow_anonymous', 'auto_create_room']
 
 
 class KittySerializer(serializers.ModelSerializer):
@@ -446,10 +558,29 @@ class EstablishmentBranchSerializer(serializers.ModelSerializer):
 
 
 class MenuItemSerializer(serializers.ModelSerializer):
+    image = serializers.SerializerMethodField()
+    
     class Meta:
         model = MenuItem
         fields = '__all__'
         read_only_fields = ['created_at']
+    
+    def _resolve_image(self, field_file):
+        """Return the URL for an image field, handling external URLs stored as strings."""
+        if not field_file:
+            return None
+        url = str(field_file)
+        if url.startswith('http://') or url.startswith('https://'):
+            return url
+        if hasattr(field_file, 'url'):
+            request = self.context.get('request')
+            if request:
+                return request.build_absolute_uri(field_file.url)
+            return field_file.url
+        return url
+    
+    def get_image(self, obj):
+        return self._resolve_image(obj.image)
 
 
 class HotelRoomSerializer(serializers.ModelSerializer):
@@ -486,11 +617,33 @@ class EstablishmentSerializer(serializers.ModelSerializer):
     branches = EstablishmentBranchSerializer(many=True, read_only=True)
     branch_count = serializers.SerializerMethodField()
     recent_reviews = serializers.SerializerMethodField()
+    logo = serializers.SerializerMethodField()
+    banner = serializers.SerializerMethodField()
     
     class Meta:
         model = Establishment
         fields = '__all__'
         read_only_fields = ['owner', 'slug', 'rating', 'review_count', 'is_verified', 'created_at', 'updated_at']
+    
+    def _resolve_image(self, field_file):
+        """Return the URL for an image field, handling external URLs stored as strings."""
+        if not field_file:
+            return None
+        url = str(field_file)
+        if url.startswith('http://') or url.startswith('https://'):
+            return url
+        if hasattr(field_file, 'url'):
+            request = self.context.get('request')
+            if request:
+                return request.build_absolute_uri(field_file.url)
+            return field_file.url
+        return url
+    
+    def get_logo(self, obj):
+        return self._resolve_image(obj.logo)
+    
+    def get_banner(self, obj):
+        return self._resolve_image(obj.banner)
     
     def get_owner_name(self, obj):
         return f"{obj.owner.user.first_name} {obj.owner.user.last_name}"
@@ -522,6 +675,8 @@ class EstablishmentListSerializer(serializers.ModelSerializer):
     """Lighter serializer for list views."""
     establishment_type_display = serializers.CharField(source='get_establishment_type_display', read_only=True)
     branch_count = serializers.SerializerMethodField()
+    logo = serializers.SerializerMethodField()
+    banner = serializers.SerializerMethodField()
     
     class Meta:
         model = Establishment
@@ -532,6 +687,26 @@ class EstablishmentListSerializer(serializers.ModelSerializer):
             'delivery_available', 'pickup_available', 'dine_in_available',
             'is_active', 'is_verified'
         ]
+    
+    def _resolve_image(self, field_file):
+        """Return the URL for an image field, handling external URLs stored as strings."""
+        if not field_file:
+            return None
+        url = str(field_file)
+        if url.startswith('http://') or url.startswith('https://'):
+            return url
+        if hasattr(field_file, 'url'):
+            request = self.context.get('request')
+            if request:
+                return request.build_absolute_uri(field_file.url)
+            return field_file.url
+        return url
+    
+    def get_logo(self, obj):
+        return self._resolve_image(obj.logo)
+    
+    def get_banner(self, obj):
+        return self._resolve_image(obj.banner)
     
     def get_branch_count(self, obj):
         return obj.branches.filter(is_active=True).count()
@@ -561,11 +736,29 @@ class ServiceOfferingSerializer(serializers.ModelSerializer):
     service_mode_display = serializers.CharField(source='get_service_mode_display', read_only=True)
     establishment_name = serializers.CharField(source='establishment.name', read_only=True)
     available_slots_count = serializers.SerializerMethodField()
+    image = serializers.SerializerMethodField()
     
     class Meta:
         model = ServiceOffering
         fields = '__all__'
         read_only_fields = ['provider', 'created_at']
+    
+    def _resolve_image(self, field_file):
+        """Return the URL for an image field, handling external URLs stored as strings."""
+        if not field_file:
+            return None
+        url = str(field_file)
+        if url.startswith('http://') or url.startswith('https://'):
+            return url
+        if hasattr(field_file, 'url'):
+            request = self.context.get('request')
+            if request:
+                return request.build_absolute_uri(field_file.url)
+            return field_file.url
+        return url
+    
+    def get_image(self, obj):
+        return self._resolve_image(obj.image)
     
     def get_provider_name(self, obj):
         return f"{obj.provider.user.first_name} {obj.provider.user.last_name}"
@@ -605,6 +798,7 @@ class OrderSerializer(serializers.ModelSerializer):
     delivery_mode_display = serializers.CharField(source='get_delivery_mode_display', read_only=True)
     status_display = serializers.CharField(source='get_status_display', read_only=True)
     establishment_name = serializers.CharField(source='establishment.name', read_only=True)
+    group_name = serializers.SerializerMethodField()
     
     class Meta:
         model = Order
@@ -613,6 +807,11 @@ class OrderSerializer(serializers.ModelSerializer):
     
     def get_buyer_name(self, obj):
         return f"{obj.buyer.user.first_name} {obj.buyer.user.last_name}"
+        
+    def get_group_name(self, obj):
+        if obj.payment_group:
+            return obj.payment_group.name
+        return None
 
 
 class CreateOrderSerializer(serializers.Serializer):
@@ -736,3 +935,223 @@ class SavedPaymentMethodCreateSerializer(serializers.Serializer):
                 raise serializers.ValidationError({'account_number': 'Account number is required for bank transfers.'})
         return data
 
+
+# ============================================================================
+# GROUP DISCOURSE & VOTING SERIALIZERS
+# ============================================================================
+
+class GroupJoinRequestSerializer(serializers.ModelSerializer):
+    requester_name = serializers.SerializerMethodField()
+    requester_email = serializers.SerializerMethodField()
+    requester_avatar = serializers.SerializerMethodField()
+    group_name = serializers.CharField(source='group.name', read_only=True)
+    status_display = serializers.CharField(source='get_status_display', read_only=True)
+    group_entry_fee_amount = serializers.DecimalField(source='group.entry_fee_amount', max_digits=10, decimal_places=2, read_only=True)
+    
+    class Meta:
+        model = GroupJoinRequest
+        fields = '__all__'
+        read_only_fields = ['id', 'requester', 'status', 'reviewed_by', 'review_notes', 'has_paid_entry_fee', 'created_at', 'updated_at']
+    
+    def get_requester_name(self, obj):
+        try:
+            return f"{obj.requester.user.user.first_name} {obj.requester.user.user.last_name}"
+        except Exception:
+            return "Unknown"
+    
+    def get_requester_email(self, obj):
+        try:
+            return obj.requester.user.user.email
+        except Exception:
+            return None
+    
+    def get_requester_avatar(self, obj):
+        try:
+            if obj.requester.user.profile_picture:
+                request = self.context.get('request')
+                if request:
+                    return request.build_absolute_uri(obj.requester.user.profile_picture.url)
+                return obj.requester.user.profile_picture.url
+        except Exception:
+            pass
+        return None
+
+
+class GroupVoteSerializer(serializers.ModelSerializer):
+    created_by_name = serializers.SerializerMethodField()
+    group_name = serializers.CharField(source='group.name', read_only=True)
+    vote_type_display = serializers.CharField(source='get_vote_type_display', read_only=True)
+    status_display = serializers.CharField(source='get_status_display', read_only=True)
+    total_votes = serializers.IntegerField(read_only=True)
+    approval_percentage = serializers.FloatField(read_only=True)
+    votes_for_count = serializers.SerializerMethodField()
+    votes_against_count = serializers.SerializerMethodField()
+    votes_abstain_count = serializers.SerializerMethodField()
+    user_vote = serializers.SerializerMethodField()
+    
+    class Meta:
+        model = GroupVote
+        fields = '__all__'
+        read_only_fields = ['id', 'created_by', 'status', 'created_at', 'updated_at']
+    
+    def get_created_by_name(self, obj):
+        try:
+            return f"{obj.created_by.user.user.first_name} {obj.created_by.user.user.last_name}"
+        except Exception:
+            return "Unknown"
+    
+    def get_votes_for_count(self, obj):
+        return obj.votes_for.count()
+    
+    def get_votes_against_count(self, obj):
+        return obj.votes_against.count()
+    
+    def get_votes_abstain_count(self, obj):
+        return obj.votes_abstain.count()
+    
+    def get_user_vote(self, obj):
+        """Return the current user's vote on this item."""
+        request = self.context.get('request')
+        if not request or not request.user.is_authenticated:
+            return None
+        try:
+            from Authentication.models import Profile
+            profile = Profile.objects.get(user=request.user)
+            pp = PaymentProfile.objects.get(user=profile)
+            if obj.votes_for.filter(pk=pp.pk).exists():
+                return 'for'
+            if obj.votes_against.filter(pk=pp.pk).exists():
+                return 'against'
+            if obj.votes_abstain.filter(pk=pp.pk).exists():
+                return 'abstain'
+        except Exception:
+            pass
+        return None
+
+
+# ==================== BILL PAYMENT SERIALIZERS ====================
+
+class BillProviderSerializer(serializers.ModelSerializer):
+    category_display = serializers.CharField(source='get_category_display', read_only=True)
+    
+    class Meta:
+        model = BillProvider
+        fields = '__all__'
+
+
+class BillPaymentSerializer(serializers.ModelSerializer):
+    provider_name = serializers.CharField(source='provider.name', read_only=True)
+    provider_category = serializers.CharField(source='provider.get_category_display', read_only=True)
+    user_email = serializers.EmailField(source='user.user.email', read_only=True)
+    
+    class Meta:
+        model = BillPayment
+        fields = '__all__'
+        read_only_fields = ['commission', 'total_amount', 'reference', 'status', 'completed_at', 'user', 'transaction', 'error_message']
+
+
+# ==================== LOAN SERIALIZERS ====================
+
+class LoanProductSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = LoanProduct
+        fields = '__all__'
+
+
+class CreditScoreSerializer(serializers.ModelSerializer):
+    user_email = serializers.EmailField(source='user.user.email', read_only=True)
+    risk_display = serializers.CharField(source='get_risk_level_display', read_only=True)
+    
+    class Meta:
+        model = CreditScore
+        fields = '__all__'
+        read_only_fields = ['user', 'score', 'risk_level', 'factors', 'savings_score', 'repayment_score', 'group_score', 'transaction_score', 'tenure_score', 'computed_at']
+
+
+class LoanRepaymentSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = LoanRepayment
+        fields = '__all__'
+        read_only_fields = ['loan', 'installment_number', 'amount_due', 'due_date']
+
+
+class LoanApplicationSerializer(serializers.ModelSerializer):
+    product_name = serializers.CharField(source='loan_product.name', read_only=True)
+    product_interest = serializers.DecimalField(source='loan_product.interest_rate', max_digits=6, decimal_places=2, read_only=True)
+    user_email = serializers.EmailField(source='user.user.email', read_only=True)
+    repayments = LoanRepaymentSerializer(many=True, read_only=True)
+    guarantor_count = serializers.SerializerMethodField()
+    
+    class Meta:
+        model = LoanApplication
+        fields = '__all__'
+        read_only_fields = ['id', 'user', 'monthly_payment', 'total_repayment', 'processing_fee_amount', 'credit_score_at_application', 'status', 'rejection_reason', 'disbursed_at', 'completed_at']
+    
+    def get_guarantor_count(self, obj):
+        return obj.guarantors.count()
+
+
+# ==================== ESCROW SERIALIZERS ====================
+
+class EscrowDisputeSerializer(serializers.ModelSerializer):
+    raised_by_email = serializers.EmailField(source='raised_by.user.email', read_only=True)
+    
+    class Meta:
+        model = EscrowDispute
+        fields = '__all__'
+        read_only_fields = ['raised_by', 'resolved_by', 'resolved_at']
+
+
+class EscrowTransactionSerializer(serializers.ModelSerializer):
+    buyer_email = serializers.EmailField(source='buyer.user.email', read_only=True)
+    seller_email = serializers.EmailField(source='seller.user.email', read_only=True)
+    buyer_name = serializers.SerializerMethodField()
+    seller_name = serializers.SerializerMethodField()
+    disputes = EscrowDisputeSerializer(many=True, read_only=True)
+    status_display = serializers.CharField(source='get_status_display', read_only=True)
+    type_display = serializers.CharField(source='get_escrow_type_display', read_only=True)
+    
+    class Meta:
+        model = EscrowTransaction
+        fields = '__all__'
+        read_only_fields = ['id', 'escrow_fee', 'total_amount', 'funded_at', 'delivered_at', 'released_at']
+    
+    def get_buyer_name(self, obj):
+        return f"{obj.buyer.user.first_name} {obj.buyer.user.last_name}".strip() or obj.buyer.user.email
+    
+    def get_seller_name(self, obj):
+        return f"{obj.seller.user.first_name} {obj.seller.user.last_name}".strip() or obj.seller.user.email
+
+
+# ==================== INSURANCE SERIALIZERS ====================
+
+class InsuranceProductSerializer(serializers.ModelSerializer):
+    category_display = serializers.CharField(source='get_category_display', read_only=True)
+    frequency_display = serializers.CharField(source='get_premium_frequency_display', read_only=True)
+    
+    class Meta:
+        model = InsuranceProduct
+        fields = '__all__'
+
+
+class InsuranceClaimSerializer(serializers.ModelSerializer):
+    status_display = serializers.CharField(source='get_status_display', read_only=True)
+    
+    class Meta:
+        model = InsuranceClaim
+        fields = '__all__'
+        read_only_fields = ['id', 'claimant', 'amount_approved', 'reviewer_notes', 'reviewed_at', 'paid_at']
+
+
+class InsurancePolicySerializer(serializers.ModelSerializer):
+    product_name = serializers.CharField(source='product.name', read_only=True)
+    product_provider = serializers.CharField(source='product.provider', read_only=True)
+    product_category = serializers.CharField(source='product.get_category_display', read_only=True)
+    user_email = serializers.EmailField(source='user.user.email', read_only=True)
+    claims = InsuranceClaimSerializer(many=True, read_only=True)
+    status_display = serializers.CharField(source='get_status_display', read_only=True)
+    
+    class Meta:
+        model = InsurancePolicy
+        fields = '__all__'
+        read_only_fields = ['id', 'user', 'policy_number', 'status', 'premium_paid', 'total_premiums_due']

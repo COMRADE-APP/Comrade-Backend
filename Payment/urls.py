@@ -36,6 +36,27 @@ router.register(r'time-slots', views.ServiceTimeSlotViewSet, basename='time-slot
 router.register(r'orders', views.OrderViewSet, basename='order')
 router.register(r'reviews', views.ReviewViewSet, basename='review')
 
+# Group Discourse & Voting
+router.register(r'join-requests', views.GroupJoinRequestViewSet, basename='join-request')
+router.register(r'group-votes', views.GroupVoteViewSet, basename='group-vote')
+
+# Bill Payments
+router.register(r'bill-providers', views.BillProviderViewSet, basename='bill-provider')
+router.register(r'bill-payments', views.BillPaymentViewSet, basename='bill-payment')
+
+# Loans & Credit
+router.register(r'loan-products', views.LoanProductViewSet, basename='loan-product')
+router.register(r'credit-scores', views.CreditScoreViewSet, basename='credit-score')
+router.register(r'loan-applications', views.LoanApplicationViewSet, basename='loan-application')
+
+# Escrow
+router.register(r'escrow', views.EscrowTransactionViewSet, basename='escrow')
+
+# Insurance
+router.register(r'insurance-products', views.InsuranceProductViewSet, basename='insurance-product')
+router.register(r'insurance-policies', views.InsurancePolicyViewSet, basename='insurance-policy')
+router.register(r'insurance-claims', views.InsuranceClaimViewSet, basename='insurance-claim')
+
 urlpatterns = [
     path('', include(router.urls)),
     
@@ -65,4 +86,8 @@ urlpatterns = [
     
     # Student Verification
     path('student/verify/', views.StudentVerificationView.as_view(), name='student-verify'),
+    
+    # Group Portfolio Analytics
+    path('group-portfolio/<uuid:group_id>/', views.GroupPortfolioView.as_view(), name='group-portfolio'),
 ]
+

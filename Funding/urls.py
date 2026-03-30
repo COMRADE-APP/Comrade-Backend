@@ -4,7 +4,8 @@ from .views import (
     BusinessViewSet, FundingDocumentViewSet,
     FundingRequestViewSet, InvestmentOpportunityViewSet,
     FundingResponseViewSet, FundingNegotiationViewSet,
-    FundingReactionViewSet, CapitalVentureViewSet, VentureBidViewSet
+    FundingReactionViewSet, CapitalVentureViewSet, VentureBidViewSet,
+    InvestorProfileView, InvestmentHistoryView
 )
 
 router = DefaultRouter()
@@ -24,5 +25,6 @@ router.register(r'venture-bids', VentureBidViewSet)
 
 urlpatterns = [
     path('', include(router.urls)),
+    path('investor-profile/', InvestorProfileView.as_view(), name='investor-profile'),
+    path('investment-history/', InvestmentHistoryView.as_view(), name='investment-history'),
 ]
-
