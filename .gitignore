@@ -8,6 +8,7 @@ env_rec/
 .env
 .env.exit
 .env.example
+.env.local
 /.env
 
 # ignore .md files
@@ -58,3 +59,4 @@ config.json
 
 # Ignore complementary files
 TODO
+.env.local
