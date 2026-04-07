@@ -9,17 +9,13 @@ def forwards(apps, schema_editor):
     """Drop the old M2M join table that references Institution (UUID PK)
     so Django can recreate it pointing to Organisation (bigint PK)."""
     connection = schema_editor.connection
-    # Check if the old M2M table exists before trying to drop
-    with connection.cursor() as cursor:
-        cursor.execute(
-            "SELECT EXISTS ("
-            "  SELECT FROM information_schema.tables "
-            "  WHERE table_name = 'Rooms_room_organisation'"
-            ");"
-        )
-        exists = cursor.fetchone()[0]
-        if exists:
-            cursor.execute('DROP TABLE "Rooms_room_organisation" CASCADE;')
+    tables = connection.introspection.table_names()
+    if 'Rooms_room_organisation' in tables:
+        with connection.cursor() as cursor:
+            if connection.vendor == 'sqlite':
+                cursor.execute('DROP TABLE "Rooms_room_organisation";')
+            else:
+                cursor.execute('DROP TABLE "Rooms_room_organisation" CASCADE;')
 
 
 class Migration(migrations.Migration):
