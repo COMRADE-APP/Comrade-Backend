@@ -136,6 +136,7 @@ class Event(models.Model):
     # Entity Authorship
     institution = models.ForeignKey(Institution, on_delete=models.CASCADE, null=True, blank=True, related_name='events')
     organisation = models.ForeignKey(Organisation, on_delete=models.CASCADE, null=True, blank=True, related_name='events')
+    event_organizer = models.ForeignKey('Funding.Business', on_delete=models.SET_NULL, null=True, blank=True, related_name='organized_events')
     
     # Advanced Settings
     seeking_sponsors = models.BooleanField(default=False)

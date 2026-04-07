@@ -1,4 +1,5 @@
 from django.db import models
+from django.conf import settings
 from Rooms.models import Room, DefaultRoom, OPERATION_STATUS, TEXTING_STATUS
 from Resources.models import Resource, Link
 from Announcements.models import Task, Announcements, Reply, AnnouncementsRequest, Reposts, Text, Pin, FileResponse, CompletedTask, TaskResponse
@@ -195,18 +196,217 @@ class CompletedSpecialization(models.Model):
 
     def __str__(self):
         return f"Completed Stack {self.specialization.name} by {self.completed_by}"
-    
+
+
+# ============================================================================
+# LESSON & CONTENT SYSTEM
+# ============================================================================
+
+CONTENT_TYPES = [
+    ('video', 'Video'),
+    ('text', 'Text / Article'),
+    ('audio', 'Audio / Podcast'),
+    ('image', 'Image / Infographic'),
+    ('code', 'Code Snippet'),
+    ('file', 'Downloadable File'),
+    ('embed', 'External Embed'),
+]
+
+class Lesson(models.Model):
+    """Individual content unit within a Stack (module)."""
+    stack = models.ForeignKey(Stack, on_delete=models.CASCADE, related_name='lessons')
+    title = models.CharField(max_length=255)
+    description = models.TextField(blank=True)
+    content_type = models.CharField(max_length=20, choices=CONTENT_TYPES, default='text')
+    content_text = models.TextField(blank=True, help_text="Rich text / markdown content")
+    video_url = models.URLField(max_length=500, blank=True, help_text="YouTube / Vimeo / direct link")
+    audio_url = models.URLField(max_length=500, blank=True)
+    image_url = models.URLField(max_length=500, blank=True)
+    file_upload = models.FileField(upload_to='specialization/lessons/files/', blank=True, null=True)
+    code_snippet = models.TextField(blank=True, help_text="Code content with language tag")
+    code_language = models.CharField(max_length=50, blank=True, default='python')
+    external_url = models.URLField(max_length=500, blank=True, help_text="External resource link")
+    order = models.PositiveIntegerField(default=0)
+    duration_minutes = models.PositiveIntegerField(default=10)
+    is_preview = models.BooleanField(default=False, help_text="Can be viewed without enrollment")
+    is_locked = models.BooleanField(default=False, help_text="Requires payment to unlock")
+    created_on = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['order']
+        unique_together = ['stack', 'order']
+
+    def __str__(self):
+        return f"{self.stack.name} → {self.title}"
+
+
+# ============================================================================
+# QUIZ & ASSESSMENT SYSTEM
+# ============================================================================
+
+QUESTION_TYPES = [
+    ('multiple_choice', 'Multiple Choice'),
+    ('true_false', 'True / False'),
+    ('short_answer', 'Short Answer'),
+    ('code_challenge', 'Code Challenge'),
+]
+
+class Quiz(models.Model):
+    """Assessment attached to a Stack (end-of-module) or Lesson (mid-lesson check)."""
+    QUIZ_PLACEMENT = [
+        ('after_lesson', 'After a Lesson'),
+        ('end_of_module', 'End of Module Test'),
+        ('final_exam', 'Final Exam for Specialization'),
+    ]
+    stack = models.ForeignKey(Stack, on_delete=models.CASCADE, related_name='quizzes', null=True, blank=True)
+    lesson = models.ForeignKey(Lesson, on_delete=models.CASCADE, related_name='quizzes', null=True, blank=True)
+    specialization = models.ForeignKey(Specialization, on_delete=models.CASCADE, related_name='quizzes', null=True, blank=True)
+    title = models.CharField(max_length=255)
+    description = models.TextField(blank=True)
+    placement = models.CharField(max_length=20, choices=QUIZ_PLACEMENT, default='end_of_module')
+    passing_score = models.PositiveIntegerField(default=70, help_text="Minimum % to pass")
+    time_limit_minutes = models.PositiveIntegerField(null=True, blank=True)
+    max_attempts = models.PositiveIntegerField(default=3)
+    order = models.PositiveIntegerField(default=0)
+    created_on = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['order']
+
+    def __str__(self):
+        return self.title
+
+
+class QuizQuestion(models.Model):
+    """Question within a quiz."""
+    quiz = models.ForeignKey(Quiz, on_delete=models.CASCADE, related_name='questions')
+    question_text = models.TextField()
+    question_type = models.CharField(max_length=20, choices=QUESTION_TYPES, default='multiple_choice')
+    # JSON: [{"label": "A", "text": "Answer A", "is_correct": true}, ...]
+    choices = models.JSONField(default=list, blank=True, help_text="List of choice objects for MC/TF")
+    correct_answer = models.TextField(blank=True, help_text="For short answer / code challenge")
+    explanation = models.TextField(blank=True, help_text="Shown after answering")
+    points = models.PositiveIntegerField(default=1)
+    order = models.PositiveIntegerField(default=0)
+    code_template = models.TextField(blank=True, help_text="Starter code for code challenges")
+    code_language = models.CharField(max_length=50, blank=True, default='python')
+
+    class Meta:
+        ordering = ['order']
+
+    def __str__(self):
+        return f"Q{self.order}: {self.question_text[:60]}"
+
+
+class QuizAttempt(models.Model):
+    """Record of a user's attempt at a quiz."""
+    quiz = models.ForeignKey(Quiz, on_delete=models.CASCADE, related_name='attempts')
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='quiz_attempts')
+    # JSON: [{"question_id": 1, "answer": "A", "is_correct": true}, ...]
+    answers = models.JSONField(default=list)
+    score = models.DecimalField(max_digits=5, decimal_places=2, default=0)
+    passed = models.BooleanField(default=False)
+    started_at = models.DateTimeField(auto_now_add=True)
+    completed_at = models.DateTimeField(null=True, blank=True)
+    attempt_number = models.PositiveIntegerField(default=1)
+
+    class Meta:
+        ordering = ['-started_at']
+
+    def __str__(self):
+        return f"{self.user} attempt #{self.attempt_number} on {self.quiz.title}"
+
+
+# ============================================================================
+# ENROLLMENT & PROGRESS TRACKING
+# ============================================================================
+
+class Enrollment(models.Model):
+    """Tracks user enrollment in a specialization/course/masterclass."""
+    ENROLLMENT_STATUS = [
+        ('active', 'Active'),
+        ('completed', 'Completed'),
+        ('dropped', 'Dropped'),
+        ('paused', 'Paused'),
+    ]
+    PAYMENT_STATUS = [
+        ('free', 'Free Access'),
+        ('paid', 'Paid & Unlocked'),
+        ('locked', 'Payment Required'),
+        ('trial', 'Trial Access'),
+    ]
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='enrollments')
+    specialization = models.ForeignKey(Specialization, on_delete=models.CASCADE, related_name='enrollments')
+    enrolled_at = models.DateTimeField(auto_now_add=True)
+    status = models.CharField(max_length=20, choices=ENROLLMENT_STATUS, default='active')
+    payment_status = models.CharField(max_length=20, choices=PAYMENT_STATUS, default='free')
+    progress_percent = models.DecimalField(max_digits=5, decimal_places=2, default=0)
+    last_accessed = models.DateTimeField(auto_now=True)
+    completed_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        unique_together = ['user', 'specialization']
+
+    def __str__(self):
+        return f"{self.user} enrolled in {self.specialization.name}"
+
+
+class LearnerProgress(models.Model):
+    """Per-user per-lesson completion tracking."""
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='lesson_progress')
+    lesson = models.ForeignKey(Lesson, on_delete=models.CASCADE, related_name='progress')
+    completed = models.BooleanField(default=False)
+    completed_at = models.DateTimeField(null=True, blank=True)
+    time_spent_minutes = models.PositiveIntegerField(default=0)
+    notes = models.TextField(blank=True)
+
+    class Meta:
+        unique_together = ['user', 'lesson']
+
+    def __str__(self):
+        status = "✓" if self.completed else "○"
+        return f"{status} {self.user} → {self.lesson.title}"
+
+
+# ============================================================================
+# CERTIFICATE SYSTEM (Updated)
+# ============================================================================
+
 class Certificate(models.Model):
+    """Certificate template — can be auto-generated or custom uploaded."""
+    CERT_TYPES = [
+        ('completion', 'Certificate of Completion'),
+        ('distinction', 'Certificate with Distinction'),
+        ('custom', 'Custom Certificate'),
+    ]
     specialization = models.ManyToManyField(Specialization, blank=True)
     stack = models.ManyToManyField(Stack, blank=True)
-    issuer_name = models.CharField(max_length=50000)
-    certificate_file = models.FileField(upload_to='specialization/certificates/')
+    issuer_name = models.CharField(max_length=500)
+    certificate_file = models.FileField(upload_to='specialization/certificates/', blank=True, null=True)
+    template_html = models.TextField(blank=True, help_text="HTML template for auto-generated certs")
+    certificate_type = models.CharField(max_length=20, choices=CERT_TYPES, default='completion')
+    auto_generate = models.BooleanField(default=True, help_text="Auto-issue on completion")
+    min_score = models.PositiveIntegerField(default=70, help_text="Min quiz score for distinction")
     created_on = models.DateTimeField(default=datetime.now)
     created_by = models.ForeignKey(Profile, on_delete=models.DO_NOTHING, null=True)
 
+    def __str__(self):
+        return f"Certificate: {self.issuer_name} ({self.certificate_type})"
+
+
 class IssuedCertificate(models.Model):
+    """Issued certificate instance for a specific user."""
     specialization = models.ManyToManyField(Specialization, blank=True)
     stack = models.ManyToManyField(Stack, blank=True)
-    issued_to = models.ForeignKey(Profile, on_delete=models.DO_NOTHING, null=False)
-    certificate_file = models.FileField(upload_to='specialization/certificates/issued/')
+    issued_to = models.ForeignKey(Profile, on_delete=models.DO_NOTHING, null=False, related_name='received_certificates')
+    certificate = models.ForeignKey(Certificate, on_delete=models.SET_NULL, null=True, blank=True, related_name='issued_instances')
+    certificate_file = models.FileField(upload_to='specialization/certificates/issued/', blank=True, null=True)
+    verification_code = models.UUIDField(default=uuid.uuid4, unique=True, editable=False)
+    grade = models.CharField(max_length=10, blank=True, help_text="e.g. A, B+, Pass")
+    average_score = models.DecimalField(max_digits=5, decimal_places=2, default=0)
+    hours_completed = models.DecimalField(max_digits=6, decimal_places=1, default=0)
     issued_on = models.DateTimeField(default=datetime.now)
+
+    def __str__(self):
+        return f"Cert {self.verification_code} → {self.issued_to}"
+

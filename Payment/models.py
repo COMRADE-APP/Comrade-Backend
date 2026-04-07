@@ -246,6 +246,22 @@ class PaymentGroups(models.Model):
     )  # Members who agreed to terminate
     is_terminated = models.BooleanField(default=False)
     
+    # --- New: Pitch & Proposition ---
+    investment_pitch = models.TextField(blank=True, default='', help_text='Investment or donation pitch description')
+    loan_proposition = models.TextField(blank=True, default='', help_text='Loan offering/proposition details')
+    parent_group = models.ForeignKey(
+        'self', on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='sub_groups', help_text='Parent group (expansion of)'
+    )
+    joining_minimum = models.DecimalField(
+        decimal_places=2, max_digits=12, default=0.00,
+        help_text='Minimum wallet balance required to join'
+    )
+    accent_color = models.CharField(
+        max_length=7, default='#6366f1', blank=True,
+        help_text='Hex accent colour for UI theming, e.g. #6366f1'
+    )
+    
     created_at = models.DateTimeField(default=timezone.now)
     updated_at = models.DateTimeField(auto_now=True)
     
@@ -259,6 +275,70 @@ class PaymentGroups(models.Model):
     
     def __str__(self):
         return self.name
+
+
+class GroupPhase(models.Model):
+    """Tracks named phases (e.g. Seed Round, Growth) with targets and proportions."""
+    import uuid
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    group = models.ForeignKey(PaymentGroups, on_delete=models.CASCADE, related_name='phases')
+    name = models.CharField(max_length=255)
+    description = models.TextField(blank=True)
+    target_amount = models.DecimalField(decimal_places=2, max_digits=12, default=0.00)
+    proportion = models.DecimalField(decimal_places=2, max_digits=5, default=0.00, help_text='% of total target')
+    current_amount = models.DecimalField(decimal_places=2, max_digits=12, default=0.00)
+    start_date = models.DateField(null=True, blank=True)
+    end_date = models.DateField(null=True, blank=True)
+    order = models.PositiveIntegerField(default=0)
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(default=timezone.now)
+
+    class Meta:
+        ordering = ['order', 'created_at']
+        indexes = [models.Index(fields=['group', 'order'])]
+
+    def __str__(self):
+        return f"{self.group.name} — {self.name}"
+
+
+class GroupPost(models.Model):
+    """Discord-style post in a group's public discourse feed."""
+    import uuid
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    group = models.ForeignKey(PaymentGroups, on_delete=models.CASCADE, related_name='posts')
+    author = models.ForeignKey(PaymentProfile, on_delete=models.CASCADE, related_name='group_posts')
+    content = models.TextField()
+    image = models.ImageField(upload_to='group_posts/', blank=True, null=True)
+    is_pinned = models.BooleanField(default=False)
+    reactions = models.JSONField(default=dict, blank=True, help_text='{"👍": [user_id,...], ...}')
+    created_at = models.DateTimeField(default=timezone.now)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['-is_pinned', '-created_at']
+        indexes = [
+            models.Index(fields=['group', '-created_at']),
+        ]
+
+    def __str__(self):
+        return f"Post by {self.author} in {self.group.name}"
+
+
+class GroupPostReply(models.Model):
+    """Threaded reply on a GroupPost."""
+    import uuid
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    post = models.ForeignKey(GroupPost, on_delete=models.CASCADE, related_name='replies')
+    author = models.ForeignKey(PaymentProfile, on_delete=models.CASCADE, related_name='group_replies')
+    content = models.TextField()
+    created_at = models.DateTimeField(default=timezone.now)
+
+    class Meta:
+        ordering = ['created_at']
+
+    def __str__(self):
+        return f"Reply by {self.author} on {self.post_id}"
+
 
 class GroupCheckoutRequest(models.Model):
     """Tracks a proposed group checkout that requires member approval."""
@@ -437,6 +517,17 @@ class GroupTarget(models.Model):
         ('cancelled', 'Cancelled'),
     )
     
+    SAVINGS_TYPE_CHOICES = (
+        ('normal', 'Normal Piggy Bank'),
+        ('locked', 'Locked Savings'),
+        ('fixed_deposit', 'Fixed Deposit'),
+    )
+    
+    CONTRIBUTION_MODE_CHOICES = (
+        ('equal', 'Equal Contributions'),
+        ('proportional', 'Proportional Contributions'),
+    )
+    
     # Owner for individual piggy banks (null if group piggy bank)
     owner = models.ForeignKey(PaymentProfile, on_delete=models.CASCADE, null=True, blank=True, related_name='individual_piggy_banks')
     # Group piggy bank - null for individual
@@ -450,6 +541,30 @@ class GroupTarget(models.Model):
     description = models.TextField(blank=True)
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='active')
     
+    # Savings type — determines withdrawal rules and interest
+    savings_type = models.CharField(max_length=20, choices=SAVINGS_TYPE_CHOICES, default='normal')
+    
+    # Fixed deposit configuration
+    interest_rate = models.DecimalField(
+        decimal_places=2, max_digits=6, default=0.00,
+        help_text='Annual interest rate % (for fixed_deposit type)'
+    )
+    penalty_rate = models.DecimalField(
+        decimal_places=2, max_digits=6, default=2.00,
+        help_text='Early withdrawal penalty % (for fixed_deposit type)'
+    )
+    accrued_interest = models.DecimalField(
+        decimal_places=2, max_digits=12, default=0.00,
+        help_text='Total interest earned so far'
+    )
+    last_interest_date = models.DateTimeField(null=True, blank=True)
+    
+    # Contribution mode for group piggy banks
+    contribution_mode = models.CharField(
+        max_length=20, choices=CONTRIBUTION_MODE_CHOICES, default='equal',
+        help_text='How group members contribute (equal or proportional)'
+    )
+    
     # Piggy Bank Logic
     locking_status = models.CharField(max_length=20, choices=LOCK_OPTIONS, default='unlocked')
     maturity_date = models.DateTimeField(null=True, blank=True)
@@ -462,14 +577,44 @@ class GroupTarget(models.Model):
     achieved_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(default=timezone.now)
     
+    MAX_INDIVIDUAL_PIGGY_BANKS = 3
+    MAX_GROUP_PIGGY_MEMBERSHIPS = 3
+    
     class Meta:
         indexes = [
             models.Index(fields=['payment_group', 'achieved']),
             models.Index(fields=['owner', 'achieved']),
+            models.Index(fields=['savings_type']),
         ]
     
     def is_individual(self):
         return self.payment_group is None and self.owner is not None
+    
+    @property
+    def is_matured(self):
+        """Check if the piggy bank has reached its maturity date."""
+        if self.maturity_date and timezone.now() >= self.maturity_date:
+            return True
+        return False
+    
+    def can_withdraw(self):
+        """Check withdrawal eligibility based on savings_type."""
+        if self.savings_type == 'locked':
+            # Locked: no withdrawals until maturity
+            return self.is_matured, 'Locked savings cannot be withdrawn until maturity date.'
+        elif self.savings_type == 'fixed_deposit':
+            # Fixed deposit: can withdraw anytime but penalty applies before maturity
+            return True, None
+        else:
+            # Normal: anytime
+            return True, None
+    
+    def calculate_withdrawal_penalty(self, amount):
+        """Calculate penalty for early withdrawal on fixed_deposit type."""
+        if self.savings_type == 'fixed_deposit' and not self.is_matured:
+            penalty = amount * (self.penalty_rate / 100)
+            return penalty
+        return 0
 
 # Individual Savings within a Group Target (for non-sharable)
 class IndividualShare(models.Model):
@@ -479,6 +624,283 @@ class IndividualShare(models.Model):
     current_amount = models.DecimalField(decimal_places=2, max_digits=12, default=0.00)
     quantity = models.IntegerField(default=1) # Target quantity of item
     achieved = models.BooleanField(default=False)
+
+
+# ============================================================================
+# DONATIONS & CHARITY
+# ============================================================================
+
+DONATION_STATUS = (
+    ('draft', 'Draft'),
+    ('collecting', 'Collecting Contributions'),
+    ('submitted', 'Submitted to Recipient'),
+    ('completed', 'Completed'),
+    ('cancelled', 'Cancelled'),
+)
+
+DONATION_MODE = (
+    ('lump_sum', 'Lump Sum (Group dictates once)'),
+    ('individual_share', 'Individual Share (Portion-based)'),
+    ('independent_quote', 'Independent Quoting (Each member quotes)'),
+)
+
+DONATION_FREQUENCY = (
+    ('one_time', 'One Time'),
+    ('weekly', 'Weekly'),
+    ('monthly', 'Monthly'),
+    ('quarterly', 'Quarterly'),
+)
+
+class Donation(models.Model):
+    """Tracks individual or group donations to charities/businesses/orgs."""
+    import uuid
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    
+    DONOR_TYPE_CHOICES = (
+        ('individual', 'Individual'),
+        ('group', 'Group'),
+    )
+    donor_type = models.CharField(max_length=20, choices=DONOR_TYPE_CHOICES, default='individual')
+    
+    # Individual donor (set for individual donations)
+    donor_profile = models.ForeignKey(
+        PaymentProfile, on_delete=models.CASCADE, null=True, blank=True,
+        related_name='donations'
+    )
+    # Group donor (set for group donations)
+    payment_group = models.ForeignKey(
+        PaymentGroups, on_delete=models.CASCADE, null=True, blank=True,
+        related_name='donations'
+    )
+    
+    # Group donation mode
+    donation_mode = models.CharField(
+        max_length=20, choices=DONATION_MODE, default='lump_sum',
+        help_text='How group members contribute to this donation'
+    )
+    
+    # Generic Campaign details
+    name = models.CharField(max_length=255, default='Untitled Campaign')
+    category = models.CharField(max_length=100, default='General charity', help_text='e.g., Health, Education, Relief')
+
+    
+    # Recipient — generic FK to charity, business, org, etc.
+    recipient_content_type = models.ForeignKey(
+        'contenttypes.ContentType', on_delete=models.SET_NULL,
+        null=True, blank=True, related_name='received_donations'
+    )
+    recipient_object_id = models.CharField(max_length=255, blank=True, null=True)
+    recipient = GenericForeignKey('recipient_content_type', 'recipient_object_id')
+    recipient_name = models.CharField(max_length=500, blank=True, help_text='Display name of recipient')
+    
+    # Amount tracking
+    total_amount = models.DecimalField(decimal_places=2, max_digits=12, default=0.00)
+    amount_collected = models.DecimalField(decimal_places=2, max_digits=12, default=0.00)
+    
+    # Scheduling
+    is_recurring = models.BooleanField(default=False)
+    frequency = models.CharField(max_length=20, choices=DONATION_FREQUENCY, default='one_time')
+    next_due_date = models.DateTimeField(null=True, blank=True)
+    deadline = models.DateTimeField(null=True, blank=True, help_text='Deadline for group contributions')
+    
+    # Status & metadata
+    VISIBILITY_CHOICES = (
+        ('internal', 'Internal (Group Only)'),
+        ('external', 'External (Public)'),
+    )
+    visibility = models.CharField(max_length=20, choices=VISIBILITY_CHOICES, default='external')
+    status = models.CharField(max_length=20, choices=DONATION_STATUS, default='draft')
+    description = models.TextField(blank=True)
+    
+    # Linked vote (for lump_sum group donations)
+    approval_vote = models.ForeignKey(
+        'GroupVote', on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='donation_approval'
+    )
+    
+    created_at = models.DateTimeField(default=timezone.now)
+    updated_at = models.DateTimeField(auto_now=True)
+    
+    class Meta:
+        indexes = [
+            models.Index(fields=['donor_profile', 'status']),
+            models.Index(fields=['payment_group', 'status']),
+            models.Index(fields=['-created_at']),
+        ]
+        ordering = ['-created_at']
+    
+    def __str__(self):
+        origin = self.payment_group.name if self.payment_group else 'Individual'
+        return f"Donation to {self.recipient_name} ({origin}) - {self.total_amount}"
+
+
+class DonationContribution(models.Model):
+    """Tracks each member's contribution to a group donation."""
+    import uuid
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    
+    donation = models.ForeignKey(Donation, on_delete=models.CASCADE, related_name='contributions')
+    member = models.ForeignKey(
+        PaymentGroupMember, on_delete=models.CASCADE, null=True, blank=True,
+        related_name='donation_contributions'
+    )
+    donor_profile = models.ForeignKey(
+        PaymentProfile, on_delete=models.CASCADE,
+        related_name='donation_contribution_records'
+    )
+    
+    amount = models.DecimalField(decimal_places=2, max_digits=12)
+    
+    CONTRIBUTION_STATUS = (
+        ('pending', 'Pending'),
+        ('confirmed', 'Confirmed'),
+        ('submitted', 'Submitted to Recipient'),
+    )
+    status = models.CharField(max_length=20, choices=CONTRIBUTION_STATUS, default='pending')
+    
+    transaction = models.ForeignKey(
+        TransactionToken, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='donation_contributions'
+    )
+    
+    confirmed_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(default=timezone.now)
+    
+    class Meta:
+        indexes = [
+            models.Index(fields=['donation', 'status']),
+            models.Index(fields=['donor_profile']),
+        ]
+    
+    def __str__(self):
+        return f"Contribution of {self.amount} to {self.donation.recipient_name}"
+
+
+# ============================================================================
+# GROUP INVESTMENTS
+# ============================================================================
+
+INVESTMENT_STATUS = (
+    ('quoting', 'Members Are Quoting'),
+    ('collecting', 'Collecting Payments'),
+    ('invested', 'Invested'),
+    ('matured', 'Matured / Returns Available'),
+    ('closed', 'Closed'),
+    ('cancelled', 'Cancelled'),
+)
+
+QUOTING_MODE = (
+    ('lump_sum', 'Lump Sum (One member proposes, group approves)'),
+    ('proportional', 'Proportional Quoting (Each quotes, profits split by ratio)'),
+    ('independent', 'Independent (Each invests alone, no coordination)'),
+)
+
+class GroupInvestment(models.Model):
+    """Tracks group investment activities with multiple quoting modes."""
+    import uuid
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    
+    payment_group = models.ForeignKey(
+        PaymentGroups, on_delete=models.CASCADE, related_name='group_investments'
+    )
+    
+    # Investment target — link to opportunity or venture
+    investment_opportunity = models.ForeignKey(
+        'Funding.InvestmentOpportunity', on_delete=models.SET_NULL,
+        null=True, blank=True, related_name='group_investments'
+    )
+    capital_venture = models.ForeignKey(
+        'Funding.CapitalVenture', on_delete=models.SET_NULL,
+        null=True, blank=True, related_name='group_investments'
+    )
+    
+    name = models.CharField(max_length=500)
+    description = models.TextField(blank=True)
+    
+    # Quoting mode
+    quoting_mode = models.CharField(max_length=20, choices=QUOTING_MODE, default='proportional')
+    
+    # Amounts
+    total_amount = models.DecimalField(decimal_places=2, max_digits=12, default=0.00)
+    amount_collected = models.DecimalField(decimal_places=2, max_digits=12, default=0.00)
+    
+    # Returns tracking
+    total_returns = models.DecimalField(decimal_places=2, max_digits=12, default=0.00)
+    net_profit_loss = models.DecimalField(decimal_places=2, max_digits=12, default=0.00)
+    
+    # Status
+    status = models.CharField(max_length=20, choices=INVESTMENT_STATUS, default='quoting')
+    
+    # Linked approval vote (for lump_sum mode)
+    approval_vote = models.ForeignKey(
+        'GroupVote', on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='investment_approval'
+    )
+    
+    # Initiator
+    initiated_by = models.ForeignKey(
+        PaymentProfile, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='initiated_investments'
+    )
+    
+    created_at = models.DateTimeField(default=timezone.now)
+    updated_at = models.DateTimeField(auto_now=True)
+    
+    class Meta:
+        indexes = [
+            models.Index(fields=['payment_group', 'status']),
+            models.Index(fields=['-created_at']),
+        ]
+        ordering = ['-created_at']
+    
+    def __str__(self):
+        return f"Investment: {self.name} ({self.payment_group.name})"
+
+
+class InvestmentQuote(models.Model):
+    """Tracks individual member quotes and ownership within a group investment."""
+    import uuid
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    
+    group_investment = models.ForeignKey(
+        GroupInvestment, on_delete=models.CASCADE, related_name='quotes'
+    )
+    member = models.ForeignKey(
+        PaymentGroupMember, on_delete=models.CASCADE, related_name='investment_quotes'
+    )
+    
+    quoted_amount = models.DecimalField(decimal_places=2, max_digits=12)
+    ownership_percentage = models.DecimalField(
+        decimal_places=4, max_digits=8, default=0.00,
+        help_text='Auto-calculated based on proportional contribution'
+    )
+    
+    # Returns allocated to this member
+    allocated_returns = models.DecimalField(decimal_places=2, max_digits=12, default=0.00)
+    
+    QUOTE_STATUS = (
+        ('pending', 'Quote Submitted'),
+        ('confirmed', 'Payment Confirmed'),
+        ('paid', 'Paid / Invested'),
+    )
+    status = models.CharField(max_length=20, choices=QUOTE_STATUS, default='pending')
+    
+    transaction = models.ForeignKey(
+        TransactionToken, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='investment_quotes'
+    )
+    
+    confirmed_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(default=timezone.now)
+    
+    class Meta:
+        unique_together = ['group_investment', 'member']
+        indexes = [
+            models.Index(fields=['group_investment', 'status']),
+        ]
+    
+    def __str__(self):
+        return f"{self.member} quoted {self.quoted_amount} ({self.ownership_percentage}%)"
 
 
 PARTNER_TYPES = (
@@ -885,7 +1307,16 @@ class ServiceOffering(models.Model):
     price = models.DecimalField(decimal_places=2, max_digits=12)
     duration_minutes = models.IntegerField(default=60)
     
+    SERVICE_TYPES = (
+        ('appointment', 'Appointment (e.g. In-person/Remote session)'),
+        ('call_service', 'Call Service (e.g. Phone consultation)'),
+        ('online_sale', 'Online Sale (e.g. Digital download)'),
+    )
+    
     service_mode = models.CharField(max_length=20, choices=SERVICE_MODE, default='in_person')
+    service_type = models.CharField(max_length=30, choices=SERVICE_TYPES, default='appointment')
+    setup_data = models.JSONField(default=dict, blank=True, help_text='Stores specific fields: delay_minutes, break_minutes, max_bookings, tags, call_number')
+    
     category = models.CharField(max_length=200, blank=True, help_text='e.g. Hair, Plumbing, Tutoring')
     image = models.ImageField(upload_to='services/', null=True, blank=True)
     
@@ -1839,3 +2270,69 @@ class InsuranceClaim(models.Model):
 
     def __str__(self):
         return f"Claim on {self.policy.policy_number} - KES {self.amount_claimed}"
+
+
+# ============================================================================
+# SERVICE PROVIDERS & BILLING AUTOMATION
+# ============================================================================
+
+DESTINATION_TYPE = (
+    ('external_mpesa', 'M-Pesa (External)'),
+    ('external_bank', 'Bank Transfer (External)'),
+    ('internal_wallet', 'Qomrade Wallet (Internal)'),
+)
+
+STANDING_ORDER_FREQ = (
+    ('weekly', 'Weekly'),
+    ('monthly', 'Monthly'),
+    ('quarterly', 'Quarterly'),
+)
+
+STANDING_ORDER_STATUS = (
+    ('active', 'Active'),
+    ('paused', 'Paused'),
+    ('cancelled', 'Cancelled'),
+    ('completed', 'Completed'),
+)
+
+class UserServiceProvider(models.Model):
+    user = models.ForeignKey(Profile, on_delete=models.CASCADE, related_name='saved_providers')
+    name = models.CharField(max_length=255)
+    category = models.CharField(max_length=50, choices=BILL_CATEGORY, default='other')
+    account_number = models.CharField(max_length=255)
+    destination_account = models.CharField(max_length=255, blank=True, null=True, help_text='Paybill, Till Number, Bank Account, etc.')
+    destination_type = models.CharField(max_length=50, choices=DESTINATION_TYPE, default='external_mpesa')
+    details = models.TextField(blank=True, help_text='Optional notes or description')
+    created_at = models.DateTimeField(default=timezone.now)
+    
+    class Meta:
+        ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['user', 'category']),
+        ]
+        
+    def __str__(self):
+        return f"{self.name} ({self.account_number})"
+
+
+class BillStandingOrder(models.Model):
+    user = models.ForeignKey(Profile, on_delete=models.CASCADE, related_name='bill_standing_orders')
+    provider = models.ForeignKey(UserServiceProvider, on_delete=models.CASCADE, related_name='standing_orders')
+    amount = models.DecimalField(max_digits=12, decimal_places=2)
+    frequency = models.CharField(max_length=20, choices=STANDING_ORDER_FREQ, default='monthly')
+    start_date = models.DateField()
+    end_date = models.DateField(null=True, blank=True)
+    status = models.CharField(max_length=20, choices=STANDING_ORDER_STATUS, default='active')
+    created_at = models.DateTimeField(default=timezone.now)
+    updated_at = models.DateTimeField(auto_now=True)
+    
+    class Meta:
+        ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['user', 'status']),
+            models.Index(fields=['start_date']),
+        ]
+        
+    def __str__(self):
+        return f"Standing Order: {self.provider.name} - KES {self.amount}/{self.frequency}"
+

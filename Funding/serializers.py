@@ -52,7 +52,9 @@ class BusinessSerializer(serializers.ModelSerializer):
             'id', 'founder', 'name', 'industry', 'description', 'logo', 
             'stage', 'website', 'valuation', 'is_charity', 'charity_goal', 
             'charity_raised', 'charity_progress', 'created_at', 'updated_at',
-            'documents', 'funding_requests', 'founder_details', 'investors_count'
+            'documents', 'funding_requests', 'founder_details', 'investors_count',
+            'is_verified', 'has_portal_password',
+            'contact_email', 'country', 'city', 'country_code', 'phone_number'
         ]
         read_only_fields = ['id', 'created_at', 'updated_at', 'founder']
 
@@ -73,7 +75,8 @@ class BusinessCreateSerializer(serializers.ModelSerializer):
     class Meta:
         model = Business
         fields = ['id', 'name', 'industry', 'description', 'stage', 'website', 
-                  'valuation', 'is_charity', 'charity_goal']
+                  'valuation', 'is_charity', 'charity_goal',
+                  'contact_email', 'country', 'city', 'country_code', 'phone_number']
         read_only_fields = ['id']
 
 class InvestmentOpportunitySerializer(serializers.ModelSerializer):

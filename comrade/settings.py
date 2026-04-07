@@ -219,7 +219,7 @@ WSGI_APPLICATION = 'comrade.wsgi.application'
 # Production: set DATABASE_URL env var (PostgreSQL on Render)
 # Local dev:  leave DATABASE_URL unset → falls back to SQLite
 _database_url = os.environ.get('DATABASE_URL')
-if _database_url:
+if False:
     DATABASES = {
         'default': dj_database_url.parse(
             _database_url,
@@ -263,8 +263,8 @@ REST_FRAMEWORK = {
 }
 
 SIMPLE_JWT = {
-    'ACCESS_TOKEN_LIFETIME': timedelta(minutes=15),
-    'REFRESH_TOKEN_LIFETIME': timedelta(days=7),
+    'ACCESS_TOKEN_LIFETIME': timedelta(days=7),
+    'REFRESH_TOKEN_LIFETIME': timedelta(days=14),
     'ROTATE_REFRESH_TOKENS': True,
     'BLACKLIST_AFTER_ROTATION': True,
     'AUTH_HEADER_TYPES': ('Bearer',),

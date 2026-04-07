@@ -79,7 +79,7 @@ class UpdateProfileView(APIView):
         user = request.user
         
         # Update user fields
-        user_fields = ['first_name', 'last_name', 'phone_number']
+        user_fields = ['first_name', 'last_name', 'phone_number', 'onboarding_completed']
         for field in user_fields:
             if field in request.data:
                 setattr(user, field, request.data[field])
@@ -346,3 +346,19 @@ class LinkedInLoginCallbackView(BaseSocialCallbackView):
 class MicrosoftLoginCallbackView(BaseSocialCallbackView):
     """Handle Microsoft OAuth callback"""
     provider = 'microsoft'
+
+
+class LogoutAllDevicesView(APIView):
+    """Blacklist all outstanding JWT tokens for the current user, signing them out of every device."""
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        try:
+            from rest_framework_simplejwt.token_blacklist.models import OutstandingToken, BlacklistedToken
+            tokens = OutstandingToken.objects.filter(user=request.user)
+            for token in tokens:
+                BlacklistedToken.objects.get_or_create(token=token)
+            return Response({'detail': 'Successfully logged out from all devices.'}, status=status.HTTP_200_OK)
+        except Exception as e:
+            logger.error(f"Logout all devices failed for user {request.user.id}: {e}")
+            return Response({'detail': 'Failed to logout from all devices.'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)

@@ -35,7 +35,7 @@ import PyPDF2
 
 class EventViewSet(ModelViewSet):
     serializer_class = EventSerializer
-    queryset = Event.objects.all()
+    queryset = Event.objects.all().order_by('-time_stamp')
     permission_classes = [IsAuthenticated]
     pagination_class = PageNumberPagination
     filter_backends = [SearchFilter, OrderingFilter]
@@ -110,6 +110,27 @@ class EventViewSet(ModelViewSet):
         """Auto-set created_by to the authenticated user and optionally link to a room"""
         instance = serializer.save(created_by=self.request.user)
         
+        # Auto-create Event Kitty (PaymentGroup)
+        try:
+            from Payment.models import PaymentGroups
+            from django.contrib.contenttypes.models import ContentType
+            
+            content_type = ContentType.objects.get_for_model(instance)
+            group_name = instance.event_organizer.name if instance.event_organizer else f"Event Kitty - {instance.name}"
+            # Ensure name fits in PaymentGroup name field (max 100)
+            if len(group_name) > 100:
+                group_name = group_name[:97] + '...'
+            
+            PaymentGroups.objects.create(
+                name=group_name,
+                owner=self.request.user,
+                content_type=content_type,
+                object_id=instance.id,
+                target_amount=0.00
+            )
+        except Exception as e:
+            print(f"Failed to auto-create event kitty: {e}")
+
         # Check if room parameter was provided
         room_id = self.request.data.get('room')
         if room_id:

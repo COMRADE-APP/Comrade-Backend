@@ -5,11 +5,12 @@ from Payment.models import (
     TransactionHistory, TransactionTracker, PaymentGroupMember,
     Contribution, StandingOrder, GroupInvitation, GroupTarget,
     Product, UserSubscription, SavedPaymentMethod, GroupCheckoutRequest,
-    GroupJoinRequest, GroupVote,
+    GroupJoinRequest, GroupVote, GroupPhase, GroupPost, GroupPostReply,
     BillProvider, BillPayment,
     LoanProduct, CreditScore, LoanApplication, LoanRepayment,
     EscrowTransaction, EscrowDispute,
-    InsuranceProduct, InsurancePolicy, InsuranceClaim
+    InsuranceProduct, InsurancePolicy, InsuranceClaim,
+    Donation, DonationContribution, GroupInvestment, InvestmentQuote,
 )
 from Payment.models import TRANSACTION_CATEGORY, PAY_OPT
 from Authentication.models import Profile, CustomUser
@@ -160,11 +161,16 @@ class GroupTargetSerializer(serializers.ModelSerializer):
     owner_name = serializers.SerializerMethodField()
     group_name = serializers.CharField(source='payment_group.name', read_only=True)
     type = serializers.SerializerMethodField()
+    can_withdraw = serializers.SerializerMethodField()
+    withdrawal_message = serializers.SerializerMethodField()
+    is_matured = serializers.BooleanField(read_only=True)
+    savings_type_display = serializers.CharField(source='get_savings_type_display', read_only=True)
+    contribution_mode_display = serializers.CharField(source='get_contribution_mode_display', read_only=True)
     
     class Meta:
         model = GroupTarget
         fields = '__all__'
-        read_only_fields = ['achieved', 'achieved_at', 'current_amount']
+        read_only_fields = ['achieved', 'achieved_at', 'current_amount', 'accrued_interest', 'last_interest_date']
     
     def get_progress_percentage(self, obj):
         if obj.target_amount and obj.target_amount > 0:
@@ -179,6 +185,14 @@ class GroupTargetSerializer(serializers.ModelSerializer):
     def get_type(self, obj):
         """Return 'individual' or 'group' based on piggy bank type"""
         return 'individual' if obj.owner else 'group'
+    
+    def get_can_withdraw(self, obj):
+        allowed, _ = obj.can_withdraw()
+        return allowed
+    
+    def get_withdrawal_message(self, obj):
+        _, message = obj.can_withdraw()
+        return message
 
 class GroupInvitationSerializer(serializers.ModelSerializer):
     invited_user_email = serializers.EmailField(source='invited_profile.user.user.email', read_only=True)
@@ -193,13 +207,89 @@ class GroupInvitationSerializer(serializers.ModelSerializer):
     def get_invited_by_name(self, obj):
         return f"{obj.invited_by.user.user.first_name} {obj.invited_by.user.user.last_name}"
 
+# ── Group Phase / Post serializers ─────────────────────────────
+class GroupPhaseSerializer(serializers.ModelSerializer):
+    progress_percentage = serializers.SerializerMethodField()
+
+    class Meta:
+        model = GroupPhase
+        fields = '__all__'
+        read_only_fields = ['id', 'current_amount', 'created_at']
+
+    def get_progress_percentage(self, obj):
+        if obj.target_amount and obj.target_amount > 0:
+            return round((float(obj.current_amount) / float(obj.target_amount)) * 100, 2)
+        return 0.0
+
+
+class GroupPostReplySerializer(serializers.ModelSerializer):
+    author_name = serializers.SerializerMethodField()
+    author_avatar = serializers.SerializerMethodField()
+
+    class Meta:
+        model = GroupPostReply
+        fields = '__all__'
+        read_only_fields = ['id', 'author', 'created_at']
+
+    def get_author_name(self, obj):
+        try:
+            return f"{obj.author.user.user.first_name} {obj.author.user.user.last_name}"
+        except Exception:
+            return 'Unknown'
+
+    def get_author_avatar(self, obj):
+        try:
+            if obj.author.user.profile_picture:
+                request = self.context.get('request')
+                if request:
+                    return request.build_absolute_uri(obj.author.user.profile_picture.url)
+                return obj.author.user.profile_picture.url
+        except Exception:
+            pass
+        return None
+
+
+class GroupPostSerializer(serializers.ModelSerializer):
+    author_name = serializers.SerializerMethodField()
+    author_avatar = serializers.SerializerMethodField()
+    replies = GroupPostReplySerializer(many=True, read_only=True)
+    reply_count = serializers.SerializerMethodField()
+
+    class Meta:
+        model = GroupPost
+        fields = '__all__'
+        read_only_fields = ['id', 'author', 'reactions', 'created_at', 'updated_at']
+
+    def get_author_name(self, obj):
+        try:
+            return f"{obj.author.user.user.first_name} {obj.author.user.user.last_name}"
+        except Exception:
+            return 'Unknown'
+
+    def get_author_avatar(self, obj):
+        try:
+            if obj.author.user.profile_picture:
+                request = self.context.get('request')
+                if request:
+                    return request.build_absolute_uri(obj.author.user.profile_picture.url)
+                return obj.author.user.profile_picture.url
+        except Exception:
+            pass
+        return None
+
+    def get_reply_count(self, obj):
+        return obj.replies.count()
+
+
 class PaymentGroupsSerializer(serializers.ModelSerializer):
     members = PaymentGroupMemberSerializer(many=True, read_only=True)
     contributions_summary = serializers.SerializerMethodField()
     targets = GroupTargetSerializer(many=True, read_only=True)
+    phases = GroupPhaseSerializer(many=True, read_only=True)
     creator_name = serializers.SerializerMethodField()
     member_count = serializers.SerializerMethodField()
     progress_percentage = serializers.SerializerMethodField()
+    parent_group_name = serializers.SerializerMethodField()
     
     class Meta:
         model = PaymentGroups
@@ -223,6 +313,9 @@ class PaymentGroupsSerializer(serializers.ModelSerializer):
             'total_amount': obj.current_amount,
             'target_amount': obj.target_amount or 0,
         }
+
+    def get_parent_group_name(self, obj):
+        return obj.parent_group.name if obj.parent_group else None
 
 class GroupCheckoutRequestSerializer(serializers.ModelSerializer):
     initiator_name = serializers.SerializerMethodField()
@@ -299,12 +392,17 @@ class GroupCheckoutRequestSerializer(serializers.ModelSerializer):
         return None
 
 class PaymentGroupsCreateSerializer(serializers.ModelSerializer):
+    phases_data = serializers.ListField(child=serializers.DictField(), write_only=True, required=False, default=[])
+
     class Meta:
         model = PaymentGroups
         fields = ['name', 'description', 'max_capacity', 'target_amount', 'expiry_date', 
                   'deadline', 'auto_purchase', 'requires_approval', 'is_public',
                   'contribution_type', 'contribution_amount', 'frequency', 'group_type',
-                  'allow_anonymous', 'auto_create_room']
+                  'allow_anonymous', 'auto_create_room',
+                  'investment_pitch', 'loan_proposition', 'parent_group',
+                  'joining_minimum', 'accent_color', 'entry_fee_required',
+                  'entry_fee_amount', 'phases_data']
 
 
 class KittySerializer(serializers.ModelSerializer):
@@ -1050,6 +1148,27 @@ class BillPaymentSerializer(serializers.ModelSerializer):
         read_only_fields = ['commission', 'total_amount', 'reference', 'status', 'completed_at', 'user', 'transaction', 'error_message']
 
 
+from Payment.models import UserServiceProvider, BillStandingOrder
+class UserServiceProviderSerializer(serializers.ModelSerializer):
+    category_display = serializers.CharField(source='get_category_display', read_only=True)
+    destination_type_display = serializers.CharField(source='get_destination_type_display', read_only=True)
+
+    class Meta:
+        model = UserServiceProvider
+        fields = '__all__'
+        read_only_fields = ['user', 'created_at']
+
+
+class BillStandingOrderSerializer(serializers.ModelSerializer):
+    provider_name = serializers.CharField(source='provider.name', read_only=True)
+    provider_account = serializers.CharField(source='provider.account_number', read_only=True)
+
+    class Meta:
+        model = BillStandingOrder
+        fields = '__all__'
+        read_only_fields = ['user', 'created_at', 'updated_at']
+
+
 # ==================== LOAN SERIALIZERS ====================
 
 class LoanProductSerializer(serializers.ModelSerializer):
@@ -1155,3 +1274,148 @@ class InsurancePolicySerializer(serializers.ModelSerializer):
         model = InsurancePolicy
         fields = '__all__'
         read_only_fields = ['id', 'user', 'policy_number', 'status', 'premium_paid', 'total_premiums_due']
+
+
+# ==================== DONATIONS & CHARITY SERIALIZERS ====================
+
+class DonationContributionSerializer(serializers.ModelSerializer):
+    member_name = serializers.SerializerMethodField()
+    donor_email = serializers.SerializerMethodField()
+    status_display = serializers.CharField(source='get_status_display', read_only=True)
+
+    class Meta:
+        model = DonationContribution
+        fields = '__all__'
+        read_only_fields = ['id', 'confirmed_at', 'created_at']
+
+    def get_member_name(self, obj):
+        if obj.member:
+            if obj.member.is_anonymous:
+                return obj.member.anonymous_alias or 'Anonymous'
+            return f"{obj.member.payment_profile.user.user.first_name} {obj.member.payment_profile.user.user.last_name}"
+        if obj.donor_profile:
+            return f"{obj.donor_profile.user.user.first_name} {obj.donor_profile.user.user.last_name}"
+        return 'Unknown'
+
+    def get_donor_email(self, obj):
+        try:
+            return obj.donor_profile.user.user.email
+        except Exception:
+            return None
+
+
+class DonationSerializer(serializers.ModelSerializer):
+    contributions = DonationContributionSerializer(many=True, read_only=True)
+    status_display = serializers.CharField(source='get_status_display', read_only=True)
+    visibility_display = serializers.CharField(source='get_visibility_display', read_only=True)
+    donor_type_display = serializers.CharField(source='get_donor_type_display', read_only=True)
+    mode_display = serializers.CharField(source='get_donation_mode_display', read_only=True)
+    group_name = serializers.SerializerMethodField()
+    donor_name = serializers.SerializerMethodField()
+    progress_percentage = serializers.SerializerMethodField()
+    contributor_count = serializers.SerializerMethodField()
+    confirmed_count = serializers.SerializerMethodField()
+    goal_amount = serializers.DecimalField(source='total_amount', max_digits=12, decimal_places=2, required=False)
+
+    class Meta:
+        model = Donation
+        fields = '__all__'
+        read_only_fields = ['id', 'amount_collected', 'created_at', 'updated_at']
+
+    def get_group_name(self, obj):
+        return obj.payment_group.name if obj.payment_group else None
+
+    def get_donor_name(self, obj):
+        if obj.donor_profile:
+            return f"{obj.donor_profile.user.user.first_name} {obj.donor_profile.user.user.last_name}"
+        if obj.payment_group:
+            return obj.payment_group.name
+        return 'Unknown'
+
+    def get_progress_percentage(self, obj):
+        if obj.total_amount and obj.total_amount > 0:
+            return round((float(obj.amount_collected) / float(obj.total_amount)) * 100, 2)
+        return 0.0
+
+    def get_contributor_count(self, obj):
+        return obj.contributions.count()
+
+    def get_confirmed_count(self, obj):
+        return obj.contributions.filter(status='confirmed').count()
+
+
+# ==================== GROUP INVESTMENT SERIALIZERS ====================
+
+class InvestmentQuoteSerializer(serializers.ModelSerializer):
+    member_name = serializers.SerializerMethodField()
+    member_email = serializers.SerializerMethodField()
+    status_display = serializers.CharField(source='get_status_display', read_only=True)
+
+    class Meta:
+        model = InvestmentQuote
+        fields = '__all__'
+        read_only_fields = ['id', 'ownership_percentage', 'allocated_returns', 'confirmed_at', 'created_at']
+
+    def get_member_name(self, obj):
+        if obj.member.is_anonymous:
+            return obj.member.anonymous_alias or 'Anonymous'
+        return f"{obj.member.payment_profile.user.user.first_name} {obj.member.payment_profile.user.user.last_name}"
+
+    def get_member_email(self, obj):
+        try:
+            if obj.member.is_anonymous:
+                return None
+            return obj.member.payment_profile.user.user.email
+        except Exception:
+            return None
+
+
+class GroupInvestmentSerializer(serializers.ModelSerializer):
+    quotes = InvestmentQuoteSerializer(many=True, read_only=True)
+    status_display = serializers.CharField(source='get_status_display', read_only=True)
+    quoting_mode_display = serializers.CharField(source='get_quoting_mode_display', read_only=True)
+    group_name = serializers.SerializerMethodField()
+    initiator_name = serializers.SerializerMethodField()
+    quote_count = serializers.SerializerMethodField()
+    confirmed_count = serializers.SerializerMethodField()
+    progress_percentage = serializers.SerializerMethodField()
+    opportunity_name = serializers.SerializerMethodField()
+    opportunity_category = serializers.SerializerMethodField()
+
+    class Meta:
+        model = GroupInvestment
+        fields = '__all__'
+        read_only_fields = ['id', 'amount_collected', 'total_returns', 'net_profit_loss', 'created_at', 'updated_at']
+
+    def get_group_name(self, obj):
+        return obj.payment_group.name if obj.payment_group else None
+
+    def get_initiator_name(self, obj):
+        if obj.initiated_by:
+            return f"{obj.initiated_by.user.user.first_name} {obj.initiated_by.user.user.last_name}"
+        return None
+
+    def get_quote_count(self, obj):
+        return obj.quotes.count()
+
+    def get_confirmed_count(self, obj):
+        return obj.quotes.filter(status='confirmed').count()
+
+    def get_progress_percentage(self, obj):
+        if obj.total_amount and obj.total_amount > 0:
+            return round((float(obj.amount_collected) / float(obj.total_amount)) * 100, 2)
+        return 0.0
+
+    def get_opportunity_name(self, obj):
+        if obj.investment_opportunity:
+            return obj.investment_opportunity.title
+        if obj.capital_venture:
+            return obj.capital_venture.name
+        return None
+
+    def get_opportunity_category(self, obj):
+        if obj.investment_opportunity:
+            return obj.investment_opportunity.get_type_display()
+        if obj.capital_venture:
+            return "Venture Capital"
+        return "Internal Group Fund"

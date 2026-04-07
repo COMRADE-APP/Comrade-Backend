@@ -39,10 +39,15 @@ router.register(r'reviews', views.ReviewViewSet, basename='review')
 # Group Discourse & Voting
 router.register(r'join-requests', views.GroupJoinRequestViewSet, basename='join-request')
 router.register(r'group-votes', views.GroupVoteViewSet, basename='group-vote')
+router.register(r'group-posts', views.GroupPostViewSet, basename='group-post')
+router.register(r'group-post-replies', views.GroupPostReplyViewSet, basename='group-post-reply')
+router.register(r'group-phases', views.GroupPhaseViewSet, basename='group-phase')
 
-# Bill Payments
+# Bill Payments automation
 router.register(r'bill-providers', views.BillProviderViewSet, basename='bill-provider')
+router.register(r'service-providers', views.UserServiceProviderViewSet, basename='my-service-provider')
 router.register(r'bill-payments', views.BillPaymentViewSet, basename='bill-payment')
+router.register(r'standing-orders', views.BillStandingOrderViewSet, basename='standing-order')
 
 # Loans & Credit
 router.register(r'loan-products', views.LoanProductViewSet, basename='loan-product')
@@ -56,6 +61,12 @@ router.register(r'escrow', views.EscrowTransactionViewSet, basename='escrow')
 router.register(r'insurance-products', views.InsuranceProductViewSet, basename='insurance-product')
 router.register(r'insurance-policies', views.InsurancePolicyViewSet, basename='insurance-policy')
 router.register(r'insurance-claims', views.InsuranceClaimViewSet, basename='insurance-claim')
+
+# Donations & Charity
+router.register(r'donations', views.DonationViewSet, basename='donation')
+
+# Group Investments
+router.register(r'group-investments', views.GroupInvestmentViewSet, basename='group-investment')
 
 urlpatterns = [
     path('', include(router.urls)),

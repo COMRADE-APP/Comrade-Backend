@@ -27,11 +27,12 @@ from Payment.models import (
     Product, UserSubscription, IndividualShare, Partner, PartnerApplication,
     AgentApplication, SupplierApplication, ShopRegistration,
     Order, OrderItem, MenuItem, GroupCheckoutRequest,
-    GroupJoinRequest, GroupVote,
+    GroupJoinRequest, GroupVote, GroupPhase, GroupPost, GroupPostReply,
     BillProvider, BillPayment,
     LoanProduct, CreditScore, LoanApplication, LoanRepayment,
     EscrowTransaction, EscrowDispute,
-    InsuranceProduct, InsurancePolicy, InsuranceClaim
+    InsuranceProduct, InsurancePolicy, InsuranceClaim,
+    Donation, DonationContribution, GroupInvestment, InvestmentQuote,
 )
 from Payment.serializers import (
     PaymentProfileSerializer, PaymentItemSerializer, PaymentLogSerializer,
@@ -45,10 +46,13 @@ from Payment.serializers import (
     AgentApplicationSerializer, SupplierApplicationSerializer, ShopRegistrationSerializer,
     KittySerializer, GroupCheckoutRequestSerializer,
     GroupJoinRequestSerializer, GroupVoteSerializer,
+    GroupPhaseSerializer, GroupPostSerializer, GroupPostReplySerializer,
     BillProviderSerializer, BillPaymentSerializer,
     LoanProductSerializer, CreditScoreSerializer, LoanApplicationSerializer, LoanRepaymentSerializer,
     EscrowTransactionSerializer, EscrowDisputeSerializer,
-    InsuranceProductSerializer, InsurancePolicySerializer, InsuranceClaimSerializer
+    InsuranceProductSerializer, InsurancePolicySerializer, InsuranceClaimSerializer,
+    DonationSerializer, DonationContributionSerializer,
+    GroupInvestmentSerializer, InvestmentQuoteSerializer,
 )
 from Authentication.models import Profile, CustomUser
 from Messages.models import Conversation, Message
@@ -488,6 +492,9 @@ class PaymentGroupsViewSet(ModelViewSet):
         if payment_profile.tier == 'gold':
             final_capacity = requested_capacity # Unlimited
             
+        # Pop phases_data before saving the group
+        phases_data = serializer.validated_data.pop('phases_data', [])
+
         group = serializer.save(
             creator=payment_profile,
             tier=payment_profile.tier,
@@ -500,6 +507,19 @@ class PaymentGroupsViewSet(ModelViewSet):
             payment_profile=payment_profile,
             is_admin=True
         )
+
+        # Create phases
+        for idx, phase in enumerate(phases_data):
+            GroupPhase.objects.create(
+                group=group,
+                name=phase.get('name', f'Phase {idx + 1}'),
+                description=phase.get('description', ''),
+                target_amount=Decimal(str(phase.get('target_amount', 0))),
+                proportion=Decimal(str(phase.get('proportion', 0))),
+                start_date=phase.get('start_date'),
+                end_date=phase.get('end_date'),
+                order=idx,
+            )
 
     @action(detail=True, methods=['post'])
     def join(self, request, pk=None):
@@ -1534,10 +1554,25 @@ class GroupTargetViewSet(ModelViewSet):
         payment_group_id = self.request.data.get('payment_group')
         
         if payment_group_id:
-            # Group piggy bank
+            # Group piggy bank — check 3-group-piggy-membership limit
+            member_group_piggy_count = GroupTarget.objects.filter(
+                payment_group__members__payment_profile=payment_profile,
+                status='active'
+            ).distinct().count()
+            if member_group_piggy_count >= GroupTarget.MAX_GROUP_PIGGY_MEMBERSHIPS:
+                raise serializers.ValidationError(
+                    f"You can be a member of at most {GroupTarget.MAX_GROUP_PIGGY_MEMBERSHIPS} group piggy banks."
+                )
             serializer.save()
         else:
-            # Individual piggy bank
+            # Individual piggy bank — check 3-individual limit
+            individual_count = GroupTarget.objects.filter(
+                owner=payment_profile, status='active'
+            ).count()
+            if individual_count >= GroupTarget.MAX_INDIVIDUAL_PIGGY_BANKS:
+                raise serializers.ValidationError(
+                    f"You can own at most {GroupTarget.MAX_INDIVIDUAL_PIGGY_BANKS} individual piggy banks."
+                )
             serializer.save(owner=payment_profile)
 
     @action(detail=True, methods=['post'])
@@ -1609,7 +1644,7 @@ class GroupTargetViewSet(ModelViewSet):
     @action(detail=True, methods=['post'])
     @db_transaction.atomic
     def withdraw(self, request, pk=None):
-        """Withdraw from a piggy bank"""
+        """Withdraw from a piggy bank — enforces savings_type rules."""
         target = self.get_object()
         amount = request.data.get('amount')
         
@@ -1621,7 +1656,12 @@ class GroupTargetViewSet(ModelViewSet):
         except ValueError:
             return Response({'error': 'Invalid amount'}, status=status.HTTP_400_BAD_REQUEST)
         
-        # Check locking status
+        # ── Savings-type enforcement ──
+        can_wd, wd_message = target.can_withdraw()
+        if not can_wd:
+            return Response({'error': wd_message}, status=status.HTTP_403_FORBIDDEN)
+        
+        # Legacy locking_status checks (on top of savings_type)
         if target.locking_status == 'locked':
             return Response({'error': 'This piggy bank is locked'}, status=status.HTTP_403_FORBIDDEN)
         
@@ -1645,20 +1685,38 @@ class GroupTargetViewSet(ModelViewSet):
         if not payment_profile:
              return Response({'error': 'Could not create payment profile'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
         
+        # ── Fixed-deposit penalty calculation ──
+        penalty = target.calculate_withdrawal_penalty(amount)
+        net_amount = amount - penalty
+        forfeited_interest = 0
+        
+        if target.savings_type == 'fixed_deposit' and not target.is_matured:
+            # Forfeit all accrued interest
+            forfeited_interest = float(target.accrued_interest)
+            target.accrued_interest = 0
+        
         # Deduct from piggy bank
-        target.current_amount -= amount
+        target.current_amount -= Decimal(str(amount))
         target.save()
         
-        # Add to user balance
-        payment_profile.comrade_balance += amount
+        # Add net amount to user balance (after penalty)
+        payment_profile.comrade_balance += Decimal(str(net_amount))
         payment_profile.save()
         
-        return Response({
+        response_data = {
             'status': 'Withdrawal successful',
             'amount_withdrawn': amount,
+            'penalty_applied': penalty,
+            'forfeited_interest': forfeited_interest,
+            'net_received': net_amount,
             'remaining_amount': float(target.current_amount),
             'new_balance': float(payment_profile.comrade_balance)
-        })
+        }
+        
+        if penalty > 0:
+            response_data['penalty_note'] = f'A {float(target.penalty_rate)}% early withdrawal penalty of KES {penalty:.2f} was applied. Accrued interest of KES {forfeited_interest:.2f} was forfeited.'
+        
+        return Response(response_data)
     
     @action(detail=True, methods=['post'])
     def lock(self, request, pk=None):
@@ -1946,6 +2004,32 @@ class EstablishmentViewSet(ModelViewSet):
             )
         
         return qs.order_by('-rating', '-review_count')
+    
+    def perform_create(self, serializer):
+        """Auto-assign owner and create a revenue kitty for the new establishment."""
+        from django.contrib.contenttypes.models import ContentType
+        
+        profile = Profile.objects.filter(user=self.request.user).first()
+        instance = serializer.save(owner=profile)
+        
+        # Auto-create a PaymentGroups kitty for this establishment
+        try:
+            payment_profile = PaymentProfile.objects.filter(user=profile).first()
+            if payment_profile:
+                ctype = ContentType.objects.get_for_model(Establishment)
+                PaymentGroups.objects.create(
+                    name=f"Kitty: {instance.name}",
+                    description=f"Revenue pool for {instance.name}",
+                    creator=payment_profile,
+                    group_type='kitty',
+                    tier=payment_profile.tier,
+                    entity_content_type=ctype,
+                    entity_object_id=str(instance.id),
+                    auto_create_room=False
+                )
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).warning(f"Auto-kitty creation failed for {instance.name}: {e}")
     
     @action(detail=False, methods=['get'])
     def my_establishments(self, request):
@@ -2752,6 +2836,114 @@ class GroupJoinRequestViewSet(ModelViewSet):
         return Response(GroupJoinRequestSerializer(join_request, context={'request': request}).data)
 
 
+# ── Group Discourse (Posts & Replies) ─────────────────────────────
+class GroupPostViewSet(ModelViewSet):
+    """Discord-style posts inside a group's discourse feed."""
+    serializer_class = GroupPostSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        group_id = self.request.query_params.get('group')
+        if not group_id:
+            return GroupPost.objects.none()
+        return GroupPost.objects.filter(group_id=group_id)
+
+    def perform_create(self, serializer):
+        payment_profile = get_or_create_payment_profile(self.request.user)
+        if not payment_profile:
+            raise serializers.ValidationError("Could not create payment profile")
+        group_id = self.request.data.get('group')
+        try:
+            group = PaymentGroups.objects.get(id=group_id)
+        except PaymentGroups.DoesNotExist:
+            raise serializers.ValidationError("Group not found")
+        serializer.save(author=payment_profile, group=group)
+
+    @action(detail=True, methods=['post'])
+    def react(self, request, pk=None):
+        """Toggle a reaction emoji on a post."""
+        post = self.get_object()
+        emoji = request.data.get('emoji', '👍')
+        user_id = str(request.user.id)
+        reactions = post.reactions or {}
+        if emoji not in reactions:
+            reactions[emoji] = []
+        if user_id in reactions[emoji]:
+            reactions[emoji].remove(user_id)
+        else:
+            reactions[emoji].append(user_id)
+        if not reactions[emoji]:
+            del reactions[emoji]
+        post.reactions = reactions
+        post.save(update_fields=['reactions'])
+        return Response(GroupPostSerializer(post, context={'request': request}).data)
+
+    @action(detail=True, methods=['post'])
+    def pin(self, request, pk=None):
+        """Toggle pin status on a post (admin only)."""
+        post = self.get_object()
+        payment_profile = get_or_create_payment_profile(request.user)
+        is_admin = PaymentGroupMember.objects.filter(
+            payment_group=post.group, payment_profile=payment_profile, is_admin=True
+        ).exists()
+        if not is_admin:
+            return Response({'error': 'Only group admins can pin posts'}, status=status.HTTP_403_FORBIDDEN)
+        post.is_pinned = not post.is_pinned
+        post.save(update_fields=['is_pinned'])
+        return Response(GroupPostSerializer(post, context={'request': request}).data)
+
+
+class GroupPostReplyViewSet(ModelViewSet):
+    """Threaded replies on discourse posts."""
+    serializer_class = GroupPostReplySerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        post_id = self.request.query_params.get('post')
+        if not post_id:
+            return GroupPostReply.objects.none()
+        return GroupPostReply.objects.filter(post_id=post_id)
+
+    def perform_create(self, serializer):
+        payment_profile = get_or_create_payment_profile(self.request.user)
+        if not payment_profile:
+            raise serializers.ValidationError("Could not create payment profile")
+        post_id = self.request.data.get('post')
+        try:
+            post = GroupPost.objects.get(id=post_id)
+        except GroupPost.DoesNotExist:
+            raise serializers.ValidationError("Post not found")
+        serializer.save(author=payment_profile, post=post)
+
+
+class GroupPhaseViewSet(ModelViewSet):
+    """CRUD for contribution phases on a group."""
+    serializer_class = GroupPhaseSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        group_id = self.request.query_params.get('group')
+        if not group_id:
+            return GroupPhase.objects.none()
+        return GroupPhase.objects.filter(group_id=group_id)
+
+    def perform_create(self, serializer):
+        payment_profile = get_or_create_payment_profile(self.request.user)
+        if not payment_profile:
+            raise serializers.ValidationError("Could not create payment profile")
+        group_id = self.request.data.get('group')
+        try:
+            group = PaymentGroups.objects.get(id=group_id)
+        except PaymentGroups.DoesNotExist:
+            raise serializers.ValidationError("Group not found")
+        is_admin = PaymentGroupMember.objects.filter(
+            payment_group=group, payment_profile=payment_profile, is_admin=True
+        ).exists()
+        if not is_admin:
+            raise serializers.ValidationError("Only group admins can manage phases")
+        serializer.save(group=group)
+
+
 class GroupVoteViewSet(ModelViewSet):
     """Voting system for group investment/savings/withdrawal decisions."""
     serializer_class = GroupVoteSerializer
@@ -2901,6 +3093,41 @@ class BillPaymentViewSet(ModelViewSet):
             bill.status = 'failed'
             bill.error_message = 'Payment profile not found'
             bill.save()
+
+
+from Payment.models import UserServiceProvider, BillStandingOrder
+from Payment.serializers import UserServiceProviderSerializer, BillStandingOrderSerializer
+class UserServiceProviderViewSet(ModelViewSet):
+    serializer_class = UserServiceProviderSerializer
+    permission_classes = [IsAuthenticated]
+    
+    def get_queryset(self):
+        profile = Profile.objects.get(user=self.request.user)
+        return UserServiceProvider.objects.filter(user=profile)
+    
+    def perform_create(self, serializer):
+        profile = Profile.objects.get(user=self.request.user)
+        serializer.save(user=profile)
+
+
+class BillStandingOrderViewSet(ModelViewSet):
+    serializer_class = BillStandingOrderSerializer
+    permission_classes = [IsAuthenticated]
+    
+    def get_queryset(self):
+        profile = Profile.objects.get(user=self.request.user)
+        return BillStandingOrder.objects.filter(user=profile)
+    
+    def perform_create(self, serializer):
+        profile = Profile.objects.get(user=self.request.user)
+        serializer.save(user=profile, status='active')
+        
+    @action(detail=True, methods=['post'])
+    def cancel(self, request, pk=None):
+        order = self.get_object()
+        order.status = 'cancelled'
+        order.save()
+        return Response({'status': 'cancelled'})
 
 
 # ==================== LOAN VIEWSETS ====================
@@ -3127,3 +3354,177 @@ class InsuranceClaimViewSet(ModelViewSet):
     def perform_create(self, serializer):
         profile = Profile.objects.get(user=self.request.user)
         serializer.save(claimant=profile)
+
+
+# ==================== DONATIONS & CHARITY VIEWSETS ====================
+
+class DonationViewSet(ModelViewSet):
+    queryset = Donation.objects.all()
+    serializer_class = DonationSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        user = self.request.user
+        payment_profile = get_or_create_payment_profile(user)
+        if not payment_profile:
+            return Donation.objects.none()
+
+        # Users can see donations where they are the donor, or they are in the group making the donation
+        return Donation.objects.filter(
+            Q(donor_profile=payment_profile) |
+            Q(payment_group__members__payment_profile=payment_profile)
+        ).distinct()
+
+    def perform_create(self, serializer):
+        user = self.request.user
+        payment_profile = get_or_create_payment_profile(user)
+        if not payment_profile:
+            raise serializers.ValidationError("Could not create payment profile")
+
+        # Determine donor type
+        payment_group_id = self.request.data.get('payment_group')
+        if payment_group_id:
+            serializer.save()
+        else:
+            serializer.save(donor_profile=payment_profile)
+
+    @action(detail=True, methods=['post'])
+    @db_transaction.atomic
+    def contribute(self, request, pk=None):
+        donation = self.get_object()
+        amount = request.data.get('amount')
+        
+        if not amount:
+            return Response({'error': 'Amount required'}, status=status.HTTP_400_BAD_REQUEST)
+        
+        try:
+            amount = float(amount)
+        except ValueError:
+            return Response({'error': 'Invalid amount'}, status=status.HTTP_400_BAD_REQUEST)
+
+        user = request.user
+        payment_profile = get_or_create_payment_profile(user)
+        
+        # Balance check
+        if payment_profile.comrade_balance < amount:
+            return Response({'error': 'Insufficient balance'}, status=status.HTTP_400_BAD_REQUEST)
+
+        # Deduct
+        payment_profile.comrade_balance -= Decimal(str(amount))
+        payment_profile.save()
+
+        # Find member if group donation
+        member = None
+        if donation.payment_group:
+            try:
+                member = PaymentGroupMember.objects.get(payment_group=donation.payment_group, payment_profile=payment_profile)
+            except PaymentGroupMember.DoesNotExist:
+                pass
+
+        # Create contribution
+        contribution = DonationContribution.objects.create(
+            donation=donation,
+            donor_profile=payment_profile if not member else None,
+            member=member,
+            amount=amount,
+            status='confirmed',
+            confirmed_at=timezone.now()
+        )
+
+        # Update donation total
+        donation.amount_collected += Decimal(str(amount))
+        donation.save()
+
+        return Response({
+            'status': 'Contribution successful',
+            'amount_contributed': amount,
+            'total_collected': float(donation.amount_collected)
+        })
+
+
+# ==================== GROUP INVESTMENT VIEWSETS ====================
+
+class GroupInvestmentViewSet(ModelViewSet):
+    queryset = GroupInvestment.objects.all()
+    serializer_class = GroupInvestmentSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        user = self.request.user
+        payment_profile = get_or_create_payment_profile(user)
+        if not payment_profile:
+            return GroupInvestment.objects.none()
+
+        return GroupInvestment.objects.filter(
+            payment_group__members__payment_profile=payment_profile
+        ).distinct()
+
+    def perform_create(self, serializer):
+        user = self.request.user
+        payment_profile = get_or_create_payment_profile(user)
+        if not payment_profile:
+            raise serializers.ValidationError("Could not create payment profile")
+
+        serializer.save(initiated_by=payment_profile)
+
+    @action(detail=True, methods=['post'])
+    @db_transaction.atomic
+    def quote(self, request, pk=None):
+        """Submit a quote for an investment opportunity"""
+        investment = self.get_object()
+        user = request.user
+        payment_profile = get_or_create_payment_profile(user)
+        
+        try:
+            member = PaymentGroupMember.objects.get(payment_group=investment.payment_group, payment_profile=payment_profile)
+        except PaymentGroupMember.DoesNotExist:
+            return Response({'error': 'Not a member of this investment group'}, status=status.HTTP_403_FORBIDDEN)
+
+        amount = request.data.get('amount')
+        if not amount:
+            return Response({'error': 'Amount required'}, status=status.HTTP_400_BAD_REQUEST)
+        
+        try:
+            amount = float(amount)
+        except ValueError:
+            return Response({'error': 'Invalid amount'}, status=status.HTTP_400_BAD_REQUEST)
+            
+        if payment_profile.comrade_balance < amount:
+            return Response({'error': 'Insufficient balance'}, status=status.HTTP_400_BAD_REQUEST)
+            
+        # Deduct
+        payment_profile.comrade_balance -= Decimal(str(amount))
+        payment_profile.save()
+
+        # Create or update quote
+        quote, created = InvestmentQuote.objects.get_or_create(
+            group_investment=investment,
+            member=member,
+            defaults={'amount_quoted': 0, 'status': 'confirmed', 'confirmed_at': timezone.now()}
+        )
+        
+        if not created:
+            # Add to existing quote
+            quote.amount_quoted += Decimal(str(amount))
+            quote.status = 'confirmed'
+            quote.confirmed_at = timezone.now()
+        else:
+            quote.amount_quoted = Decimal(str(amount))
+            
+        quote.save()
+
+        # Update parent investment
+        investment.amount_collected += Decimal(str(amount))
+        investment.save()
+
+        # Update ownership percentages relative to the total collected
+        if investment.quoting_mode == 'proportional' and investment.amount_collected > 0:
+            for q in investment.quotes.all():
+                q.ownership_percentage = (q.amount_quoted / investment.amount_collected) * 100
+                q.save()
+
+        return Response({
+            'status': 'Quote submitted successfully',
+            'amount': amount,
+            'total_investment_collected': float(investment.amount_collected)
+        })

@@ -74,6 +74,7 @@ class CustomUser(AbstractUser):
     
     # Profile completion tracking
     profile_completed = models.BooleanField(default=False)
+    onboarding_completed = models.BooleanField(default=False)
     
     # TOTP/2FA Authentication
     totp_enabled = models.BooleanField(default=False)

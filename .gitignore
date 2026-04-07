@@ -61,5 +61,8 @@ config.json
 TODO
 .env.local
 
-
 token.txt
+
+# ignore .txt files except requirements.txt
+*.txt
+!requirements.txt

@@ -26,7 +26,7 @@ from Authentication.views_extra import (
     GoogleLoginCallbackView, FacebookLoginCallbackView,
     GitHubLoginCallbackView, AppleLoginCallbackView,
     TwitterLoginCallbackView, LinkedInLoginCallbackView,
-    MicrosoftLoginCallbackView
+    MicrosoftLoginCallbackView, LogoutAllDevicesView
 )
 from Authentication.profile_views import (
     CheckEmailView, UserProfileView, UserProfileDetailView,
@@ -76,6 +76,7 @@ urlpatterns = [
     path('login/', LoginView.as_view(), name='login'),
     path('login-verify/', LoginVerifyView.as_view(), name='login-verify'),
     path('logout/', LogoutView.as_view(), name='logout'),
+    path('logout-all/', LogoutAllDevicesView.as_view(), name='logout-all'),
     path('resend-otp/', ResendOTPView.as_view(), name='resend-otp'),
     path('check-email/', CheckEmailView.as_view(), name='check-email'),
     path('me/', MeView.as_view(), name='me'),

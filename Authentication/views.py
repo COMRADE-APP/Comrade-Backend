@@ -46,7 +46,7 @@ from Authentication.activity_logger import (
 logger = logging.getLogger(__name__)
 
 
-def _set_token_cookies(response, access_token, refresh_token):
+def _set_token_cookies(response, access_token, refresh_token, remember_me=False):
     """Set JWT tokens as httpOnly secure cookies on the response.
     Tokens are ALSO returned in the response body for backward compatibility
     while the frontend transitions away from localStorage."""
@@ -57,14 +57,18 @@ def _set_token_cookies(response, access_token, refresh_token):
         'samesite': 'Lax',
         'path': '/',
     }
+    
+    access_max_age = 60 * 60 * 24 * 7  # 7 days (matches SIMPLE_JWT ACCESS_TOKEN_LIFETIME)
+    refresh_max_age = 60 * 60 * 24 * 30 if remember_me else 60 * 60 * 24 * 14  # 30 days vs 14 days
+
     response.set_cookie(
         'access_token', access_token,
-        max_age=60 * 15,  # 15 minutes (matches ACCESS_TOKEN_LIFETIME)
+        max_age=access_max_age,
         **cookie_kwargs
     )
     response.set_cookie(
         'refresh_token', refresh_token,
-        max_age=60 * 60 * 24 * 7,  # 7 days (matches REFRESH_TOKEN_LIFETIME)
+        max_age=refresh_max_age,
         **cookie_kwargs
     )
     return response
@@ -224,7 +228,7 @@ class RegisterVerifyView(APIView):
             "refresh_token": str(refresh),
             "next_step": "profile_setup"
         })
-        return _set_token_cookies(resp, str(refresh.access_token), str(refresh))
+        return _set_token_cookies(resp, str(refresh.access_token), str(refresh), remember_me=True)
 
 
 class VerifyView(APIView):
@@ -431,6 +435,10 @@ class LoginVerifyView(APIView):
     
     def _complete_login(self, user, request):
         """Complete login process with token generation"""
+        remember_me = request.data.get('remember_me', False)
+        if str(remember_me).lower() == 'true': remember_me = True
+        elif str(remember_me).lower() == 'false': remember_me = False
+        
         register_device(user, request)
         log_login_attempt(user, request, True, method='email_otp')
         
@@ -441,11 +449,13 @@ class LoginVerifyView(APIView):
             "email": user.email,
             "first_name": user.first_name,
             "user_type": user.user_type,
+            "onboarding_completed": user.onboarding_completed,
+            "profile_completed": user.profile_completed,
             "access_token": str(refresh.access_token),
             "refresh_token": str(refresh),
             "next_step": "complete"
         })
-        return _set_token_cookies(resp, str(refresh.access_token), str(refresh))
+        return _set_token_cookies(resp, str(refresh.access_token), str(refresh), remember_me=remember_me)
 
 
 @method_decorator(csrf_exempt, name='dispatch')
@@ -523,17 +533,23 @@ class Verify2FAView(APIView):
             log_2fa_activity(user, request, 'verify')
             register_device(user, request)
             
+            remember_me = request.data.get('remember_me', False)
+            if str(remember_me).lower() == 'true': remember_me = True
+            elif str(remember_me).lower() == 'false': remember_me = False
+            
             refresh = RefreshToken.for_user(user)
             resp = Response({
                 "user_id": user.id,
                 "email": user.email,
                 "first_name": user.first_name,
                 "user_type": user.user_type,
+                "onboarding_completed": user.onboarding_completed,
+                "profile_completed": user.profile_completed,
                 "access_token": str(refresh.access_token),
                 "refresh_token": str(refresh),
                 "next_step": "complete"
             })
-            return _set_token_cookies(resp, str(refresh.access_token), str(refresh))
+            return _set_token_cookies(resp, str(refresh.access_token), str(refresh), remember_me=remember_me)
         
         return Response({"detail": "Invalid 2FA code."}, status=status.HTTP_400_BAD_REQUEST)
 
@@ -568,17 +584,23 @@ class VerifySMSOTPView(APIView):
         register_device(user, request)
         log_login_attempt(user, request, True, method='sms_otp')
         
+        remember_me = request.data.get('remember_me', False)
+        if str(remember_me).lower() == 'true': remember_me = True
+        elif str(remember_me).lower() == 'false': remember_me = False
+        
         refresh = RefreshToken.for_user(user)
         resp = Response({
             "user_id": user.id,
             "email": user.email,
             "first_name": user.first_name,
             "user_type": user.user_type,
+            "onboarding_completed": user.onboarding_completed,
+            "profile_completed": user.profile_completed,
             "access_token": str(refresh.access_token),
             "refresh_token": str(refresh),
             "next_step": "complete"
         })
-        return _set_token_cookies(resp, str(refresh.access_token), str(refresh))
+        return _set_token_cookies(resp, str(refresh.access_token), str(refresh), remember_me=remember_me)
 
 
 class PasswordResetRequestView(APIView):

@@ -11,6 +11,7 @@ class Business(models.Model):
         ('health', 'Healthcare'),
         ('educ', 'Education'),
         ('energy', 'Energy'),
+        ('events', 'Event Organizer'),
         ('other', 'Other'),
     ]
 
@@ -32,6 +33,13 @@ class Business(models.Model):
     stage = models.CharField(max_length=50, choices=STAGE_CHOICES, default='idea')
     website = models.URLField(null=True, blank=True)
     
+    # Contact Information
+    contact_email = models.EmailField(null=True, blank=True)
+    country = models.CharField(max_length=100, null=True, blank=True)
+    city = models.CharField(max_length=100, null=True, blank=True)
+    country_code = models.CharField(max_length=10, null=True, blank=True)
+    phone_number = models.CharField(max_length=20, null=True, blank=True)
+    
     # Financial metrics (optional simplified)
     valuation = models.DecimalField(max_digits=15, decimal_places=2, null=True, blank=True)
     
@@ -39,6 +47,17 @@ class Business(models.Model):
     is_charity = models.BooleanField(default=False, help_text="Is this a charity/non-profit?")
     charity_goal = models.DecimalField(max_digits=15, decimal_places=2, null=True, blank=True, help_text="Fundraising goal")
     charity_raised = models.DecimalField(max_digits=15, decimal_places=2, default=0, help_text="Amount raised so far")
+    
+    # Business Account / Verification enhancements
+    is_verified = models.BooleanField(default=False, help_text="True if official documents are verified")
+    has_portal_password = models.BooleanField(default=False, help_text="Has an independent portal account password")
+    portal_password = models.CharField(max_length=255, null=True, blank=True)
+    
+    # Funds Destination (Standing Orders)
+    primary_destination = models.CharField(max_length=50, default='kitty')
+    primary_percentage = models.DecimalField(max_digits=5, decimal_places=2, default=100)
+    secondary_destination = models.CharField(max_length=50, null=True, blank=True)
+    secondary_percentage = models.DecimalField(max_digits=5, decimal_places=2, default=0)
     
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
