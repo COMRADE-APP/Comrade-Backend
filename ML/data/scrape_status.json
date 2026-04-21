@@ -1,1 +1,33 @@
-{"status": "Scraping: 0 rows, 0 categories", "phase": "scraping", "active_scrapers": 5, "current_size_gb": 0.0, "target_rows": 100, "pricing": {"status": "queued", "rows": 0, "progress_pct": 0}, "recommendation": {"status": "queued", "rows": 0, "progress_pct": 0}, "distribution": {"status": "queued", "rows": 0, "progress_pct": 0}, "timestamp": "2026-03-01T09:55:42.661309"}
+{
+  "status": "Scraping JumiaKEScraper",
+  "phase": "scraping",
+  "current_site": "JumiaKEScraper",
+  "current_size_gb": 0.0,
+  "target_rows": 100,
+  "pricing": {
+    "status": "idle",
+    "rows": 0,
+    "progress_pct": 0
+  },
+  "recommendation": {
+    "status": "idle",
+    "rows": 0,
+    "progress_pct": 0
+  },
+  "distribution": {
+    "status": "idle",
+    "rows": 0,
+    "progress_pct": 0
+  },
+  "goal_matching": {
+    "status": "idle",
+    "rows": 0,
+    "progress_pct": 0
+  },
+  "goal_drift": {
+    "status": "idle",
+    "rows": 0,
+    "progress_pct": 0
+  },
+  "timestamp": "2026-04-11T00:20:30.716597"
+}

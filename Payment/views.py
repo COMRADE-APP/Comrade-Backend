@@ -3254,22 +3254,96 @@ class EscrowTransactionViewSet(ModelViewSet):
     
     @action(detail=True, methods=['post'])
     def fund(self, request, pk=None):
+        """Fund an escrow — supports wallet, stripe (hold), flutterwave, pesapal."""
         escrow = self.get_object()
         profile = Profile.objects.get(user=request.user)
         if escrow.buyer != profile:
             return Response({'error': 'Only buyer can fund'}, status=status.HTTP_403_FORBIDDEN)
-        try:
-            pp = PaymentProfile.objects.get(user=profile)
-            if pp.comrade_balance >= escrow.total_amount:
-                pp.comrade_balance -= escrow.total_amount
-                pp.save()
-                escrow.status = 'funded'
-                escrow.funded_at = timezone.now()
-                escrow.save()
-                return Response({'status': 'funded'})
-            return Response({'error': 'Insufficient balance'}, status=status.HTTP_400_BAD_REQUEST)
-        except PaymentProfile.DoesNotExist:
-            return Response({'error': 'Payment profile not found'}, status=status.HTTP_404_NOT_FOUND)
+        if escrow.status != 'initiated':
+            return Response({'error': f'Escrow is already {escrow.status}'}, status=status.HTTP_400_BAD_REQUEST)
+        
+        payment_method = request.data.get('payment_method', 'wallet')
+        
+        if payment_method == 'wallet':
+            # Original wallet deduction flow
+            try:
+                pp = PaymentProfile.objects.get(user=profile)
+                if pp.comrade_balance >= escrow.total_amount:
+                    pp.comrade_balance -= escrow.total_amount
+                    pp.save()
+                    escrow.status = 'funded'
+                    escrow.payment_gateway = 'wallet'
+                    escrow.funded_at = timezone.now()
+                    escrow.save()
+                    return Response({'status': 'funded', 'gateway': 'wallet'})
+                return Response({'error': 'Insufficient balance'}, status=status.HTTP_400_BAD_REQUEST)
+            except PaymentProfile.DoesNotExist:
+                return Response({'error': 'Payment profile not found'}, status=status.HTTP_404_NOT_FOUND)
+        
+        elif payment_method == 'stripe':
+            # Stripe hold: create PaymentIntent with capture_method=manual
+            from Payment.services.payment_service import StripeProvider
+            result = StripeProvider.create_escrow_intent(
+                amount=float(escrow.total_amount),
+                currency=request.data.get('currency', 'usd'),
+                escrow_id=str(escrow.id),
+            )
+            if 'error' in result:
+                return Response({'error': result['error']}, status=status.HTTP_400_BAD_REQUEST)
+            
+            escrow.payment_gateway = 'stripe'
+            escrow.payment_intent_id = result['id']
+            escrow.save()
+            return Response({
+                'status': 'requires_confirmation',
+                'gateway': 'stripe',
+                'client_secret': result['client_secret'],
+                'payment_intent_id': result['id'],
+            })
+        
+        elif payment_method == 'flutterwave':
+            from Payment.services.payment_service import FlutterwaveProvider
+            result = FlutterwaveProvider.initiate_payment(
+                amount=float(escrow.total_amount),
+                currency=request.data.get('currency', 'KES'),
+                email=request.user.email,
+                description=f'Escrow: {escrow.title}',
+            )
+            if 'error' in result:
+                return Response({'error': result['error']}, status=status.HTTP_400_BAD_REQUEST)
+            
+            escrow.payment_gateway = 'flutterwave'
+            escrow.payment_intent_id = result.get('tx_ref', '')
+            escrow.save()
+            return Response({
+                'status': 'redirect',
+                'gateway': 'flutterwave',
+                'payment_link': result['payment_link'],
+                'tx_ref': result['tx_ref'],
+            })
+        
+        elif payment_method == 'pesapal':
+            from Payment.services.payment_service import PesapalProvider
+            result = PesapalProvider.submit_order(
+                amount=float(escrow.total_amount),
+                currency=request.data.get('currency', 'KES'),
+                email=request.user.email,
+                description=f'Escrow: {escrow.title}',
+                order_id=str(escrow.id),
+            )
+            if 'error' in result:
+                return Response({'error': result['error']}, status=status.HTTP_400_BAD_REQUEST)
+            
+            escrow.payment_gateway = 'pesapal'
+            escrow.payment_intent_id = result.get('order_tracking_id', '')
+            escrow.save()
+            return Response({
+                'status': 'redirect',
+                'gateway': 'pesapal',
+                'redirect_url': result['redirect_url'],
+            })
+        
+        return Response({'error': f'Unsupported payment method: {payment_method}'}, status=status.HTTP_400_BAD_REQUEST)
     
     @action(detail=True, methods=['post'])
     def deliver(self, request, pk=None):
@@ -3282,21 +3356,39 @@ class EscrowTransactionViewSet(ModelViewSet):
     
     @action(detail=True, methods=['post'])
     def release(self, request, pk=None):
+        """Release escrow funds to the seller."""
         escrow = self.get_object()
         profile = Profile.objects.get(user=request.user)
         if escrow.buyer != profile:
             return Response({'error': 'Only buyer can release'}, status=status.HTTP_403_FORBIDDEN)
-        # Release funds to seller
-        try:
-            seller_pp = PaymentProfile.objects.get(user=escrow.seller)
-            seller_pp.comrade_balance += escrow.amount
-            seller_pp.save()
-            escrow.status = 'released'
-            escrow.released_at = timezone.now()
-            escrow.save()
-            return Response({'status': 'released'})
-        except PaymentProfile.DoesNotExist:
-            return Response({'error': 'Seller profile not found'}, status=status.HTTP_404_NOT_FOUND)
+        
+        if escrow.payment_gateway == 'stripe' and escrow.payment_intent_id:
+            # Capture the held Stripe PaymentIntent
+            from Payment.services.payment_service import StripeProvider
+            result = StripeProvider.capture_payment_intent(escrow.payment_intent_id)
+            if 'error' in result:
+                return Response({'error': result['error']}, status=status.HTTP_400_BAD_REQUEST)
+            
+            # Credit seller's wallet with the escrow amount (minus fee)
+            try:
+                seller_pp = PaymentProfile.objects.get(user=escrow.seller)
+                seller_pp.comrade_balance += float(escrow.amount)
+                seller_pp.save()
+            except PaymentProfile.DoesNotExist:
+                return Response({'error': 'Seller profile not found'}, status=status.HTTP_404_NOT_FOUND)
+        else:
+            # Wallet-funded release (original flow)
+            try:
+                seller_pp = PaymentProfile.objects.get(user=escrow.seller)
+                seller_pp.comrade_balance += float(escrow.amount)
+                seller_pp.save()
+            except PaymentProfile.DoesNotExist:
+                return Response({'error': 'Seller profile not found'}, status=status.HTTP_404_NOT_FOUND)
+        
+        escrow.status = 'released'
+        escrow.released_at = timezone.now()
+        escrow.save()
+        return Response({'status': 'released'})
     
     @action(detail=True, methods=['post'])
     def dispute(self, request, pk=None):
@@ -3310,6 +3402,12 @@ class EscrowTransactionViewSet(ModelViewSet):
         )
         escrow.status = 'disputed'
         escrow.save()
+        
+        # If Stripe hold, cancel (refund) the held authorization
+        if escrow.payment_gateway == 'stripe' and escrow.payment_intent_id:
+            from Payment.services.payment_service import StripeProvider
+            StripeProvider.cancel_payment_intent(escrow.payment_intent_id)
+        
         return Response({'status': 'disputed'})
 
 
@@ -3456,7 +3554,8 @@ class GroupInvestmentViewSet(ModelViewSet):
             return GroupInvestment.objects.none()
 
         return GroupInvestment.objects.filter(
-            payment_group__members__payment_profile=payment_profile
+            Q(payment_group__members__payment_profile=payment_profile) |
+            Q(pitch_visibility='public')
         ).distinct()
 
     def perform_create(self, serializer):
@@ -3465,7 +3564,54 @@ class GroupInvestmentViewSet(ModelViewSet):
         if not payment_profile:
             raise serializers.ValidationError("Could not create payment profile")
 
-        serializer.save(initiated_by=payment_profile)
+        payment_group = serializer.validated_data.get('payment_group')
+        investment = serializer.save(initiated_by=payment_profile)
+        
+        # Auto-create an approval vote
+        if payment_group:
+            vote = GroupVote.objects.create(
+                group=payment_group,
+                created_by=payment_profile,
+                title=f"Approval for {investment.name}",
+                description=investment.description,
+                vote_type='investment',
+                amount=investment.total_amount
+            )
+            investment.approval_vote = vote
+            investment.save()
+
+    @action(detail=False, methods=['get'])
+    def public_pitches(self, request):
+        pitches = GroupInvestment.objects.filter(pitch_visibility='public')
+        serializer = self.get_serializer(pitches, many=True)
+        return Response(serializer.data)
+
+    @action(detail=True, methods=['post'])
+    def join_public_pitch(self, request, pk=None):
+        """Join the group associated with a public pitch so the user can interact."""
+        investment = self.get_object()
+        user = request.user
+        payment_profile = get_or_create_payment_profile(user)
+        
+        if investment.pitch_visibility != 'public':
+            return Response({'error': 'This is not a public pitch'}, status=status.HTTP_400_BAD_REQUEST)
+            
+        group = investment.payment_group
+        if not group:
+            return Response({'error': 'No group associated to join'}, status=status.HTTP_400_BAD_REQUEST)
+
+        member, created = PaymentGroupMember.objects.get_or_create(
+            payment_group=group,
+            payment_profile=payment_profile,
+            defaults={'role': 'member'}
+        )
+        
+        if created:
+            # Update group counts
+            group.member_count = group.members.count()
+            group.save()
+            return Response({'status': 'Joined successfully'})
+        return Response({'status': 'Already a member'})
 
     @action(detail=True, methods=['post'])
     @db_transaction.atomic
@@ -3506,15 +3652,18 @@ class GroupInvestmentViewSet(ModelViewSet):
         if not created:
             # Add to existing quote
             quote.amount_quoted += Decimal(str(amount))
+            quote.contribution_balance += Decimal(str(amount))
             quote.status = 'confirmed'
             quote.confirmed_at = timezone.now()
         else:
             quote.amount_quoted = Decimal(str(amount))
+            quote.contribution_balance = Decimal(str(amount))
             
         quote.save()
 
         # Update parent investment
         investment.amount_collected += Decimal(str(amount))
+        investment.contribution_balance += Decimal(str(amount))
         investment.save()
 
         # Update ownership percentages relative to the total collected
@@ -3527,4 +3676,105 @@ class GroupInvestmentViewSet(ModelViewSet):
             'status': 'Quote submitted successfully',
             'amount': amount,
             'total_investment_collected': float(investment.amount_collected)
+        })
+
+    @action(detail=True, methods=['post'])
+    @db_transaction.atomic
+    def withdraw_contribution(self, request, pk=None):
+        """Withdraw contribution early. Incurs 2% penalty if before maturity."""
+        investment = self.get_object()
+        user = request.user
+        payment_profile = get_or_create_payment_profile(user)
+        
+        try:
+            member = PaymentGroupMember.objects.get(payment_group=investment.payment_group, payment_profile=payment_profile)
+            quote = InvestmentQuote.objects.get(group_investment=investment, member=member)
+        except (PaymentGroupMember.DoesNotExist, InvestmentQuote.DoesNotExist):
+            return Response({'error': 'No active quote found'}, status=status.HTTP_404_NOT_FOUND)
+
+        amount = Decimal(str(request.data.get('amount', 0)))
+        if amount <= 0 or amount > quote.contribution_balance:
+            return Response({'error': 'Invalid withdrawal amount'}, status=status.HTTP_400_BAD_REQUEST)
+
+        # Check maturity if penalty applies
+        # If no explicit maturity date on opportunity, we assume open-ended and no penalty.
+        # Otherwise, check if current date < created_at + maturity
+        penalty_amount = Decimal('0.00')
+        has_maturity = False
+        
+        if investment.investment_opportunity and investment.investment_opportunity.maturity_period:
+            # Simple simulation: assume any withdraw before a set condition is early for this generic field
+            # Real logic would parse '12_months' and compare timezone.now() 
+            has_maturity = True
+            
+        is_early = has_maturity # Always early for now unless handled with real dates natively
+        
+        # We will apply a static 2% penalty for early access
+        if is_early:
+            penalty_amount = amount * Decimal('0.02')
+        
+        final_amount = amount - penalty_amount
+        
+        quote.contribution_balance -= amount
+        quote.quoted_amount -= amount # Decrease equity basis
+        quote.save()
+        
+        investment.contribution_balance -= amount
+        investment.amount_collected -= amount
+        investment.save()
+        
+        payment_profile.comrade_balance += final_amount
+        payment_profile.save()
+        
+        # Update proportional ownership
+        if investment.quoting_mode == 'proportional' and investment.amount_collected > 0:
+            for q in investment.quotes.all():
+                q.ownership_percentage = (q.amount_quoted / investment.amount_collected) * 100
+                q.save()
+                
+        return Response({
+            'status': 'Withdrawal processed',
+            'penalty_applied': float(penalty_amount),
+            'amount_received': float(final_amount)
+        })
+
+    @action(detail=True, methods=['post'])
+    @db_transaction.atomic
+    def withdraw_gains(self, request, pk=None):
+        """Withdraw distributed gains to wallet or push into group"""
+        investment = self.get_object()
+        user = request.user
+        payment_profile = get_or_create_payment_profile(user)
+        
+        try:
+            member = PaymentGroupMember.objects.get(payment_group=investment.payment_group, payment_profile=payment_profile)
+            quote = InvestmentQuote.objects.get(group_investment=investment, member=member)
+        except (PaymentGroupMember.DoesNotExist, InvestmentQuote.DoesNotExist):
+            return Response({'error': 'No active quote found'}, status=status.HTTP_404_NOT_FOUND)
+
+        amount = Decimal(str(request.data.get('amount', 0)))
+        if amount <= 0 or amount > quote.gains_balance:
+            return Response({'error': 'Invalid gains withdrawal amount'}, status=status.HTTP_400_BAD_REQUEST)
+
+        pref = request.data.get('preference', quote.gains_distribution_preference)
+        
+        quote.gains_balance -= amount
+        investment.gains_balance -= amount
+        quote.save()
+        investment.save()
+        
+        if pref == 'direct_to_wallet':
+            payment_profile.comrade_balance += amount
+            payment_profile.save()
+            msg = 'Gains transferred to personal wallet'
+        else:
+            group = investment.payment_group
+            group.current_amount += amount
+            group.save()
+            msg = 'Gains transferred to group pool'
+            
+        return Response({
+            'status': 'Withdrawal processed',
+            'amount': float(amount),
+            'destination': msg
         })

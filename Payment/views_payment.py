@@ -185,36 +185,37 @@ class PaymentMethodViewSet(ModelViewSet):
         )
         
         if method_type == 'card':
-            card_number = data['card_number']
-            saved_method.last_four = card_number[-4:]
-            saved_method.card_brand = detect_card_brand(card_number)
-            saved_method.expiry_month = data['expiry_month']
-            saved_method.expiry_year = data['expiry_year']
-            saved_method.billing_zip = data.get('billing_zip', '')
-            saved_method.provider = 'stripe'
+            provider_token = data.get('provider_token')
+            if not provider_token or not provider_token.startswith('pm_'):
+                return Response(
+                    {'error': 'Invalid or missing provider_token. Cards must be tokenized on the frontend for PCI compliance.'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
             
-            # Create Stripe payment method token (if Stripe key is configured)
             if stripe.api_key:
                 try:
-                    pm = stripe.PaymentMethod.create(
-                        type='card',
-                        card={
-                            'number': card_number,
-                            'exp_month': data['expiry_month'],
-                            'exp_year': data['expiry_year'],
-                            'cvc': data['cvc'],
-                        },
-                    )
-                    saved_method.provider_token = pm.id
+                    # Retrieve the fully tokenized payment method from Stripe
+                    pm = stripe.PaymentMethod.retrieve(provider_token)
+                    card = pm.card
+                    
+                    saved_method.last_four = card.last4
+                    saved_method.card_brand = card.brand
+                    saved_method.expiry_month = card.exp_month
+                    saved_method.expiry_year = card.exp_year
+                    saved_method.billing_zip = pm.billing_details.address.postal_code if (pm.billing_details and pm.billing_details.address) else data.get('billing_zip', '')
+                    saved_method.provider = 'stripe'
+                    saved_method.provider_token = provider_token
                     saved_method.is_verified = True
-                except stripe.error.CardError as e:
+                except stripe.error.StripeError as e:
                     return Response(
                         {'error': f'Card verification failed: {e.user_message}'},
                         status=status.HTTP_400_BAD_REQUEST
                     )
                 except Exception as e:
-                    # Still save but mark as unverified
+                    logger.error(f'Error retrieving Strip PaymentMethod: {str(e)}')
                     saved_method.is_verified = False
+            else:
+                return Response({'error': 'Stripe is not configured on the server.'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
             
         elif method_type == 'mpesa':
             saved_method.phone_number = data['phone_number']
@@ -491,32 +492,216 @@ class StripeWebhookView(APIView):
         except stripe.error.SignatureVerificationError:
             return Response({'error': 'Invalid signature'}, status=400)
         
-        # Handle different event types
-        if event['type'] == 'payment_intent.succeeded':
-            payment_intent = event['data']['object']
-            try:
-                transaction = TransactionToken.objects.get(transaction_code=payment_intent['id'])
-                TransactionHistory.objects.create(
-                    payment_profile=transaction.payment_profile,
-                    transaction_token=transaction,
-                    status='completed',
-                )
-            except TransactionToken.DoesNotExist:
-                pass
+        event_type = event.get('type', '')
         
-        elif event['type'] == 'payment_intent.payment_failed':
-            payment_intent = event['data']['object']
+        # Support for Thin Events (Event Destinations V2) & standard Webhooks (V1)
+        if 'data' in event and 'object' in event['data']:
+            data_object = event['data']['object']
+        else:
+            # Thin Event - we must fetch the snapshot of the object
+            related_object = event.get('related_object', {})
+            object_id = related_object.get('id')
+            
+            if not object_id:
+                return Response({'status': 'ignored, no related_object.id found'}, status=200)
+                
             try:
-                transaction = TransactionToken.objects.get(transaction_code=payment_intent['id'])
-                TransactionHistory.objects.create(
-                    payment_profile=transaction.payment_profile,
-                    transaction_token=transaction,
-                    status='failed',
-                )
-            except TransactionToken.DoesNotExist:
-                pass
+                if 'payment_intent' in event_type:
+                    data_object = stripe.PaymentIntent.retrieve(object_id)
+                elif 'checkout.session' in event_type:
+                    data_object = stripe.checkout.Session.retrieve(object_id)
+                else:
+                    return Response({'status': f'ignored event type {event_type}'}, status=200)
+            except Exception as e:
+                logger.error(f'Error retrieving Stripe snapshot: {str(e)}')
+                return Response({'error': 'Failed to fetch event snapshot'}, status=500)
+                
+            # Normalize v2 thin event types (e.g., v1.payment_intent.succeeded -> payment_intent.succeeded)
+            if event_type.startswith('v1.'):
+                event_type = event_type[3:]
+        
+        # Handle different event types
+        if event_type == 'payment_intent.succeeded':
+            self._handle_payment_succeeded(data_object)
+        
+        elif event_type == 'payment_intent.payment_failed':
+            self._handle_payment_failed(data_object)
+        
+        elif event_type == 'checkout.session.completed':
+            self._handle_checkout_completed(data_object)
+        
+        elif event_type == 'payment_intent.amount_capturable_updated':
+            # Escrow: funds authorized and held, ready for capture
+            self._handle_escrow_authorized(data_object)
         
         return Response({'status': 'success'})
+    
+    def _handle_payment_succeeded(self, payment_intent):
+        try:
+            transaction = TransactionToken.objects.get(transaction_code=payment_intent['id'])
+            TransactionHistory.objects.create(
+                payment_profile=transaction.payment_profile,
+                transaction_token=transaction,
+                status='completed',
+            )
+            # Credit wallet if this is a deposit
+            if transaction.transaction_type == 'deposit':
+                pp = transaction.payment_profile
+                pp.comrade_balance += float(transaction.amount)
+                pp.save()
+                logger.info(f'Stripe deposit completed: {payment_intent["id"]} — credited {transaction.amount}')
+        except TransactionToken.DoesNotExist:
+            logger.debug(f'Stripe webhook: no matching token for PI {payment_intent["id"]}')
+    
+    def _handle_payment_failed(self, payment_intent):
+        try:
+            transaction = TransactionToken.objects.get(transaction_code=payment_intent['id'])
+            TransactionHistory.objects.create(
+                payment_profile=transaction.payment_profile,
+                transaction_token=transaction,
+                status='failed',
+            )
+        except TransactionToken.DoesNotExist:
+            pass
+    
+    def _handle_checkout_completed(self, session):
+        """Handle Stripe Checkout Session completion."""
+        try:
+            transaction = TransactionToken.objects.get(transaction_code=session['id'])
+            TransactionHistory.objects.create(
+                payment_profile=transaction.payment_profile,
+                transaction_token=transaction,
+                status='completed',
+            )
+            if transaction.transaction_type == 'deposit':
+                pp = transaction.payment_profile
+                pp.comrade_balance += float(transaction.amount)
+                pp.save()
+        except TransactionToken.DoesNotExist:
+            logger.debug(f'Stripe checkout session webhook: no token for {session["id"]}')
+    
+    def _handle_escrow_authorized(self, payment_intent):
+        """Handle escrow hold authorization — funds are capturable."""
+        from Payment.models import EscrowTransaction
+        escrow_id = payment_intent.get('metadata', {}).get('escrow_id')
+        if escrow_id:
+            try:
+                escrow = EscrowTransaction.objects.get(id=escrow_id)
+                if escrow.status == 'initiated':
+                    escrow.status = 'funded'
+                    escrow.payment_intent_id = payment_intent['id']
+                    from django.utils import timezone
+                    escrow.funded_at = timezone.now()
+                    escrow.save()
+                    logger.info(f'Escrow {escrow_id} funded via Stripe hold')
+            except EscrowTransaction.DoesNotExist:
+                logger.warning(f'Escrow webhook: no escrow {escrow_id}')
+
+
+class FlutterwaveWebhookView(APIView):
+    """Handle Flutterwave payment webhook notifications.
+    
+    Flutterwave signs webhooks using a secret hash sent in the
+    'verif-hash' header. We compare it against FLUTTERWAVE_SECRET_HASH.
+    """
+    permission_classes = []
+    
+    def post(self, request):
+        # Verify signature
+        signature = request.META.get('HTTP_VERIF_HASH', '')
+        secret_hash = getattr(settings, 'FLUTTERWAVE_SECRET_HASH', '')
+        
+        if not secret_hash:
+            logger.warning('FLUTTERWAVE_SECRET_HASH not configured — accepting in dev mode')
+        elif signature != secret_hash:
+            logger.warning(f'Flutterwave webhook signature mismatch')
+            return Response({'error': 'Invalid signature'}, status=status.HTTP_403_FORBIDDEN)
+        
+        event_data = request.data
+        event_type = event_data.get('event', '')
+        data = event_data.get('data', {})
+        
+        if event_type == 'charge.completed' and data.get('status') == 'successful':
+            tx_ref = data.get('tx_ref', '')
+            amount = data.get('amount', 0)
+            flw_ref = data.get('flw_ref', '')
+            
+            # Verify the transaction with Flutterwave
+            from Payment.services.payment_service import FlutterwaveProvider
+            verification = FlutterwaveProvider.verify_transaction(data.get('id'))
+            
+            if verification.get('status') == 'completed':
+                try:
+                    transaction = TransactionToken.objects.get(transaction_code=tx_ref)
+                    TransactionHistory.objects.create(
+                        payment_profile=transaction.payment_profile,
+                        transaction_token=transaction,
+                        status='completed',
+                    )
+                    if transaction.transaction_type == 'deposit':
+                        pp = transaction.payment_profile
+                        pp.comrade_balance += float(transaction.amount)
+                        pp.save()
+                    logger.info(f'Flutterwave payment completed: {tx_ref} (FLW: {flw_ref})')
+                except TransactionToken.DoesNotExist:
+                    logger.debug(f'Flutterwave webhook: no token for tx_ref {tx_ref}')
+        
+        return Response({'status': 'success'})
+
+
+class PesapalIPNView(APIView):
+    """Handle Pesapal Instant Payment Notifications (IPN).
+    
+    Pesapal sends a GET or POST with OrderTrackingId and 
+    OrderMerchantReference when payment status changes.
+    """
+    permission_classes = []
+    
+    def get(self, request):
+        """Pesapal IPN can come via GET."""
+        return self._handle_ipn(request)
+    
+    def post(self, request):
+        """Pesapal IPN can also come via POST."""
+        return self._handle_ipn(request)
+    
+    def _handle_ipn(self, request):
+        order_tracking_id = request.query_params.get('OrderTrackingId') or request.data.get('OrderTrackingId', '')
+        merchant_reference = request.query_params.get('OrderMerchantReference') or request.data.get('OrderMerchantReference', '')
+        
+        if not order_tracking_id:
+            return Response({'error': 'Missing OrderTrackingId'}, status=status.HTTP_400_BAD_REQUEST)
+        
+        # Verify transaction status with Pesapal API
+        from Payment.services.payment_service import PesapalProvider
+        status_result = PesapalProvider.get_transaction_status(order_tracking_id)
+        
+        if status_result.get('status') == 'completed':
+            try:
+                transaction = TransactionToken.objects.get(transaction_code=merchant_reference)
+                # Avoid duplicate completion
+                existing = TransactionHistory.objects.filter(
+                    transaction_token=transaction, status='completed'
+                ).exists()
+                if not existing:
+                    TransactionHistory.objects.create(
+                        payment_profile=transaction.payment_profile,
+                        transaction_token=transaction,
+                        status='completed',
+                    )
+                    if transaction.transaction_type == 'deposit':
+                        pp = transaction.payment_profile
+                        pp.comrade_balance += float(transaction.amount)
+                        pp.save()
+                    logger.info(f'Pesapal payment completed: {merchant_reference}')
+            except TransactionToken.DoesNotExist:
+                logger.debug(f'Pesapal IPN: no token for ref {merchant_reference}')
+        
+        return Response({
+            'orderTrackingId': order_tracking_id,
+            'orderMerchantReference': merchant_reference,
+            'status': status_result.get('status', 'unknown'),
+        })
 
 
 class PayPalWebhookView(APIView):
@@ -649,6 +834,11 @@ class MpesaCallbackView(APIView):
                     transaction_token=transaction,
                     status='completed',
                 )
+                # Credit wallet for deposits
+                if transaction.transaction_type == 'deposit':
+                    pp = transaction.payment_profile
+                    pp.comrade_balance += float(transaction.amount)
+                    pp.save()
                 logger.info(f'M-Pesa payment completed: {checkout_request_id}')
             except TransactionToken.DoesNotExist:
                 logger.warning(f'M-Pesa callback for unknown checkout: {checkout_request_id}')
@@ -657,3 +847,25 @@ class MpesaCallbackView(APIView):
             'ResultCode': 0,
             'ResultDesc': 'Success'
         })
+
+
+# ============================================================================
+# GATEWAY CONFIGURATION ENDPOINT
+# ============================================================================
+
+class GatewayConfigView(APIView):
+    """Return available payment gateways and their public keys.
+    
+    The frontend calls this on load to know which payment buttons to show
+    and to initialize Stripe Elements with the correct publishable key.
+    """
+    permission_classes = []  # Public — only exposes public keys
+    
+    def get(self, request):
+        from Payment.services.payment_service import PaymentService
+        gateways = PaymentService.get_available_gateways()
+        return Response({
+            'gateways': gateways,
+            'default_gateway': getattr(settings, 'PAYMENT_DESTINATION', 'stripe'),
+        })
+

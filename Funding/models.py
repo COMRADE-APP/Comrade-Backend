@@ -169,12 +169,40 @@ class InvestmentOpportunity(models.Model):
     provider = models.CharField(max_length=255, help_text="Institution offering this")
     type = models.CharField(max_length=50, choices=TYPE_CHOICES)
     
-    min_investment = models.DecimalField(max_digits=12, decimal_places=2)
+    min_investment = models.DecimalField(max_digits=12, decimal_places=2, help_text="Legacy field, use min_individual_entry")
+    min_individual_entry = models.DecimalField(max_digits=12, decimal_places=2, default=0.00)
+    min_group_entry = models.DecimalField(max_digits=12, decimal_places=2, default=0.00)
+    
     expected_return = models.CharField(max_length=100, help_text="e.g. '12% p.a.'")
+    potential_gains = models.CharField(max_length=100, blank=True, null=True, help_text="Detailed potential gains breakdown")
+    group_benefit_summary = models.TextField(blank=True, null=True, help_text="Why invest as a group vs individual")
+    
+    GAIN_INTERVAL_CHOICES = [
+        ('daily', 'Daily'),
+        ('weekly', 'Weekly'),
+        ('monthly', 'Monthly'),
+        ('quarterly', 'Quarterly'),
+        ('biannual', 'Biannually'),
+        ('annual', 'Annually'),
+        ('maturity', 'At Maturity'),
+    ]
+    gain_intervals = models.CharField(max_length=20, choices=GAIN_INTERVAL_CHOICES, default='monthly')
+    maturity_period = models.CharField(max_length=100, blank=True, null=True, help_text="e.g. '12 Months', 'Open-Ended'")
+    
     risk_level = models.CharField(max_length=20, choices=RISK_CHOICES)
     
+    VERIFICATION_STATUS_CHOICES = [
+        ('unverified', 'Unverified'),
+        ('pending', 'Pending Verification'),
+        ('verified', 'Verified'),
+        ('rejected', 'Rejected'),
+    ]
+
     link = models.URLField(help_text="Link to external platform or internal action", null=True, blank=True)
     is_active = models.BooleanField(default=True)
+    is_verified = models.BooleanField(default=False, help_text="Verified by platform admins")
+    verification_status = models.CharField(max_length=20, choices=VERIFICATION_STATUS_CHOICES, default='unverified')
+    verification_documents = models.ManyToManyField('FundingDocument', blank=True, related_name='investment_opportunities')
     
     created_at = models.DateTimeField(auto_now_add=True)
 
@@ -182,6 +210,7 @@ class InvestmentOpportunity(models.Model):
         return f"{self.title} ({self.provider})"
 
     class Meta:
+        ordering = ['-created_at']
         verbose_name_plural = "Investment Opportunities"
 
 

@@ -4,6 +4,7 @@ from Payment import views
 from Payment.views_payment import (
     PaymentMethodViewSet, ProcessPaymentView, RefundPaymentView,
     StripeWebhookView, PayPalWebhookView, MpesaCallbackView,
+    FlutterwaveWebhookView, PesapalIPNView, GatewayConfigView,
     DetectPaymentMethodView
 )
 from Payment.views_transactions import (
@@ -71,6 +72,9 @@ router.register(r'group-investments', views.GroupInvestmentViewSet, basename='gr
 urlpatterns = [
     path('', include(router.urls)),
     
+    # Gateway Configuration
+    path('gateway-config/', GatewayConfigView.as_view(), name='gateway-config'),
+    
     # Payment processing
     path('process/', ProcessPaymentView.as_view(), name='process-payment'),
     path('refund/', RefundPaymentView.as_view(), name='refund-payment'),
@@ -86,6 +90,8 @@ urlpatterns = [
     path('stripe/webhook/', StripeWebhookView.as_view(), name='stripe-webhook'),
     path('paypal/webhook/', PayPalWebhookView.as_view(), name='paypal-webhook'),
     path('mpesa/callback/', MpesaCallbackView.as_view(), name='mpesa-callback'),
+    path('flutterwave/webhook/', FlutterwaveWebhookView.as_view(), name='flutterwave-webhook'),
+    path('pesapal/ipn/', PesapalIPNView.as_view(), name='pesapal-ipn'),
     
     # Dynamic Pricing (RL Model)
     path('pricing/<int:product_id>/', views.DynamicPriceView.as_view(), name='dynamic-price'),

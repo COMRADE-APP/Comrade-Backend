@@ -22,6 +22,7 @@ class Command(BaseCommand):
             BillProvider, BillPayment, LoanProduct, CreditScore,
             LoanApplication, LoanRepayment, EscrowTransaction,
             InsuranceProduct, InsurancePolicy, InsuranceClaim,
+            Donation, GroupTarget, GroupInvestment,
         )
         from Events.models import Event
         from Research.models import ResearchProject
@@ -206,7 +207,7 @@ class Command(BaseCommand):
                 name=bp['name'],
                 defaults=bp
             )
-        self.stdout.write(f'  ✓ {BillProvider.objects.count()} bill providers')
+        self.stdout.write(f'  [OK] {BillProvider.objects.count()} bill providers')
 
         # ==================================================================
         # 8. LOAN PRODUCTS — 6 products
@@ -220,7 +221,7 @@ class Command(BaseCommand):
                 'interest_rate': Decimal('5.00'), 'min_amount': Decimal('1000'), 'max_amount': Decimal('50000'),
                 'min_tenure_months': 1, 'max_tenure_months': 6,
                 'requires_guarantor': False, 'processing_fee': Decimal('2.50'),
-                'icon': '⚡', 'color': 'from-amber-500 to-orange-600',
+                'icon': 'Icon1', 'color': 'from-amber-500 to-orange-600',
             },
             {
                 'name': 'Business Boost',
@@ -228,7 +229,7 @@ class Command(BaseCommand):
                 'interest_rate': Decimal('3.50'), 'min_amount': Decimal('10000'), 'max_amount': Decimal('500000'),
                 'min_tenure_months': 3, 'max_tenure_months': 24,
                 'requires_guarantor': True, 'guarantors_required': 2, 'processing_fee': Decimal('1.50'),
-                'icon': '🚀', 'color': 'from-blue-500 to-indigo-600',
+                'icon': 'Icon2', 'color': 'from-blue-500 to-indigo-600',
             },
             {
                 'name': 'Salary Advance',
@@ -236,7 +237,7 @@ class Command(BaseCommand):
                 'interest_rate': Decimal('4.00'), 'min_amount': Decimal('5000'), 'max_amount': Decimal('100000'),
                 'min_tenure_months': 1, 'max_tenure_months': 3,
                 'requires_guarantor': False, 'processing_fee': Decimal('2.00'),
-                'icon': '💼', 'color': 'from-emerald-500 to-green-600',
+                'icon': 'Icon3', 'color': 'from-emerald-500 to-green-600',
             },
             {
                 'name': 'Group Loan',
@@ -244,7 +245,7 @@ class Command(BaseCommand):
                 'interest_rate': Decimal('2.50'), 'min_amount': Decimal('5000'), 'max_amount': Decimal('200000'),
                 'min_tenure_months': 1, 'max_tenure_months': 12,
                 'requires_guarantor': True, 'is_group_loan': True, 'processing_fee': Decimal('1.00'),
-                'icon': '👥', 'color': 'from-violet-500 to-purple-600',
+                'icon': 'Icon4', 'color': 'from-violet-500 to-purple-600',
             },
             {
                 'name': 'Education Loan',
@@ -252,7 +253,7 @@ class Command(BaseCommand):
                 'interest_rate': Decimal('3.00'), 'min_amount': Decimal('20000'), 'max_amount': Decimal('1000000'),
                 'min_tenure_months': 6, 'max_tenure_months': 24,
                 'requires_guarantor': True, 'guarantors_required': 1, 'processing_fee': Decimal('1.50'),
-                'icon': '🎓', 'color': 'from-rose-500 to-pink-600',
+                'icon': 'Icon5', 'color': 'from-rose-500 to-pink-600',
             },
             {
                 'name': 'Asset Finance',
@@ -260,13 +261,13 @@ class Command(BaseCommand):
                 'interest_rate': Decimal('4.50'), 'min_amount': Decimal('50000'), 'max_amount': Decimal('2000000'),
                 'min_tenure_months': 6, 'max_tenure_months': 24,
                 'requires_guarantor': True, 'guarantors_required': 2, 'processing_fee': Decimal('2.00'),
-                'icon': '🏗️', 'color': 'from-cyan-500 to-teal-600',
+                'icon': 'Icon6', 'color': 'from-cyan-500 to-teal-600',
             },
         ]
 
         for lp in loan_products_data:
             LoanProduct.objects.get_or_create(name=lp['name'], defaults=lp)
-        self.stdout.write(f'  ✓ {LoanProduct.objects.count()} loan products')
+        self.stdout.write(f'  [OK] {LoanProduct.objects.count()} loan products')
 
         # ==================================================================
         # 9. INSURANCE PRODUCTS — 6 products
@@ -279,7 +280,7 @@ class Command(BaseCommand):
                 'description': 'Basic outpatient and inpatient cover for individuals.',
                 'premium_amount': Decimal('1500'), 'premium_frequency': 'monthly',
                 'coverage_amount': Decimal('500000'), 'deductible': Decimal('2500'),
-                'waiting_period_days': 30, 'rating': Decimal('4.5'), 'icon': '❤️',
+                'waiting_period_days': 30, 'rating': Decimal('4.5'), 'icon': 'Icon1',
                 'color': 'from-rose-500 to-pink-600',
                 'benefits': ['Outpatient visits', 'Inpatient care', 'Dental checkups', 'Lab tests', 'Prescription drugs'],
                 'exclusions': ['Pre-existing conditions (first 12 months)', 'Cosmetic surgery'],
@@ -289,7 +290,7 @@ class Command(BaseCommand):
                 'description': 'Protect your smartphone, laptop, and electronics against theft & damage.',
                 'premium_amount': Decimal('800'), 'premium_frequency': 'monthly',
                 'coverage_amount': Decimal('150000'), 'deductible': Decimal('5000'),
-                'waiting_period_days': 7, 'rating': Decimal('4.2'), 'icon': '📱',
+                'waiting_period_days': 7, 'rating': Decimal('4.2'), 'icon': 'Icon2',
                 'color': 'from-blue-500 to-indigo-600',
                 'benefits': ['Accidental damage', 'Theft & robbery', 'Screen damage', 'Water damage', 'Worldwide cover'],
                 'exclusions': ['Lost devices', 'Wear and tear', 'Cosmetic damage'],
@@ -299,7 +300,7 @@ class Command(BaseCommand):
                 'description': 'Comprehensive travel insurance for domestic and international trips.',
                 'premium_amount': Decimal('500'), 'premium_frequency': 'one_time',
                 'coverage_amount': Decimal('2000000'), 'deductible': Decimal('0'),
-                'waiting_period_days': 0, 'rating': Decimal('4.7'), 'icon': '✈️',
+                'waiting_period_days': 0, 'rating': Decimal('4.7'), 'icon': 'Icon3',
                 'color': 'from-cyan-500 to-blue-600',
                 'benefits': ['Medical emergencies abroad', 'Trip cancellation', 'Lost luggage', 'Flight delays', 'Repatriation'],
                 'exclusions': ['Adventure sports', 'Travel against government advisory'],
@@ -309,7 +310,7 @@ class Command(BaseCommand):
                 'description': 'Weather-indexed insurance for small-scale farmers. Payout on adverse weather.',
                 'premium_amount': Decimal('200'), 'premium_frequency': 'quarterly',
                 'coverage_amount': Decimal('100000'), 'deductible': Decimal('0'),
-                'waiting_period_days': 0, 'rating': Decimal('4.0'), 'icon': '🌾',
+                'waiting_period_days': 0, 'rating': Decimal('4.0'), 'icon': 'Icon4',
                 'color': 'from-emerald-500 to-green-600',
                 'benefits': ['Drought protection', 'Excess rain cover', 'Pest outbreak', 'Input cost recovery', 'Satellite-based claims'],
                 'exclusions': ['Willful neglect', 'Unregistered crop types'],
@@ -319,7 +320,7 @@ class Command(BaseCommand):
                 'description': 'Affordable business insurance for micro and small enterprises.',
                 'premium_amount': Decimal('3000'), 'premium_frequency': 'monthly',
                 'coverage_amount': Decimal('1000000'), 'deductible': Decimal('10000'),
-                'waiting_period_days': 14, 'rating': Decimal('4.3'), 'icon': '💼',
+                'waiting_period_days': 14, 'rating': Decimal('4.3'), 'icon': 'Icon5',
                 'color': 'from-amber-500 to-orange-600',
                 'benefits': ['Fire & burglary', 'Stock damage', 'Business interruption', 'Employee liability', 'Money in transit'],
                 'exclusions': ['Fraud by owner', 'Unregistered businesses'],
@@ -329,7 +330,7 @@ class Command(BaseCommand):
                 'description': 'Home contents and property protection from theft, fire, and natural disasters.',
                 'premium_amount': Decimal('2000'), 'premium_frequency': 'monthly',
                 'coverage_amount': Decimal('5000000'), 'deductible': Decimal('15000'),
-                'waiting_period_days': 14, 'rating': Decimal('4.4'), 'icon': '🏠',
+                'waiting_period_days': 14, 'rating': Decimal('4.4'), 'icon': 'Icon6',
                 'color': 'from-violet-500 to-purple-600',
                 'benefits': ['Theft & burglary', 'Fire damage', 'Natural disasters', 'Electrical damage', 'Temporary accommodation'],
                 'exclusions': ['War damage', 'Nuclear hazards', 'Gradual deterioration'],
@@ -338,7 +339,7 @@ class Command(BaseCommand):
 
         for ip in insurance_products_data:
             InsuranceProduct.objects.get_or_create(name=ip['name'], defaults=ip)
-        self.stdout.write(f'  ✓ {InsuranceProduct.objects.count()} insurance products')
+        self.stdout.write(f'  [OK] {InsuranceProduct.objects.count()} insurance products')
 
         # ==================================================================
         # 10. CREDIT SCORES — for specific users (jay, peter mbugua, john wekesa) + test users
@@ -387,11 +388,11 @@ class Command(BaseCommand):
                             }
                             cs.computed_at = timezone.now()
                             cs.save()
-                        self.stdout.write(f'  ✓ Credit score for {user.username}: {score_data["score"]}')
+                        self.stdout.write(f'  [OK] Credit score for {user.username}: {score_data["score"]}')
                 else:
-                    self.stdout.write(f'  ⚠ User matching "{search}" not found, skipping.')
+                    self.stdout.write(f'  [WARN] User matching "{search}" not found, skipping.')
             except Exception as e:
-                self.stdout.write(f'  ⚠ Error creating credit score for {search}: {e}')
+                self.stdout.write(f'  [WARN] Error creating credit score for {search}: {e}')
 
         # Random scores for test users
         for profile in profiles[:20]:
@@ -410,7 +411,7 @@ class Command(BaseCommand):
                     'computed_at': timezone.now(),
                 }
             )
-        self.stdout.write(f'  ✓ {CreditScore.objects.count()} credit scores')
+        self.stdout.write(f'  [OK] {CreditScore.objects.count()} credit scores')
 
         # ==================================================================
         # 11. SAMPLE ESCROW TRANSACTIONS
@@ -453,9 +454,9 @@ class Command(BaseCommand):
                         release_conditions='Upon delivery confirmation and inspection',
                     )
                 except Exception as e:
-                    self.stdout.write(f'  ⚠ Escrow error: {e}')
+                    self.stdout.write(f'  [WARN] Escrow error: {e}')
 
-        self.stdout.write(f'  ✓ {EscrowTransaction.objects.count()} escrow transactions')
+        self.stdout.write(f'  [OK] {EscrowTransaction.objects.count()} escrow transactions')
 
         # ==================================================================
         # 12. SAMPLE LOAN APPLICATIONS & REPAYMENTS
@@ -504,9 +505,9 @@ class Command(BaseCommand):
                                     paid_date=timezone.now() - timedelta(days=random.randint(0, 5)) if r_status == 'paid' else None,
                                 )
                     except Exception as e:
-                        self.stdout.write(f'  ⚠ Loan error: {e}')
+                        self.stdout.write(f'  [WARN] Loan error: {e}')
 
-        self.stdout.write(f'  ✓ {LoanApplication.objects.count()} loan applications, {LoanRepayment.objects.count()} repayments')
+        self.stdout.write(f'  [OK] {LoanApplication.objects.count()} loan applications, {LoanRepayment.objects.count()} repayments')
 
         # ==================================================================
         # 13. SAMPLE INSURANCE POLICIES & CLAIMS
@@ -540,9 +541,9 @@ class Command(BaseCommand):
                                 reviewed_at=timezone.now() - timedelta(days=5),
                             )
                     except Exception as e:
-                        self.stdout.write(f'  ⚠ Insurance error: {e}')
+                        self.stdout.write(f'  [WARN] Insurance error: {e}')
 
-        self.stdout.write(f'  ✓ {InsurancePolicy.objects.count()} policies, {InsuranceClaim.objects.count()} claims')
+        self.stdout.write(f'  [OK] {InsurancePolicy.objects.count()} policies, {InsuranceClaim.objects.count()} claims')
 
         # ==================================================================
         # 14. SAMPLE BILL PAYMENTS
@@ -573,12 +574,76 @@ class Command(BaseCommand):
                                 completed_at=timezone.now() - timedelta(days=random.randint(0, 1)) if bs['status'] == 'completed' else None,
                             )
                         except Exception as e:
-                            self.stdout.write(f'  ⚠ Bill payment error: {e}')
+                            self.stdout.write(f'  [WARN] Bill payment error: {e}')
 
-        self.stdout.write(f'  ✓ {BillPayment.objects.count()} bill payments')
+        self.stdout.write(f'  [OK] {BillPayment.objects.count()} bill payments')
+
+        # ==================================================================
+        # 15. SAMPLE PIGGY BANKS, DONATIONS, AND GROUP INVESTMENTS
+        # ==================================================================
+        self.stdout.write('Creating Piggy Banks, Donations, and Group Investments...')
+
+        from Funding.models import InvestmentOpportunity
+        opts = list(InvestmentOpportunity.objects.all()[:5])
+        all_groups = list(PaymentGroups.objects.all()[:20])
+
+        if GroupTarget.objects.count() < 10:
+            for i in range(20):
+                owner = random.choice(payment_profiles[:20])
+                GroupTarget.objects.create(
+                    owner=owner,
+                    name=f"Piggy Bank {i}",
+                    target_amount=Decimal(str(random.randint(1000, 50000))),
+                    savings_type=random.choice(['normal', 'locked', 'fixed_deposit']),
+                    status='active',
+                    current_amount=Decimal(str(random.randint(0, 1000)))
+                )
+                if all_groups:
+                    group = random.choice(all_groups)
+                    GroupTarget.objects.create(
+                        payment_group=group,
+                        name=f"Group Target {i}",
+                        target_amount=Decimal(str(random.randint(5000, 100000))),
+                        savings_type='normal',
+                        status='active',
+                        current_amount=Decimal(str(random.randint(0, 1000)))
+                    )
+
+        if Donation.objects.count() < 10:
+            for i in range(20):
+                d_type = random.choice(['individual', 'group'])
+                group = random.choice(all_groups) if d_type == 'group' and all_groups else None
+                if d_type == 'group' and not group:
+                    d_type = 'individual'
+                profile = random.choice(payment_profiles[:20]) if d_type == 'individual' else None
+                Donation.objects.create(
+                    donor_type=d_type,
+                    donor_profile=profile,
+                    payment_group=group,
+                    name=f"Charity Donation {i}",
+                    category=random.choice(['Health', 'Education', 'Relief']),
+                    total_amount=Decimal(str(random.randint(1000, 20000))),
+                    status='collecting'
+                )
+
+        if GroupInvestment.objects.count() < 10:
+            for i in range(20):
+                if not all_groups: break
+                GroupInvestment.objects.create(
+                    payment_group=random.choice(all_groups),
+                    name=f"Group Investment {i}",
+                    quoting_mode=random.choice(['lump_sum', 'proportional', 'independent']),
+                    total_amount=Decimal(str(random.randint(50000, 1000000))),
+                    amount_collected=Decimal(str(random.randint(10000, 50000))),
+                    status='collecting',
+                    investment_opportunity=random.choice(opts) if opts else None,
+                    initiated_by=random.choice(payment_profiles[:20])
+                )
+
+        self.stdout.write('  [OK] Piggy Banks, Donations, and Group Investments created')
 
         self.stdout.write(self.style.SUCCESS(
-            '✅ Full dummy data creation complete!\n'
+            '[OK] Full dummy data creation complete!\n'
             f'   Partners: {Partner.objects.count()}\n'
             f'   Products: {Product.objects.count()}\n' 
             f'   Groups: {PaymentGroups.objects.count()}\n'

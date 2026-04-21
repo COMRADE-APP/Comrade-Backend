@@ -290,18 +290,19 @@ DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 # PAYMENT PROVIDER CONFIGURATION
 # ============================================================================
 
-# Stripe
+# Stripe (Primary — Visa, Mastercard, Apple Pay, Google Pay, international cards)
 STRIPE_SECRET_KEY = os.getenv('STRIPE_SECRET_KEY', '')
-STRIPE_PUBLISHABLE_KEY = os.getenv('STRIPE_PUBLISHABLE_KEY', '')
+STRIPE_PUBLIC_KEY = os.getenv('STRIPE_PUBLIC_KEY', os.getenv('STRIPE_PUBLISHABLE_KEY', ''))
+STRIPE_PUBLISHABLE_KEY = STRIPE_PUBLIC_KEY  # Alias for backward compat
 STRIPE_WEBHOOK_SECRET = os.getenv('STRIPE_WEBHOOK_SECRET', '')
 
-# PayPal
+# PayPal (+ Venmo for US users)
 PAYPAL_CLIENT_ID = os.getenv('PAYPAL_CLIENT_ID', '')
 PAYPAL_CLIENT_SECRET = os.getenv('PAYPAL_CLIENT_SECRET', '')
 PAYPAL_MODE = os.getenv('PAYPAL_MODE', 'sandbox')  # 'sandbox' or 'live'
 PAYPAL_API_URL = 'https://api-m.sandbox.paypal.com' if PAYPAL_MODE == 'sandbox' else 'https://api-m.paypal.com'
 
-# M-Pesa (Safaricom)
+# M-Pesa (Safaricom Daraja — direct STK push, B2C payouts, reversals)
 MPESA_CONSUMER_KEY = os.getenv('MPESA_CONSUMER_KEY', '')
 MPESA_CONSUMER_SECRET = os.getenv('MPESA_CONSUMER_SECRET', '')
 MPESA_BUSINESS_SHORTCODE = os.getenv('MPESA_BUSINESS_SHORTCODE', '')
@@ -310,14 +311,31 @@ MPESA_API_URL = os.getenv('MPESA_API_URL', 'https://sandbox.safaricom.co.ke')
 MPESA_STK_PUSH_URL = os.getenv('MPESA_STK_PUSH_URL', f'{MPESA_API_URL}/mpesa/stkpush/v1/processrequest')
 MPESA_CALLBACK_URL = os.getenv('MPESA_CALLBACK_URL')
 
-# Equity Bank (Jenga API)
+# Flutterwave (African aggregator — Kenyan banks, M-Pesa, local cards)
+# Covers: Equity, KCB, DTB, Absa, Ecobank, NCBA, Family Bank + M-Pesa
+# Get credentials from: https://dashboard.flutterwave.com/settings/apis
+FLUTTERWAVE_SECRET_KEY = os.getenv('FLUTTERWAVE_SECRET_KEY', '')
+FLUTTERWAVE_PUBLIC_KEY = os.getenv('FLUTTERWAVE_PUBLIC_KEY', '')
+FLUTTERWAVE_SECRET_HASH = os.getenv('FLUTTERWAVE_SECRET_HASH', '')  # Webhook signature verification
+FLUTTERWAVE_ENCRYPTION_KEY = os.getenv('FLUTTERWAVE_ENCRYPTION_KEY', '')
+FLUTTERWAVE_ENVIRONMENT = os.getenv('FLUTTERWAVE_ENVIRONMENT', 'sandbox')  # 'sandbox' or 'live'
+FLUTTERWAVE_BASE_URL = 'https://api.flutterwave.com/v3'
+
+# Pesapal (Kenya-focused aggregator — banks, M-Pesa, Airtel Money)
+# Get credentials from: https://dashboard.pesapal.com/
+PESAPAL_CONSUMER_KEY = os.getenv('PESAPAL_CONSUMER_KEY', '')
+PESAPAL_CONSUMER_SECRET = os.getenv('PESAPAL_CONSUMER_SECRET', '')
+PESAPAL_ENVIRONMENT = os.getenv('PESAPAL_ENVIRONMENT', 'sandbox')  # 'sandbox' or 'live'
+PESAPAL_BASE_URL = 'https://cybqa.pesapal.com/pesapalv3' if os.getenv('PESAPAL_ENVIRONMENT', 'sandbox') == 'sandbox' else 'https://pay.pesapal.com/v3'
+
+# Equity Bank (Jenga API — direct bank integration)
 EQUITY_API_KEY = os.getenv('EQUITY_API_KEY', '')
 EQUITY_MERCHANT_CODE = os.getenv('EQUITY_MERCHANT_CODE', '')
 EQUITY_API_URL = os.getenv('EQUITY_API_URL', 'https://uat.jengahq.io')  # UAT for testing
 EQUITY_CONSUMER_SECRET = os.getenv('EQUITY_CONSUMER_SECRET', '')
 
 # Default payment destination (where platform earnings are routed)
-PAYMENT_DESTINATION = os.getenv('PAYMENT_DESTINATION', 'stripe')  # stripe, paypal, mpesa, equity
+PAYMENT_DESTINATION = os.getenv('PAYMENT_DESTINATION', 'stripe')  # stripe, paypal, mpesa, flutterwave, pesapal, equity
 
 AUTHENTICATION_BACKENDS = [
     'django.contrib.auth.backends.ModelBackend',

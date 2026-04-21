@@ -581,6 +581,7 @@ class GroupTarget(models.Model):
     MAX_GROUP_PIGGY_MEMBERSHIPS = 3
     
     class Meta:
+        ordering = ['-created_at']
         indexes = [
             models.Index(fields=['payment_group', 'achieved']),
             models.Index(fields=['owner', 'achieved']),
@@ -824,6 +825,10 @@ class GroupInvestment(models.Model):
     total_amount = models.DecimalField(decimal_places=2, max_digits=12, default=0.00)
     amount_collected = models.DecimalField(decimal_places=2, max_digits=12, default=0.00)
     
+    # Granular Balance Tracking
+    contribution_balance = models.DecimalField(decimal_places=2, max_digits=12, default=0.00)
+    gains_balance = models.DecimalField(decimal_places=2, max_digits=12, default=0.00)
+    
     # Returns tracking
     total_returns = models.DecimalField(decimal_places=2, max_digits=12, default=0.00)
     net_profit_loss = models.DecimalField(decimal_places=2, max_digits=12, default=0.00)
@@ -842,6 +847,12 @@ class GroupInvestment(models.Model):
         PaymentProfile, on_delete=models.SET_NULL, null=True, blank=True,
         related_name='initiated_investments'
     )
+    
+    PITCH_VISIBILITY_CHOICES = (
+        ('internal', 'Members Only'),
+        ('public', 'Public Pitch'),
+    )
+    pitch_visibility = models.CharField(max_length=20, choices=PITCH_VISIBILITY_CHOICES, default='internal')
     
     created_at = models.DateTimeField(default=timezone.now)
     updated_at = models.DateTimeField(auto_now=True)
@@ -874,6 +885,16 @@ class InvestmentQuote(models.Model):
         decimal_places=4, max_digits=8, default=0.00,
         help_text='Auto-calculated based on proportional contribution'
     )
+    
+    # Granular Balance Tracking
+    contribution_balance = models.DecimalField(decimal_places=2, max_digits=12, default=0.00)
+    gains_balance = models.DecimalField(decimal_places=2, max_digits=12, default=0.00)
+    
+    GAINS_DISTRIBUTION_CHOICES = (
+        ('compound_in_group', 'Compound within Group Pool'),
+        ('direct_to_wallet', 'Send proportionally to individual Direct Wallet'),
+    )
+    gains_distribution_preference = models.CharField(max_length=30, choices=GAINS_DISTRIBUTION_CHOICES, default='compound_in_group')
     
     # Returns allocated to this member
     allocated_returns = models.DecimalField(decimal_places=2, max_digits=12, default=0.00)
@@ -2109,6 +2130,9 @@ class EscrowTransaction(models.Model):
     milestones = models.JSONField(default=list, blank=True, help_text='List of milestone objects')
     delivery_proof = models.TextField(blank=True)
     release_conditions = models.TextField(blank=True)
+    # External payment gateway tracking
+    payment_gateway = models.CharField(max_length=30, blank=True, default='wallet', help_text='wallet, stripe, flutterwave, pesapal, paypal')
+    payment_intent_id = models.CharField(max_length=255, blank=True, default='', help_text='Stripe PaymentIntent ID or external gateway transaction ref')
     funded_at = models.DateTimeField(null=True, blank=True)
     delivered_at = models.DateTimeField(null=True, blank=True)
     released_at = models.DateTimeField(null=True, blank=True)
@@ -2124,8 +2148,9 @@ class EscrowTransaction(models.Model):
         ]
 
     def save(self, *args, **kwargs):
-        self.escrow_fee = self.amount * self.fee_rate
-        self.total_amount = self.amount + self.escrow_fee
+        from decimal import Decimal
+        self.escrow_fee = Decimal(str(self.amount)) * Decimal(str(self.fee_rate))
+        self.total_amount = Decimal(str(self.amount)) + self.escrow_fee
         super().save(*args, **kwargs)
 
     def __str__(self):

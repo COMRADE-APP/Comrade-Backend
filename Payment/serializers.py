@@ -959,12 +959,15 @@ class SavedPaymentMethodCreateSerializer(serializers.Serializer):
     """Serializer for creating a saved payment method with validation."""
     method_type = serializers.ChoiceField(choices=['card', 'mpesa', 'paypal', 'bank_transfer', 'equity'])
     
-    # Card fields
-    card_number = serializers.CharField(required=False, max_length=19, help_text='Full card number (will be tokenized)')
-    expiry_month = serializers.IntegerField(required=False, min_value=1, max_value=12)
-    expiry_year = serializers.IntegerField(required=False, min_value=2024)
-    cvc = serializers.CharField(required=False, max_length=4)
-    billing_zip = serializers.CharField(required=False, max_length=20)
+    # Card fields (PCI compliant - expects tokenized provider_token from frontend)
+    provider_token = serializers.CharField(required=False, help_text='Stripe PaymentMethod ID (e.g., pm_12345)')
+    
+    # Optional fields for manual entry (deprecated - use provider_token instead)
+    card_number = serializers.CharField(required=False, max_length=19, allow_blank=True)
+    expiry_month = serializers.IntegerField(required=False, min_value=1, max_value=12, allow_null=True)
+    expiry_year = serializers.IntegerField(required=False, min_value=2024, allow_null=True)
+    cvc = serializers.CharField(required=False, max_length=4, allow_blank=True)
+    billing_zip = serializers.CharField(required=False, max_length=20, allow_blank=True)
     
     # M-Pesa fields
     phone_number = serializers.CharField(required=False, max_length=20)
@@ -982,27 +985,8 @@ class SavedPaymentMethodCreateSerializer(serializers.Serializer):
     save_details = serializers.BooleanField(required=False, default=True)
     
     def validate_card_number(self, value):
-        """Validate card number using Luhn algorithm."""
-        if not value:
-            return value
-        digits = value.replace(' ', '').replace('-', '')
-        if not digits.isdigit():
-            raise serializers.ValidationError("Card number must contain only digits.")
-        if len(digits) < 13 or len(digits) > 19:
-            raise serializers.ValidationError("Card number must be between 13 and 19 digits.")
-        # Luhn check
-        total = 0
-        reverse_digits = digits[::-1]
-        for i, d in enumerate(reverse_digits):
-            n = int(d)
-            if i % 2 == 1:
-                n *= 2
-                if n > 9:
-                    n -= 9
-            total += n
-        if total % 10 != 0:
-            raise serializers.ValidationError("Invalid card number.")
-        return digits
+        """Card number validation is deprecated. Use provider_token instead."""
+        return value
     
     def validate_phone_number(self, value):
         """Validate phone number for M-Pesa."""
@@ -1381,6 +1365,8 @@ class GroupInvestmentSerializer(serializers.ModelSerializer):
     progress_percentage = serializers.SerializerMethodField()
     opportunity_name = serializers.SerializerMethodField()
     opportunity_category = serializers.SerializerMethodField()
+    approval_vote = GroupVoteSerializer(read_only=True)
+    is_group_member = serializers.SerializerMethodField()
 
     class Meta:
         model = GroupInvestment
@@ -1419,3 +1405,16 @@ class GroupInvestmentSerializer(serializers.ModelSerializer):
         if obj.capital_venture:
             return "Venture Capital"
         return "Internal Group Fund"
+
+    def get_is_group_member(self, obj):
+        request = self.context.get('request')
+        if not request or not request.user.is_authenticated:
+            return False
+        from Payment.models import PaymentProfile, PaymentGroupMember
+        try:
+            payment_profile = PaymentProfile.objects.get(user__user=request.user)
+            if obj.payment_group:
+                return PaymentGroupMember.objects.filter(payment_group=obj.payment_group, payment_profile=payment_profile).exists()
+        except:
+            return False
+        return False

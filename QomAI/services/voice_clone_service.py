@@ -3,6 +3,8 @@ Voice Clone Service - High Fidelity TTS
 Uses ElevenLabs (primary), OpenAI TTS, or Edge TTS (Free High-Quality Fallback)
 """
 import os
+import time
+import threading
 import requests
 import asyncio
 import edge_tts
@@ -18,6 +20,17 @@ class VoiceCloneService:
         self.elevenlabs_voice_id = os.getenv('ELEVENLABS_VOICE_ID', 'TxGEqnHWrfWFTfGW9XjX') # Default pre-made deep voice
         self.openai_voice = 'onyx' # Default deep male voice
         self.edge_voice = 'en-US-ChristopherNeural' # Free deep male voice
+        
+        # Caching for expensive operations
+        self._voices_cache = None
+        self._voices_cache_time = 0
+        self._voices_cache_ttl = 300  # 5 minutes
+        self._env_voices_cache = None
+        self._env_voices_mtime = 0
+        
+        # Persistent event loop for Edge TTS (avoid creating/destroying per request)
+        self._edge_loop = None
+        self._edge_loop_lock = threading.Lock()
 
     def get_available_voices(self):
         """
@@ -49,48 +62,71 @@ class VoiceCloneService:
                     'preview_url': ''
                 })
 
-        # 3. Fetch ElevenLabs Voices (Includes user's custom clones)
+        # 3. Fetch ElevenLabs Voices (cached for 5 minutes to avoid hammering the API)
         if self.elevenlabs_key:
             try:
-                response = requests.get(
-                    "https://api.elevenlabs.io/v1/voices",
-                    headers={"xi-api-key": self.elevenlabs_key},
-                    timeout=10
-                )
-                if response.status_code == 200:
-                    el_voices = response.json().get('voices', [])
-                    for v in el_voices:
-                        # Mark custom cloned voices or library voices
-                        category = "Cloned" if v.get('category') == 'cloned' else "ElevenLabs API"
-                        voices.append({
-                            'id': v['voice_id'],
-                            'name': f"{v['name']} ({category})",
-                            'provider': 'elevenlabs',
-                            'preview_url': v.get('preview_url', '')
-                        })
+                now = time.time()
+                if self._voices_cache is not None and (now - self._voices_cache_time) < self._voices_cache_ttl:
+                    voices.extend(self._voices_cache)
+                else:
+                    response = requests.get(
+                        "https://api.elevenlabs.io/v1/voices",
+                        headers={"xi-api-key": self.elevenlabs_key},
+                        timeout=10
+                    )
+                    if response.status_code == 200:
+                        el_voices = response.json().get('voices', [])
+                        cached_el = []
+                        for v in el_voices:
+                            # Mark custom cloned voices or library voices
+                            category = "Cloned" if v.get('category') == 'cloned' else "ElevenLabs API"
+                            cached_el.append({
+                                'id': v['voice_id'],
+                                'name': f"{v['name']} ({category})",
+                                'provider': 'elevenlabs',
+                                'preview_url': v.get('preview_url', '')
+                            })
+                        self._voices_cache = cached_el
+                        self._voices_cache_time = now
+                        voices.extend(cached_el)
             except Exception as e:
                 print(f"Error fetching ElevenLabs voices: {e}")
+                # Serve stale cache if available
+                if self._voices_cache:
+                    voices.extend(self._voices_cache)
                 
-        # 4. Inject explicitly defined custom Voice IDs from .env
+        # 4. Inject explicitly defined custom Voice IDs from .env (cached by mtime)
         env_path = os.path.join(settings.BASE_DIR, '.env')
         if os.path.exists(env_path):
             try:
-                with open(env_path, 'r') as f:
-                    for line in f:
-                        line = line.strip()
-                        if line and not line.startswith('#') and '=' in line:
-                            key, val = line.split('=', 1)
-                            key, val = key.strip(), val.strip()
-                            if key.endswith('_VOICE_ID') and key != 'ELEVENLABS_VOICE_ID':
-                                name = key.replace('_VOICE_ID', '').replace('_', ' ').title()
-                                # Check if it's already in the list from the API call
-                                if not any(v['id'] == val.strip('"\'') for v in voices):
-                                    voices.append({
+                current_mtime = os.path.getmtime(env_path)
+                if self._env_voices_cache is not None and current_mtime == self._env_voices_mtime:
+                    # .env hasn't changed, use cached result
+                    for ev in self._env_voices_cache:
+                        if not any(v['id'] == ev['id'] for v in voices):
+                            voices.append(ev)
+                else:
+                    # .env changed or first load — read and cache
+                    env_voices = []
+                    with open(env_path, 'r') as f:
+                        for line in f:
+                            line = line.strip()
+                            if line and not line.startswith('#') and '=' in line:
+                                key, val = line.split('=', 1)
+                                key, val = key.strip(), val.strip()
+                                if key.endswith('_VOICE_ID') and key != 'ELEVENLABS_VOICE_ID':
+                                    name = key.replace('_VOICE_ID', '').replace('_', ' ').title()
+                                    env_voices.append({
                                         'id': val.strip('"\''),
                                         'name': f"{name} (ElevenLabs Custom env)",
                                         'provider': 'elevenlabs',
                                         'preview_url': ''
                                     })
+                    self._env_voices_cache = env_voices
+                    self._env_voices_mtime = current_mtime
+                    for ev in env_voices:
+                        if not any(v['id'] == ev['id'] for v in voices):
+                            voices.append(ev)
             except Exception as e:
                 print(f"Error parsing .env for custom voices: {e}")
                 
@@ -190,19 +226,27 @@ class VoiceCloneService:
 
     async def _async_generate_edgetts(self, text):
         communicate = edge_tts.Communicate(text, self.edge_voice)
-        audio_data = b""
+        chunks = []
         async for chunk in communicate.stream():
             if chunk["type"] == "audio":
-                audio_data += chunk["data"]
-        return audio_data
+                chunks.append(chunk["data"])
+        return b"".join(chunks)
+
+    def _get_edge_loop(self):
+        """Get or create a persistent event loop for Edge TTS on a background thread."""
+        if self._edge_loop is None or self._edge_loop.is_closed():
+            with self._edge_loop_lock:
+                if self._edge_loop is None or self._edge_loop.is_closed():
+                    self._edge_loop = asyncio.new_event_loop()
+                    thread = threading.Thread(target=self._edge_loop.run_forever, daemon=True)
+                    thread.start()
+        return self._edge_loop
 
     def _generate_edgetts(self, text):
         try:
-            # We use an event loop to run the async edge-tts code synchronously
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            audio_data = loop.run_until_complete(self._async_generate_edgetts(text))
-            loop.close()
+            loop = self._get_edge_loop()
+            future = asyncio.run_coroutine_threadsafe(self._async_generate_edgetts(text), loop)
+            audio_data = future.result(timeout=30)  # 30s safety timeout
             return {'audio_data': audio_data, 'content_type': 'audio/mpeg'}
         except Exception as e:
             return {'error': f"Edge TTS Error: {str(e)}"}
