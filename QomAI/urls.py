@@ -8,8 +8,7 @@ from .views import (
     FakeNewsAnalysisView, RecommendationsView,
     GenerateLearningPathView, GenerateTestView, 
     UserPreferenceView, WebSearchView,
-    ImageGenerationView, VoiceTranscriptionView,
-    VoiceBriefingView, VoiceTTSView
+    ImageGenerationView, VoiceTranscriptionView
 )
 
 router = DefaultRouter()
@@ -41,10 +40,6 @@ urlpatterns = [
     # Content generation
     path('generate/learning-path/', GenerateLearningPathView.as_view(), name='generate-learning-path'),
     path('generate/test/', GenerateTestView.as_view(), name='generate-test'),
-    
-    # Voice Assistant Briefing & TTS
-    path('voice/briefing/', VoiceBriefingView.as_view(), name='voice-briefing'),
-    path('voice/tts/', VoiceTTSView.as_view(), name='voice-tts'),
     
     # Router URLs
     path('', include(router.urls)),
