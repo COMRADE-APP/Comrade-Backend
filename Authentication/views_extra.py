@@ -278,13 +278,8 @@ class BaseSocialCallbackView(APIView):
             if not frontend_url.endswith('/'):
                 frontend_url += '/'
             
-            # Check profile completion status via Profile model
-            profile_completed = False
-            try:
-                profile = user.profile
-                profile_completed = bool(profile.bio and profile.location)
-            except Profile.DoesNotExist:
-                profile_completed = False
+            # Check profile completion status
+            profile_completed = getattr(user, 'profile_completed', False)
             
             # Check if user has a usable password (social-only users won't)
             has_password = user.has_usable_password()
