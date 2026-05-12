@@ -313,58 +313,67 @@ class TransferView(APIView):
     def post(self, request):
         """
         Transfer funds internally to another user.
+        All amounts are stored in platform currency (USD by default).
+        Auto-detects user's currency from profile/headers.
         """
         recipient_email = request.data.get('recipient_email')
         amount = request.data.get('amount')
-        
+        from_currency = request.data.get('from_currency')
+        from Payment.currency_service import convert_to_platform_currency, currency_service
+
         if not amount or float(amount) <= 0:
              return Response({"detail": "Invalid amount."}, status=status.HTTP_400_BAD_REQUEST)
-        
+
         if not recipient_email:
              return Response({"detail": "Recipient email required."}, status=status.HTTP_400_BAD_REQUEST)
-             
-        # Ensure sender profile exists
+
         sender_profile_obj = get_or_create_payment_profile(request.user)
         if not sender_profile_obj:
             return Response({"detail": "Could not create sender profile."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-        
+
         sender_profile = PaymentProfile.objects.select_for_update().get(id=sender_profile_obj.id)
-        
-        if sender_profile.comrade_balance < float(amount):
+
+        if from_currency is None:
+            from_currency = currency_service.detect_currency_for_user(request)
+
+        conversion = convert_to_platform_currency(amount, from_currency)
+        platform_amount = conversion['converted_amount']
+
+        if sender_profile.comrade_balance < platform_amount:
             return Response({"detail": "Insufficient balance."}, status=status.HTTP_400_BAD_REQUEST)
-            
-        # Find recipient
+
         try:
             from Authentication.models import CustomUser
             recipient_user = CustomUser.objects.get(email=recipient_email)
             recipient_profile_obj = get_or_create_payment_profile(recipient_user)
             if not recipient_profile_obj:
                 return Response({"detail": "Could not create recipient profile."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-                
+
             recipient_profile = PaymentProfile.objects.select_for_update().get(id=recipient_profile_obj.id)
         except CustomUser.DoesNotExist:
             return Response({"detail": "Recipient user not found."}, status=status.HTTP_404_NOT_FOUND)
         except Exception as e:
             return Response({"detail": f"Error finding recipient: {str(e)}"}, status=status.HTTP_400_BAD_REQUEST)
-            
+
+        from decimal import Decimal
+
         if sender_profile == recipient_profile:
              return Response({"detail": "Cannot transfer to self."}, status=status.HTTP_400_BAD_REQUEST)
 
-        # Execute Transfer
-        sender_profile.comrade_balance -= float(amount)
-        recipient_profile.comrade_balance += float(amount)
-        
+        sender_profile.comrade_balance -= Decimal(str(platform_amount))
+        recipient_profile.comrade_balance += Decimal(str(platform_amount))
+
         sender_profile.save()
         recipient_profile.save()
-        
-        # Log Transaction
+
         token = TransactionToken.objects.create(
             payment_profile=sender_profile,
             recipient_profile=recipient_profile,
-            amount=amount,
+            amount=Decimal(str(platform_amount)),
             transaction_type='transfer',
             payment_option='comrade_balance',
-            description=f"Transfer to {recipient_email}"
+            description=f"Transfer to {recipient_email}",
+            status='completed'
         )
 
         TransactionHistory.objects.create(
@@ -373,15 +382,16 @@ class TransferView(APIView):
             transaction_category='transfer',
             payment_type='individual',
             status='completed',
-            amount=amount
+            amount=platform_amount
         )
-        
-        # We should also log for recipient seeing as they received money? 
-        # Usually checking histories filters by payment_profile OR recipient_profile if implemented.
-        # But let's stick to the sender log for now as the token links both.
 
         return Response({
             "detail": "Transfer successful.",
-            "new_balance": sender_profile.comrade_balance,
-            "transaction_code": token.transaction_code
+            "new_balance": float(sender_profile.comrade_balance),
+            "transaction_code": str(token.transaction_code),
+            "platform_amount": platform_amount,
+            "platform_currency": settings.PLATFORM_CURRENCY,
+            "original_amount": float(amount),
+            "original_currency": from_currency,
+            "exchange_rate": conversion['exchange_rate']
         })

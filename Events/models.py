@@ -145,7 +145,10 @@ class Event(models.Model):
     def __str__(self):
         return self.name
     
+    class Meta:
+        ordering = ['-time_stamp']
 
+ 
 class EventVisibility(models.Model):
     event = models.OneToOneField(Event, on_delete=models.CASCADE, related_name='event_visibility')
     scheduled_time = models.DateTimeField(null=True, blank=True)

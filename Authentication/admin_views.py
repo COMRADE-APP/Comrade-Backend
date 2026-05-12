@@ -287,17 +287,17 @@ class AdminContentModerationView(APIView):
         try:
             if content_type == 'opinions':
                 from Opinions.models import Opinion
-                qs = Opinion.objects.select_related('author').order_by('-created_at')
+                qs = Opinion.objects.select_related('user').order_by('-created_at')
                 if search:
-                    qs = qs.filter(Q(content__icontains=search) | Q(author__email__icontains=search))
+                    qs = qs.filter(Q(content__icontains=search) | Q(user__email__icontains=search))
                 total = qs.count()
                 start = (page - 1) * page_size
                 for o in qs[start:start + page_size]:
                     items.append({
                         'id': o.id, 'type': 'opinion',
                         'content': o.content[:200],
-                        'author_email': o.author.email if o.author else 'N/A',
-                        'author_name': f"{o.author.first_name} {o.author.last_name}" if o.author else 'N/A',
+                        'author_email': o.user.email if o.user else 'N/A',
+                        'author_name': f"{o.user.first_name} {o.user.last_name}" if o.user else 'N/A',
                         'created_at': o.created_at,
                         'likes_count': getattr(o, 'likes_count', 0),
                     })
@@ -322,27 +322,27 @@ class AdminContentModerationView(APIView):
 
             elif content_type == 'events':
                 from Events.models import Event
-                qs = Event.objects.select_related('creator').order_by('-created_at')
+                qs = Event.objects.select_related('created_by').order_by('-time_stamp')
                 if search:
-                    qs = qs.filter(Q(title__icontains=search) | Q(creator__email__icontains=search))
+                    qs = qs.filter(Q(name__icontains=search) | Q(created_by__email__icontains=search))
                 total = qs.count()
                 start = (page - 1) * page_size
                 for e in qs[start:start + page_size]:
                     items.append({
                         'id': e.id, 'type': 'event',
-                        'title': e.title,
+                        'title': e.name,
                         'description': str(getattr(e, 'description', ''))[:200],
-                        'creator_email': e.creator.email if e.creator else 'N/A',
-                        'creator_name': f"{e.creator.first_name} {e.creator.last_name}" if e.creator else 'N/A',
-                        'created_at': e.created_at,
-                        'start_date': getattr(e, 'start_date', None),
+                        'creator_email': e.created_by.email if e.created_by else 'N/A',
+                        'creator_name': f"{e.created_by.first_name} {e.created_by.last_name}" if e.created_by else 'N/A',
+                        'created_at': e.time_stamp,
+                        'start_date': getattr(e, 'event_date', None),
                     })
 
             elif content_type == 'rooms':
                 from Rooms.models import Room
-                qs = Room.objects.select_related('creator').order_by('-created_at')
+                qs = Room.objects.select_related('created_by').order_by('-created_at')
                 if search:
-                    qs = qs.filter(Q(name__icontains=search) | Q(creator__email__icontains=search))
+                    qs = qs.filter(Q(name__icontains=search) | Q(created_by__email__icontains=search))
                 total = qs.count()
                 start = (page - 1) * page_size
                 for r in qs[start:start + page_size]:
@@ -350,17 +350,17 @@ class AdminContentModerationView(APIView):
                         'id': r.id, 'type': 'room',
                         'name': r.name,
                         'description': str(getattr(r, 'description', ''))[:200],
-                        'creator_email': r.creator.email if r.creator else 'N/A',
-                        'creator_name': f"{r.creator.first_name} {r.creator.last_name}" if r.creator else 'N/A',
+                        'creator_email': r.created_by.email if r.created_by else 'N/A',
+                        'creator_name': f"{r.created_by.first_name} {r.created_by.last_name}" if r.created_by else 'N/A',
                         'created_at': r.created_at,
                         'members_count': getattr(r, 'members_count', 0),
                     })
 
             elif content_type == 'resources':
                 from Resources.models import Resource
-                qs = Resource.objects.select_related('creator').order_by('-created_at')
+                qs = Resource.objects.select_related('created_by').order_by('-created_at')
                 if search:
-                    qs = qs.filter(Q(title__icontains=search) | Q(creator__email__icontains=search))
+                    qs = qs.filter(Q(title__icontains=search) | Q(created_by__email__icontains=search))
                 total = qs.count()
                 start = (page - 1) * page_size
                 for res in qs[start:start + page_size]:
@@ -368,27 +368,15 @@ class AdminContentModerationView(APIView):
                         'id': res.id, 'type': 'resource',
                         'title': res.title,
                         'description': str(getattr(res, 'description', ''))[:200],
-                        'creator_email': res.creator.email if res.creator else 'N/A',
-                        'creator_name': f"{res.creator.first_name} {res.creator.last_name}" if res.creator else 'N/A',
+                        'creator_email': res.created_by.email if res.created_by else 'N/A',
+                        'creator_name': f"{res.created_by.first_name} {res.created_by.last_name}" if res.created_by else 'N/A',
                         'created_at': res.created_at,
                     })
 
             elif content_type == 'research':
-                from Research.models import ResearchPaper
-                qs = ResearchPaper.objects.select_related('author').order_by('-created_at')
-                if search:
-                    qs = qs.filter(Q(title__icontains=search) | Q(author__email__icontains=search))
-                total = qs.count()
-                start = (page - 1) * page_size
-                for rp in qs[start:start + page_size]:
-                    items.append({
-                        'id': rp.id, 'type': 'research',
-                        'title': rp.title,
-                        'abstract': str(getattr(rp, 'abstract', ''))[:200],
-                        'author_email': rp.author.email if rp.author else 'N/A',
-                        'author_name': f"{rp.author.first_name} {rp.author.last_name}" if rp.author else 'N/A',
-                        'created_at': rp.created_at,
-                    })
+                # ResearchPaper model not yet implemented
+                items = []
+                total = 0
 
         except Exception as e:
             logger.error(f"Error loading {content_type}: {e}")

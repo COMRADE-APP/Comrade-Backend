@@ -326,7 +326,9 @@ class Profile(models.Model):
     profile_picture = models.ImageField(upload_to='profile_pictures/', blank=True, null=True)
     cover_photo = models.ImageField(upload_to='cover_photos/', blank=True, null=True)
     location = models.CharField(max_length=300, blank=True)
+    country_code = models.CharField(max_length=2, blank=True, help_text="ISO 3166-1 alpha-2 country code")
     birth_date = models.DateField(null=True, blank=True)
+    preferred_currency = models.CharField(max_length=3, blank=True, help_text="User's preferred display currency")
     blocked_users = models.ManyToManyField(CustomUser, related_name='blocked_by', blank=True)
     blocked_organizations = models.ManyToManyField(Organisation, related_name='orgs_blocked_by', blank=True)
     blocked_institutions = models.ManyToManyField(Institution, related_name='insts_blocked_by', blank=True)
@@ -500,6 +502,7 @@ class UserProfile(models.Model):
     show_email = models.CharField(max_length=20, choices=PRIVACY_CHOICES, default='followers')
     show_phone = models.CharField(max_length=20, choices=PRIVACY_CHOICES, default='private')
     allow_messages = models.CharField(max_length=20, choices=MESSAGE_PERMISSION_CHOICES, default='followers')
+    allow_group_invites = models.CharField(max_length=20, choices=MESSAGE_PERMISSION_CHOICES, default='followers')
     show_activity_status = models.BooleanField(default=True)
     show_read_receipts = models.BooleanField(default=True)
     

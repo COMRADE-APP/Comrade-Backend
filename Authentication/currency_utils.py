@@ -293,3 +293,203 @@ def get_currency_name(currency_code):
     """Return the display name for a currency code."""
     info = CURRENCY_INFO.get(currency_code)
     return info['name'] if info else currency_code
+
+
+# Map ISO 3166-1 alpha-2 country codes to currencies
+COUNTRY_TO_CURRENCY = {
+    # Africa
+    'KE': 'KES',   # Kenya
+    'UG': 'UGX',   # Uganda
+    'TZ': 'TZS',   # Tanzania
+    'RW': 'RWF',   # Rwanda
+    'ET': 'ETB',   # Ethiopia
+    'NG': 'NGN',   # Nigeria
+    'GH': 'GHS',   # Ghana
+    'ZA': 'ZAR',   # South Africa
+    'EG': 'EGP',   # Egypt
+    'MA': 'MAD',   # Morocco
+    'DZ': 'DZD',   # Algeria
+    'TN': 'TND',   # Tunisia
+    'LY': 'LYD',   # Libya
+    'SD': 'SDG',   # Sudan
+    'CM': 'XAF',   # Cameroon (CFA Franc)
+    'CI': 'XOF',   # Ivory Coast (CFA Franc)
+    'SN': 'XOF',   # Senegal (CFA Franc)
+    'BF': 'XOF',   # Burkina Faso (CFA Franc)
+    'ML': 'XOF',   # Mali (CFA Franc)
+    'NE': 'XOF',   # Niger (CFA Franc)
+    'TG': 'XOF',   # Togo (CFA Franc)
+    'BJ': 'XOF',   # Benin (CFA Franc)
+    'GA': 'XAF',   # Gabon (CFA Franc)
+    'CG': 'XAF',   # Republic of Congo (CFA Franc)
+    'CD': 'CDF',   # DRC Congo
+    'AO': 'AOA',   # Angola
+    'MZ': 'MZN',   # Mozambique
+    'ZM': 'ZMW',   # Zambia
+    'ZW': 'ZWL',   # Zimbabwe
+    'MW': 'MWK',   # Malawi
+    'BW': 'BWP',   # Botswana
+    'NA': 'NAD',   # Namibia
+    'LS': 'LSL',   # Lesotho
+    'SZ': 'SZL',   # Eswatini
+    'DJ': 'DJF',   # Djibouti
+    'ER': 'ERN',   # Eritrea
+    'SO': 'SOS',   # Somalia
+    'SS': 'SSP',   # South Sudan
+    'CF': 'XAF',   # Central African Republic
+
+    # Europe
+    'GB': 'GBP',   # United Kingdom
+    'UK': 'GBP',   # Great Britain (alias)
+    'US': 'USD',   # United States
+    'CA': 'CAD',   # Canada
+    'AU': 'AUD',   # Australia
+    'NZ': 'NZD',   # New Zealand
+    'DE': 'EUR',   # Germany
+    'FR': 'EUR',   # France
+    'IT': 'EUR',   # Italy
+    'ES': 'EUR',   # Spain
+    'NL': 'EUR',   # Netherlands
+    'PT': 'EUR',   # Portugal
+    'BE': 'EUR',   # Belgium
+    'AT': 'EUR',   # Austria
+    'IE': 'EUR',   # Ireland
+    'FI': 'EUR',   # Finland
+    'GR': 'EUR',   # Greece
+    'EE': 'EUR',   # Estonia
+    'LV': 'EUR',   # Latvia
+    'LT': 'EUR',   # Lithuania
+    'SK': 'EUR',   # Slovakia
+    'SI': 'EUR',   # Slovenia
+    'MT': 'EUR',   # Malta
+    'CY': 'EUR',   # Cyprus
+    'SE': 'SEK',   # Sweden
+    'NO': 'NOK',   # Norway
+    'DK': 'DKK',   # Denmark
+    'CH': 'CHF',   # Switzerland
+    'PL': 'PLN',   # Poland
+    'CZ': 'CZK',   # Czech Republic
+    'HU': 'HUF',   # Hungary
+    'RO': 'RON',   # Romania
+    'BG': 'BGN',   # Bulgaria
+    'HR': 'EUR',   # Croatia (Euro)
+    'RS': 'RSD',   # Serbia
+    'BA': 'BAM',   # Bosnia
+    'AL': 'ALL',   # Albania
+    'MK': 'MKD',   # North Macedonia
+    'XK': 'EUR',   # Kosovo
+    'ME': 'EUR',   # Montenegro
+    'UA': 'UAH',   # Ukraine
+    'BY': 'BYN',   # Belarus
+    'MD': 'MDL',   # Moldova
+    'TR': 'TRY',   # Turkey
+
+    # Asia
+    'IN': 'INR',   # India
+    'JP': 'JPY',   # Japan
+    'CN': 'CNY',   # China
+    'KR': 'KRW',   # South Korea
+    'HK': 'HKD',   # Hong Kong
+    'TW': 'TWD',   # Taiwan
+    'SG': 'SGD',   # Singapore
+    'MY': 'MYR',   # Malaysia
+    'TH': 'THB',   # Thailand
+    'ID': 'IDR',   # Indonesia
+    'PH': 'PHP',   # Philippines
+    'VN': 'VND',   # Vietnam
+    'MM': 'MMK',   # Myanmar
+    'KH': 'KHR',   # Cambodia
+    'LA': 'LAK',   # Laos
+    'BN': 'BND',   # Brunei
+    'TL': 'USD',   # Timor-Leste
+    'NP': 'NPR',   # Nepal
+    'BT': 'INR',   # Bhutan
+    'LK': 'LKR',   # Sri Lanka
+    'MV': 'MVR',   # Maldives
+    'PK': 'PKR',   # Pakistan
+    'BD': 'BDT',   # Bangladesh
+    'AF': 'AFN',   # Afghanistan
+    'IR': 'IRR',   # Iran
+    'IQ': 'IQD',   # Iraq
+    'SA': 'SAR',   # Saudi Arabia
+    'AE': 'AED',   # UAE
+    'QA': 'QAR',   # Qatar
+    'KW': 'KWD',   # Kuwait
+    'BH': 'BHD',   # Bahrain
+    'OM': 'OMR',   # Oman
+    'YE': 'YER',   # Yemen
+    'JO': 'JOD',   # Jordan
+    'LB': 'LBP',   # Lebanon
+    'SY': 'SYP',   # Syria
+    'IL': 'ILS',   # Israel
+    'PS': 'ILS',   # Palestine
+
+    # Americas
+    'BR': 'BRL',   # Brazil
+    'MX': 'MXN',   # Mexico
+    'AR': 'ARS',   # Argentina
+    'CL': 'CLP',   # Chile
+    'CO': 'COP',   # Colombia
+    'PE': 'PEN',   # Peru
+    'VE': 'VES',   # Venezuela
+    'EC': 'USD',   # Ecuador (uses USD)
+    'BO': 'BOB',   # Bolivia
+    'PY': 'PYG',   # Paraguay
+    'UY': 'UYU',   # Uruguay
+    'GY': 'GYD',   # Guyana
+    'SR': 'SRD',   # Suriname
+}
+
+# Supported currencies by the platform
+PLATFORM_CURRENCIES = [
+    'USD', 'EUR', 'GBP', 'KES', 'ZAR', 'NGN', 'GHS', 'TZS', 'UGX',
+    'BRL', 'INR', 'CNY', 'JPY', 'AUD', 'CAD', 'CHF', 'AED', 'SAR',
+    'SGD', 'MYR', 'PHP', 'THB', 'IDR', 'PKR', 'MAD', 'EGP'
+]
+
+
+def get_currency_from_country(country_code):
+    """Get currency code from ISO 3166-1 alpha-2 country code."""
+    if not country_code:
+        return 'USD'
+    return COUNTRY_TO_CURRENCY.get(country_code.upper(), 'USD')
+
+
+def infer_currency_from_request(request):
+    """
+    Infer currency from HTTP request headers and user profile.
+    Priority: user preferred currency > country_code > Accept-Language > IP geolocation
+    """
+    from django.conf import settings
+
+    currency = None
+
+    # 1. Check if user is authenticated and has a preferred currency
+    if hasattr(request, 'user') and request.user.is_authenticated:
+        try:
+            profile = request.user.profile
+            if hasattr(profile, 'preferred_currency') and profile.preferred_currency:
+                return profile.preferred_currency
+            if hasattr(profile, 'country_code') and profile.country_code:
+                currency = get_currency_from_country(profile.country_code)
+                if currency:
+                    return currency
+        except Exception:
+            pass
+
+    # 2. Check request headers
+    accept_language = request.META.get('HTTP_ACCEPT_LANGUAGE', '')
+    if accept_language:
+        currency = infer_currency_from_locale(accept_language)
+        if currency and currency in PLATFORM_CURRENCIES:
+            return currency
+
+    # 3. Check X-Country-Code header (can be set by frontend)
+    country_code_header = request.META.get('HTTP_X_COUNTRY_CODE', '')
+    if country_code_header:
+        currency = get_currency_from_country(country_code_header)
+        if currency:
+            return currency
+
+    # 4. Default to platform currency
+    return getattr(settings, 'PLATFORM_CURRENCY', 'USD')

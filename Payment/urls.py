@@ -1,6 +1,7 @@
 from django.urls import path, include
 from rest_framework.routers import DefaultRouter
 from Payment import views
+import Payment.views_automation as views_automation
 from Payment.views_payment import (
     PaymentMethodViewSet, ProcessPaymentView, RefundPaymentView,
     StripeWebhookView, PayPalWebhookView, MpesaCallbackView,
@@ -66,8 +67,28 @@ router.register(r'insurance-claims', views.InsuranceClaimViewSet, basename='insu
 # Donations & Charity
 router.register(r'donations', views.DonationViewSet, basename='donation')
 
+# Kitties (sub-funds)
+router.register(r'kitties', views.KittyViewSet, basename='kitty')
+
 # Group Investments
 router.register(r'group-investments', views.GroupInvestmentViewSet, basename='group-investment')
+
+# Advanced Group Features
+router.register(r'round-contributions', views.RoundContributionViewSet, basename='round-contribution')
+router.register(r'round-positions', views.RoundPositionViewSet, basename='round-position')
+router.register(r'withdrawal-requests', views.WithdrawalRequestViewSet, basename='withdrawal-request')
+router.register(r'benefit-rules', views.BenefitDistributionRuleViewSet, basename='benefit-rule')
+router.register(r'group-settings-changes', views.GroupSettingsChangeRequestViewSet, basename='group-settings-change')
+
+# Provider Management
+router.register(r'provider-registrations', views.ProviderRegistrationViewSet, basename='provider-registration')
+router.register(r'provider-documents', views.ProviderDocumentViewSet, basename='provider-document')
+router.register(r'provider-staff', views.ProviderStaffViewSet, basename='provider-staff')
+router.register(r'service-products', views.ServiceProductViewSet, basename='service-product')
+router.register(r'provider-transactions', views.ProviderTransactionViewSet, basename='provider-transaction')
+router.register(r'provider-queries', views.ProviderQueryViewSet, basename='provider-query')
+router.register(r'provider-applications', views.ProviderApplicationViewSet, basename='provider-application')
+router.register(r'provider-notifications', views.ProviderNotificationViewSet, basename='provider-notification')
 
 urlpatterns = [
     path('', include(router.urls)),
@@ -106,5 +127,36 @@ urlpatterns = [
     
     # Group Portfolio Analytics
     path('group-portfolio/<uuid:group_id>/', views.GroupPortfolioView.as_view(), name='group-portfolio'),
+    
+    # Group Analytics
+    path('groups/<uuid:group_id>/group-analytics/', views.GroupAnalyticsView.as_view(), name='group-analytics'),
+    
+    # Admin Management Routes
+    path('admin/bills/', views.AdminBillPaymentViewSet.as_view({'get': 'list', 'post': 'bulk_action'}), name='admin-bills'),
+    path('admin/bills/stats/', views.AdminBillPaymentViewSet.as_view({'get': 'stats'}), name='admin-bills-stats'),
+    path('admin/loans/', views.AdminLoanApplicationViewSet.as_view({'get': 'list', 'post': 'bulk_action'}), name='admin-loans'),
+    path('admin/loans/stats/', views.AdminLoanApplicationViewSet.as_view({'get': 'stats'}), name='admin-loans-stats'),
+    path('admin/insurance/', views.AdminInsuranceClaimViewSet.as_view({'get': 'list', 'post': 'bulk_action'}), name='admin-insurance'),
+    path('admin/insurance/stats/', views.AdminInsuranceClaimViewSet.as_view({'get': 'stats'}), name='admin-insurance-stats'),
+    path('admin/transactions/', views.AdminTransactionViewSet.as_view({'get': 'list'}), name='admin-transactions'),
+    path('admin/transactions/stats/', views.AdminTransactionViewSet.as_view({'get': 'stats'}), name='admin-transactions-stats'),
+    path('admin/kitties/', views.AdminKittyViewSet.as_view({'get': 'list', 'patch': 'partial_update'}), name='admin-kitties'),
+    path('admin/kitties/stats/', views.AdminKittyViewSet.as_view({'get': 'stats'}), name='admin-kitties-stats'),
+    path('admin/kitties/<uuid:pk>/freeze/', views.AdminKittyViewSet.as_view({'post': 'freeze'}), name='admin-kitty-freeze'),
+    path('admin/kitties/<uuid:pk>/unfreeze/', views.AdminKittyViewSet.as_view({'post': 'unfreeze'}), name='admin-kitty-unfreeze'),
+    
+    # Automation & Utility Routes
+    path('currency/convert/', views_automation.CurrencyConversionView.as_view({'get': 'convert'}), name='currency-convert'),
+    path('currency/rates/', views_automation.CurrencyConversionView.as_view({'get': 'rates'}), name='currency-rates'),
+    path('notifications/send/', views_automation.NotificationServiceView.as_view({'post': 'send'}), name='notification-send'),
+    path('webhooks/stripe/', views_automation.WebhookHandlerView.as_view({'post': 'stripe'}), name='webhook-stripe'),
+    path('webhooks/mpesa/', views_automation.WebhookHandlerView.as_view({'post': 'mpesa'}), name='webhook-mpesa'),
+    path('webhooks/paypal/', views_automation.WebhookHandlerView.as_view({'post': 'paypal'}), name='webhook-paypal'),
+    path('tasks/process-standing-orders/', views_automation.ScheduledTasksView.as_view({'post': 'process_standing_orders'}), name='task-standing-orders'),
+    path('tasks/check-loan-overdue/', views_automation.ScheduledTasksView.as_view({'post': 'check_loan_overdue'}), name='task-loan-overdue'),
+    path('tasks/check-insurance-expiry/', views_automation.ScheduledTasksView.as_view({'post': 'check_insurance_expiry'}), name='task-insurance-expiry'),
+    path('analytics/dashboard/', views_automation.AnalyticsView.as_view({'get': 'dashboard'}), name='analytics-dashboard'),
+    path('security/rate-limit/', views_automation.SecurityView.as_view({'get': 'check_rate_limit'}), name='security-rate-limit'),
+    path('security/report-suspicious/', views_automation.SecurityView.as_view({'post': 'report_suspicious'}), name='security-report'),
 ]
 

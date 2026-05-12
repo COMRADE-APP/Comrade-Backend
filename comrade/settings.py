@@ -58,6 +58,7 @@ INSTALLED_APPS = [
     'QomAI',  # AI Assistant
     'Funding',  # Business Funding Hub
     'Careers',  # Gigs & Career Opportunities
+    'django_celery_beat',  # Periodic task scheduler
     
     # Authentication Support Apps
     'DeviceManagement',
@@ -67,6 +68,7 @@ INSTALLED_APPS = [
     'rest_framework_simplejwt',
     'rest_framework_simplejwt.token_blacklist',
     'corsheaders',
+    'drf_spectacular',
     'allauth',
     'allauth.account',
     'allauth.socialaccount',
@@ -257,9 +259,44 @@ REST_FRAMEWORK = {
         'user': os.getenv('RATE_LIMIT_USER', '1000/hour'),
         'login': os.getenv('RATE_LIMIT_LOGIN', '5/minute'),
         'otp': os.getenv('RATE_LIMIT_OTP', '3/hour'),
+        'payment': os.getenv('RATE_LIMIT_PAYMENT', '20/hour'),
+        'upload': os.getenv('RATE_LIMIT_UPLOAD', '50/hour'),
     },
     'DEFAULT_PAGINATION_CLASS': 'rest_framework.pagination.PageNumberPagination',
     'PAGE_SIZE': 20,
+    'DEFAULT_SCHEMA_CLASS': 'drf_spectacular.openapi.AutoSchema',
+    'DEFAULT_FILTER_BACKENDS': [
+        'django_filters.rest_framework.DjangoFilterBackend',
+        'rest_framework.filters.SearchFilter',
+        'rest_framework.filters.OrderingFilter',
+    ],
+}
+
+SPECTACULAR_SETTINGS = {
+    'TITLE': 'Comrade (Qomrade) API',
+    'DESCRIPTION': 'Comprehensive platform API for academic collaboration, payments, social features, and more.',
+    'VERSION': '1.0.0',
+    'SERVE_INCLUDE_SCHEMA': False,
+    'COMPONENT_SPLIT_REQUEST': True,
+    'SERVERS': [
+        {'url': 'http://localhost:8000', 'description': 'Local development'},
+        {'url': 'https://qomrade.onrender.com', 'description': 'Production'},
+    ],
+    'TAGS': [
+        {'name': 'auth', 'description': 'Authentication & user management'},
+        {'name': 'payments', 'description': 'Payment processing & transactions'},
+        {'name': 'funding', 'description': 'Business funding & investments'},
+        {'name': 'social', 'description': 'Opinions, following, stories'},
+        {'name': 'content', 'description': 'Articles, resources, research'},
+        {'name': 'events', 'description': 'Event management & ticketing'},
+        {'name': 'learning', 'description': 'LMS: courses, quizzes, certificates'},
+        {'name': 'messaging', 'description': 'Rooms, DMs, conversations'},
+        {'name': 'shop', 'description': 'Marketplace, products, orders'},
+        {'name': 'careers', 'description': 'Gigs & career opportunities'},
+        {'name': 'entities', 'description': 'Institutions & organizations'},
+        {'name': 'admin', 'description': 'Admin & moderation'},
+        {'name': 'ai', 'description': 'QomAI assistant'},
+    ],
 }
 
 SIMPLE_JWT = {
@@ -333,6 +370,14 @@ EQUITY_API_KEY = os.getenv('EQUITY_API_KEY', '')
 EQUITY_MERCHANT_CODE = os.getenv('EQUITY_MERCHANT_CODE', '')
 EQUITY_API_URL = os.getenv('EQUITY_API_URL', 'https://uat.jengahq.io')  # UAT for testing
 EQUITY_CONSUMER_SECRET = os.getenv('EQUITY_CONSUMER_SECRET', '')
+
+# Currency Exchange API (CurrencyBeacon for real-time rates)
+CURRENCY_API_PROVIDER = os.getenv('CURRENCY_API_PROVIDER', 'currencybeacon')
+CURRENCY_API_KEY = os.getenv('CURRENCY_API_KEY', '')
+CURRENCY_CACHE_TIMEOUT = 60 * 60  # Cache rates for 1 hour (in seconds)
+DEFAULT_CURRENCY = os.getenv('DEFAULT_CURRENCY', 'USD')
+PLATFORM_CURRENCY = os.getenv('PLATFORM_CURRENCY', 'USD')  # The common currency for all transactions
+SUPPORTED_CURRENCIES = ['USD', 'EUR', 'GBP', 'KES', 'ZAR', 'NGN', 'GHS', 'TZS', 'UGX', 'BRL', 'INR', 'CNY', 'JPY', 'AUD', 'CAD', 'CHF']
 
 # Default payment destination (where platform earnings are routed)
 PAYMENT_DESTINATION = os.getenv('PAYMENT_DESTINATION', 'stripe')  # stripe, paypal, mpesa, flutterwave, pesapal, equity
@@ -429,4 +474,62 @@ CSRF_COOKIE_SAMESITE = 'Lax'
 SESSION_COOKIE_SAMESITE = 'Lax'
 CSRF_COOKIE_HTTPONLY = False   # Allow JS to read CSRF token
 SESSION_COOKIE_HTTPONLY = True  # Session cookie is httpOnly
+
+# Logging Configuration - Shows API requests/responses in console
+LOGGING = {
+    'version': 1,
+    'disable_existing_loggers': False,
+    'formatters': {
+        'verbose': {
+            'format': '{levelname} {asctime} {name} {message}',
+            'style': '{',
+        },
+        'simple': {
+            'format': '{levelname} {name}: {message}',
+            'style': '{',
+        },
+    },
+    'handlers': {
+        'console': {
+            'class': 'logging.StreamHandler',
+            'formatter': 'verbose',
+        },
+    },
+    'loggers': {
+        'django': {
+            'handlers': ['console'],
+            'level': os.getenv('DJANGO_LOG_LEVEL', 'INFO'),
+            'propagate': False,
+        },
+        'django.server': {
+            'handlers': ['console'],
+            'level': os.getenv('DJANGO_LOG_LEVEL', 'INFO'),
+            'propagate': False,
+        },
+        'Payment.views': {
+            'handlers': ['console'],
+            'level': 'DEBUG',
+            'propagate': False,
+        },
+        'django.request': {
+            'handlers': ['console'],
+            'level': 'DEBUG',
+            'propagate': False,
+        },
+    },
+}
+
+# ============================================================================
+# CELERY CONFIGURATION
+# ============================================================================
+CELERY_BROKER_URL = os.getenv('CELERY_BROKER_URL', 'redis://localhost:6379/0')
+CELERY_RESULT_BACKEND = os.getenv('CELERY_RESULT_BACKEND', 'redis://localhost:6379/0')
+CELERY_ACCEPT_CONTENT = ['json']
+CELERY_TASK_SERIALIZER = 'json'
+CELERY_RESULT_SERIALIZER = 'json'
+CELERY_TIMEZONE = TIME_ZONE
+CELERY_BEAT_SCHEDULER = 'django_celery_beat.schedulers:DatabaseScheduler'
+CELERY_TASK_TRACK_STARTED = True
+CELERY_TASK_TIME_LIMIT = 300  # 5 minutes max per task
+CELERY_BROKER_CONNECTION_RETRY_ON_STARTUP = True
 

@@ -405,11 +405,11 @@ class EventDocumentSerializer(serializers.ModelSerializer):
         model = EventDocument
         fields = [
             'id', 'event', 'event_name', 'title', 'description',
-            'file', 'file_url', 'document_type', 'visibility',
+            'file', 'file_url', 'file_type', 'is_public', 'requires_ticket',
             'uploaded_by', 'uploaded_by_name', 'download_count',
-            'is_archived', 'created_at', 'updated_at'
+            'upload_date'
         ]
-        read_only_fields = ['id', 'uploaded_by', 'download_count', 'created_at', 'updated_at']
+        read_only_fields = ['id', 'uploaded_by', 'download_count', 'upload_date']
     
     def get_uploaded_by_name(self, obj):
         return f"{obj.uploaded_by.first_name} {obj.uploaded_by.last_name}".strip() or obj.uploaded_by.email
@@ -475,8 +475,8 @@ class EventProductLinkSerializer(serializers.ModelSerializer):
         model = EventProductLink
         fields = [
             'id', 'event', 'event_name', 'product', 'product_name',
-            'product_price', 'product_image', 'link_type', 'discount_percentage',
-            'is_exclusive', 'available_from', 'available_until', 'created_at'
+            'product_price', 'product_image', 'link_type', 'is_featured', 'discount_percentage',
+            'created_at'
         ]
         read_only_fields = ['id', 'created_at']
 

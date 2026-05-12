@@ -331,7 +331,15 @@ def get_or_create_payment_profile(user):
         import uuid
         
         # Ensure Profile exists
-        profile, created = Profile.objects.get_or_create(user=user)
+        try:
+            profile = Profile.objects.get(user=user)
+        except Profile.DoesNotExist:
+            profile = Profile.objects.create(user=user)
+        except Exception:
+            # Fallback for complex user objects/lazy loading
+            profile = Profile.objects.filter(user__id=user.id).first()
+            if not profile:
+                profile = Profile.objects.create(user=user)
         
         # Ensure PaymentProfile exists
         payment_profile, created = PaymentProfile.objects.get_or_create(

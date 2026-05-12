@@ -24,6 +24,9 @@ NOTIFICATION_TYPES = (
     ('suggested', 'Suggested'),
     ('profile_view', 'Profile View'),
     ('new_post', 'New Post'),
+    ('group_round', 'Group Round'),
+    ('group_contribution', 'Group Contribution'),
+    ('group_claim', 'Group Claim'),
 )
 
 

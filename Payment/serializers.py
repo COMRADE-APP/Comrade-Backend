@@ -1,3 +1,4 @@
+from decimal import Decimal
 from rest_framework import serializers
 from Payment.models import (
     PaymentProfile, PaymentItem, PaymentLog, PaymentGroups,
@@ -11,9 +12,16 @@ from Payment.models import (
     EscrowTransaction, EscrowDispute,
     InsuranceProduct, InsurancePolicy, InsuranceClaim,
     Donation, DonationContribution, GroupInvestment, InvestmentQuote,
+    GroupCertificate,
+    RoundContribution, RoundMemberContribution, BenefitDistributionRule,
+    WithdrawalRequest, GroupSettingsChangeRequest, RoundPosition,
+    PiggyBankConversionRequest,
+    ProviderRegistration, ProviderDocument, ProviderStaff, ServiceProduct,
+    ProviderTransaction, ProviderQuery, ProviderApplication, ProviderNotification
 )
 from Payment.models import TRANSACTION_CATEGORY, PAY_OPT
 from Authentication.models import Profile, CustomUser
+from Payment.utils import get_or_create_payment_profile
 
 class PaymentProfileSerializer(serializers.ModelSerializer):
     user_email = serializers.EmailField(source='user.user.email', read_only=True)
@@ -42,10 +50,13 @@ class PaymentLogSerializer(serializers.ModelSerializer):
 
 class TransactionTokenSerializer(serializers.ModelSerializer):
     recipient_email = serializers.SerializerMethodField()
+    recipient_name = serializers.SerializerMethodField()
     sender_email = serializers.SerializerMethodField()
+    initiator_name = serializers.SerializerMethodField()
     group_name = serializers.SerializerMethodField()
     group_cover_photo = serializers.SerializerMethodField()
     group_id = serializers.SerializerMethodField()
+    direction = serializers.SerializerMethodField()
     
     class Meta:
         model = TransactionToken
@@ -58,9 +69,27 @@ class TransactionTokenSerializer(serializers.ModelSerializer):
         except Exception:
             return None
 
+    def get_recipient_name(self, obj):
+        try:
+            if obj.recipient_profile:
+                user = obj.recipient_profile.user.user
+                return f"{user.first_name} {user.last_name}".strip() or user.username
+            return None
+        except Exception:
+            return None
+
     def get_sender_email(self, obj):
         try:
             return obj.payment_profile.user.user.email if obj.payment_profile else None
+        except Exception:
+            return None
+
+    def get_initiator_name(self, obj):
+        try:
+            if obj.payment_profile:
+                user = obj.payment_profile.user.user
+                return f"{user.first_name} {user.last_name}".strip() or user.username
+            return None
         except Exception:
             return None
 
@@ -81,6 +110,23 @@ class TransactionTokenSerializer(serializers.ModelSerializer):
         if obj.payment_group:
             return str(obj.payment_group.id)
         return None
+
+    def get_direction(self, obj):
+        request = self.context.get('request')
+        if not request:
+            return 'unknown'
+        try:
+            current_user = request.user
+            payment_profile = obj.payment_profile
+            recipient_profile = obj.recipient_profile
+            
+            if payment_profile and payment_profile.user.user == current_user:
+                return 'sent'
+            elif recipient_profile and recipient_profile.user.user == current_user:
+                return 'received'
+            return 'unknown'
+        except Exception:
+            return 'unknown'
 
 class TransactionTrackerSerializer(serializers.ModelSerializer):
     transaction_details = TransactionTokenSerializer(source='transaction_token', read_only=True)
@@ -111,10 +157,138 @@ class PaymentVerificationSerializer(serializers.ModelSerializer):
 
 class TransactionHistorySerializer(serializers.ModelSerializer):
     transaction_details = TransactionTokenSerializer(source='transaction_token', read_only=True)
-    
+
     class Meta:
         model = TransactionHistory
         fields = '__all__'
+
+
+class TransactionHistoryDetailSerializer(serializers.ModelSerializer):
+    transaction_code = serializers.UUIDField(source='transaction_token.transaction_code', read_only=True)
+    transaction_type = serializers.CharField(source='transaction_token.transaction_type', read_only=True)
+    amount = serializers.DecimalField(max_digits=12, decimal_places=2, read_only=True)
+    status = serializers.CharField(read_only=True)
+    created_at = serializers.DateTimeField(source='transaction_token.created_at', read_only=True)
+    sender_name = serializers.SerializerMethodField()
+    sender_email = serializers.SerializerMethodField()
+    recipient_name = serializers.SerializerMethodField()
+    recipient_email = serializers.SerializerMethodField()
+    payment_option = serializers.CharField(source='transaction_token.payment_option', read_only=True)
+    description = serializers.CharField(source='transaction_token.description', read_only=True)
+    authorization_code = serializers.SerializerMethodField()
+    verification_code = serializers.SerializerMethodField()
+    can_be_reversed = serializers.SerializerMethodField()
+    direction = serializers.SerializerMethodField()
+    group_id = serializers.SerializerMethodField()
+    group_name = serializers.SerializerMethodField()
+    group_cover_photo = serializers.SerializerMethodField()
+
+    class Meta:
+        model = TransactionHistory
+        fields = [
+            'id', 'transaction_code', 'transaction_type', 'transaction_category',
+            'amount', 'status', 'payment_type', 'created_at',
+            'sender_name', 'sender_email', 'recipient_name', 'recipient_email',
+            'payment_option', 'description', 'authorization_code', 'verification_code',
+            'can_be_reversed', 'direction', 'group_id', 'group_name', 'group_cover_photo'
+        ]
+
+    def get_sender_name(self, obj):
+        try:
+            profile = obj.payment_profile
+            if profile and profile.user:
+                user = profile.user.user
+                return f"{user.first_name} {user.last_name}".strip() or user.email
+            return None
+        except Exception:
+            return None
+
+    def get_sender_email(self, obj):
+        try:
+            return obj.payment_profile.user.user.email if obj.payment_profile else None
+        except Exception:
+            return None
+
+    def get_recipient_name(self, obj):
+        try:
+            recipient = obj.transaction_token.recipient_profile
+            if recipient and recipient.user:
+                user = recipient.user.user
+                return f"{user.first_name} {user.last_name}".strip() or user.email
+            return None
+        except Exception:
+            return None
+
+    def get_recipient_email(self, obj):
+        try:
+            recipient = obj.transaction_token.recipient_profile
+            return recipient.user.user.email if recipient else None
+        except Exception:
+            return None
+
+    def get_direction(self, obj):
+        request = self.context.get('request')
+        if not request:
+            return 'unknown'
+        try:
+            current_user = request.user
+            sender_profile = obj.payment_profile
+            recipient = obj.transaction_token.recipient_profile
+            
+            if sender_profile and sender_profile.user.user == current_user:
+                return 'sent'
+            elif recipient and recipient.user.user == current_user:
+                return 'received'
+            return 'unknown'
+        except Exception:
+            return 'unknown'
+
+    def get_group_id(self, obj):
+        try:
+            if obj.transaction_token and obj.transaction_token.payment_group:
+                return str(obj.transaction_token.payment_group.id)
+            return None
+        except Exception:
+            return None
+
+    def get_group_name(self, obj):
+        try:
+            if obj.transaction_token and obj.transaction_token.payment_group:
+                return obj.transaction_token.payment_group.name
+            return None
+        except Exception:
+            return None
+
+    def get_group_cover_photo(self, obj):
+        try:
+            if obj.transaction_token and obj.transaction_token.payment_group:
+                group = obj.transaction_token.payment_group
+                if group.cover_photo:
+                    request = self.context.get('request')
+                    if request:
+                        return request.build_absolute_uri(group.cover_photo.url)
+                    return group.cover_photo.url
+            return None
+        except Exception:
+            return None
+
+    def get_authorization_code(self, obj):
+        if obj.authorization_token:
+            return obj.authorization_token.authorization_code
+        return None
+
+    def get_verification_code(self, obj):
+        if obj.verification_token:
+            return obj.verification_token.verification_code
+        return None
+
+    def get_can_be_reversed(self, obj):
+        try:
+            if obj.transaction_token:
+                return obj.transaction_token.status in ['completed', 'verified', 'settled'] and not obj.transaction_token.reversed_at
+            return False
+        except Exception:
+            return False
 
 # Payment Group Serializers
 class PaymentGroupMemberSerializer(serializers.ModelSerializer):
@@ -127,14 +301,16 @@ class PaymentGroupMemberSerializer(serializers.ModelSerializer):
         read_only_fields = ['total_contributed', 'joined_at', 'anonymous_alias']
     
     def get_user_email(self, obj):
-        if obj.is_anonymous:
+        if obj.is_anonymous or not obj.payment_profile or not obj.payment_profile.user or not obj.payment_profile.user.user:
             return None
         return obj.payment_profile.user.user.email
     
     def get_user_name(self, obj):
         if obj.is_anonymous:
             return obj.anonymous_alias or 'Anonymous Member'
-        return f"{obj.payment_profile.user.user.first_name} {obj.payment_profile.user.user.last_name}"
+        if obj.payment_profile and obj.payment_profile.user and obj.payment_profile.user.user:
+            return f"{obj.payment_profile.user.user.first_name} {obj.payment_profile.user.user.last_name}"
+        return "Unknown Member"
 
 class ContributionSerializer(serializers.ModelSerializer):
     member_name = serializers.SerializerMethodField()
@@ -225,6 +401,10 @@ class GroupPhaseSerializer(serializers.ModelSerializer):
 class GroupPostReplySerializer(serializers.ModelSerializer):
     author_name = serializers.SerializerMethodField()
     author_avatar = serializers.SerializerMethodField()
+    upvote_count = serializers.SerializerMethodField()
+    has_upvoted = serializers.SerializerMethodField()
+    child_replies = serializers.SerializerMethodField()
+    reaction_summary = serializers.SerializerMethodField()
 
     class Meta:
         model = GroupPostReply
@@ -248,17 +428,56 @@ class GroupPostReplySerializer(serializers.ModelSerializer):
             pass
         return None
 
+    def get_upvote_count(self, obj):
+        return getattr(obj, 'upvotes', []).count() if hasattr(obj, 'upvotes') else 0
+
+    def get_has_upvoted(self, obj):
+        request = self.context.get('request')
+        if not request or not request.user.is_authenticated:
+            return False
+        try:
+            return hasattr(obj, 'upvotes') and obj.upvotes.filter(user__user__email=request.user.email).exists()
+        except Exception:
+            return False
+
+    def get_reaction_summary(self, obj):
+        request = self.context.get('request')
+        user_id = str(request.user.id) if request and request.user.is_authenticated else None
+        
+        summary = []
+        reactions = getattr(obj, 'reactions', {}) or {}
+        for icon, users in reactions.items():
+            if users:
+                summary.append({
+                    'emoji': icon,
+                    'count': len(users),
+                    'has_reacted': user_id in users if user_id else False
+                })
+        return summary
+
+    def get_child_replies(self, obj):
+        if obj.child_replies.exists():
+            return GroupPostReplySerializer(obj.child_replies.all(), many=True, context=self.context).data
+        return []
+
 
 class GroupPostSerializer(serializers.ModelSerializer):
     author_name = serializers.SerializerMethodField()
     author_avatar = serializers.SerializerMethodField()
-    replies = GroupPostReplySerializer(many=True, read_only=True)
+    replies = serializers.SerializerMethodField()
+
+    def get_replies(self, obj):
+        top_level_replies = obj.replies.filter(parent_reply__isnull=True)
+        return GroupPostReplySerializer(top_level_replies, many=True, context=self.context).data
     reply_count = serializers.SerializerMethodField()
+    upvote_count = serializers.SerializerMethodField()
+    has_upvoted = serializers.SerializerMethodField()
+    reaction_summary = serializers.SerializerMethodField()
 
     class Meta:
         model = GroupPost
         fields = '__all__'
-        read_only_fields = ['id', 'author', 'reactions', 'created_at', 'updated_at']
+        read_only_fields = ['id', 'author', 'reactions', 'upvotes', 'created_at', 'updated_at']
 
     def get_author_name(self, obj):
         try:
@@ -280,8 +499,41 @@ class GroupPostSerializer(serializers.ModelSerializer):
     def get_reply_count(self, obj):
         return obj.replies.count()
 
+    def get_upvote_count(self, obj):
+        return getattr(obj, 'upvotes', []).count() if hasattr(obj, 'upvotes') else 0
+
+    def get_has_upvoted(self, obj):
+        request = self.context.get('request')
+        if not request or not request.user.is_authenticated:
+            return False
+        try:
+            return hasattr(obj, 'upvotes') and obj.upvotes.filter(user__user__email=request.user.email).exists()
+        except Exception:
+            return False
+
+    def get_reaction_summary(self, obj):
+        request = self.context.get('request')
+        user_id = str(request.user.id) if request and request.user.is_authenticated else None
+        
+        summary = []
+        reactions = obj.reactions or {}
+        for icon, users in reactions.items():
+            if users:
+                summary.append({
+                    'emoji': icon,
+                    'count': len(users),
+                    'has_reacted': user_id in users if user_id else False
+                })
+        return summary
+
+
+class GroupCertificateSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = GroupCertificate
+        fields = '__all__'
 
 class PaymentGroupsSerializer(serializers.ModelSerializer):
+    certificate = GroupCertificateSerializer(read_only=True)
     members = PaymentGroupMemberSerializer(many=True, read_only=True)
     contributions_summary = serializers.SerializerMethodField()
     targets = GroupTargetSerializer(many=True, read_only=True)
@@ -296,9 +548,12 @@ class PaymentGroupsSerializer(serializers.ModelSerializer):
         fields = '__all__'
         read_only_fields = ['current_amount', 'created_at', 'updated_at']
     
-    def get_creator_name(self, obj):
-        return f"{obj.creator.user.user.first_name} {obj.creator.user.user.last_name}"
     
+    def get_creator_name(self, obj):
+        if obj.creator and obj.creator.user and obj.creator.user.user:
+            return f"{obj.creator.user.user.first_name} {obj.creator.user.user.last_name}"
+        return "Unknown"
+
     def get_member_count(self, obj):
         return obj.members.count()
     
@@ -400,7 +655,7 @@ class PaymentGroupsCreateSerializer(serializers.ModelSerializer):
                   'deadline', 'auto_purchase', 'requires_approval', 'is_public',
                   'contribution_type', 'contribution_amount', 'frequency', 'group_type',
                   'allow_anonymous', 'auto_create_room',
-                  'investment_pitch', 'loan_proposition', 'parent_group',
+                  'investment_pitch', 'loan_proposition', 'parent_group', 'is_kitty',
                   'joining_minimum', 'accent_color', 'entry_fee_required',
                   'entry_fee_amount', 'phases_data']
 
@@ -516,7 +771,7 @@ class KittySerializer(serializers.ModelSerializer):
 
 class CreateTransactionSerializer(serializers.Serializer):
     recipient_email = serializers.EmailField()
-    amount = serializers.DecimalField(max_digits=12, decimal_places=2, min_value=0.01)
+    amount = serializers.DecimalField(max_digits=12, decimal_places=2, min_value=Decimal('0.01'))
     transaction_type = serializers.ChoiceField(choices=[choice[0] for choice in TRANSACTION_CATEGORY])
     payment_option = serializers.ChoiceField(choices=[choice[0] for choice in PAY_OPT])
     notes = serializers.CharField(required=False, allow_blank=True)
@@ -1097,9 +1352,9 @@ class GroupVoteSerializer(serializers.ModelSerializer):
         if not request or not request.user.is_authenticated:
             return None
         try:
-            from Authentication.models import Profile
-            profile = Profile.objects.get(user=request.user)
-            pp = PaymentProfile.objects.get(user=profile)
+            pp = get_or_create_payment_profile(request.user)
+            if not pp:
+                return None
             if obj.votes_for.filter(pk=pp.pk).exists():
                 return 'for'
             if obj.votes_against.filter(pk=pp.pk).exists():
@@ -1300,11 +1555,30 @@ class DonationSerializer(serializers.ModelSerializer):
     contributor_count = serializers.SerializerMethodField()
     confirmed_count = serializers.SerializerMethodField()
     goal_amount = serializers.DecimalField(source='total_amount', max_digits=12, decimal_places=2, required=False)
-
+    end_date = serializers.DateTimeField(source='deadline', required=False, allow_null=True)
+    cover_image_url = serializers.SerializerMethodField()
+    organization_details = serializers.JSONField(required=False, allow_null=True)
+    
     class Meta:
         model = Donation
         fields = '__all__'
-        read_only_fields = ['id', 'amount_collected', 'created_at', 'updated_at']
+        read_only_fields = ['id', 'amount_collected', 'created_at', 'updated_at', 'cover_image_url']
+    
+    def get_cover_image_url(self, obj):
+        try:
+            if hasattr(obj, 'cover_image') and obj.cover_image:
+                return obj.cover_image.url
+            if hasattr(obj, 'banner_image') and obj.banner_image:
+                return obj.banner_image.url
+        except Exception:
+            pass
+        return None
+    
+    def to_internal_value(self, data):
+        # Map end_date to deadline
+        if 'end_date' in data:
+            data['deadline'] = data.pop('end_date')
+        return super().to_internal_value(data)
 
     def get_group_name(self, obj):
         return obj.payment_group.name if obj.payment_group else None
@@ -1345,6 +1619,261 @@ class InvestmentQuoteSerializer(serializers.ModelSerializer):
             return obj.member.anonymous_alias or 'Anonymous'
         return f"{obj.member.payment_profile.user.user.first_name} {obj.member.payment_profile.user.user.last_name}"
 
+# ============================================================================
+# PROVIDER MANAGEMENT SERIALIZERS
+# ============================================================================
+
+class ProviderDocumentSerializer(serializers.ModelSerializer):
+    document_type_display = serializers.CharField(source='get_document_type_display', read_only=True)
+    status_display = serializers.CharField(source='get_status_display', read_only=True)
+    file_url = serializers.SerializerMethodField()
+
+    class Meta:
+        model = ProviderDocument
+        fields = '__all__'
+        read_only_fields = ['id', 'provider', 'file_size', 'mime_type', 'status', 'verified_by', 'verified_at', 'created_at']
+
+    def get_file_url(self, obj):
+        if obj.file:
+            request = self.context.get('request')
+            if request:
+                return request.build_absolute_uri(obj.file.url)
+            return obj.file.url
+        return None
+
+
+class ProviderStaffSerializer(serializers.ModelSerializer):
+    user_name = serializers.SerializerMethodField()
+    user_email = serializers.EmailField(source='user.user.email', read_only=True)
+    user_avatar = serializers.SerializerMethodField()
+    role_display = serializers.CharField(source='get_role_display', read_only=True)
+    status_display = serializers.CharField(source='get_status_display', read_only=True)
+    provider_name = serializers.CharField(source='provider.business_name', read_only=True)
+
+    class Meta:
+        model = ProviderStaff
+        fields = '__all__'
+        read_only_fields = ['id', 'provider', 'created_by', 'created_at', 'updated_at']
+
+    def get_user_name(self, obj):
+        return f"{obj.user.user.first_name} {obj.user.user.last_name}"
+
+    def get_user_avatar(self, obj):
+        try:
+            if obj.user.profile_picture:
+                request = self.context.get('request')
+                if request:
+                    return request.build_absolute_uri(obj.user.profile_picture.url)
+                return obj.user.profile_picture.url
+        except Exception:
+            pass
+        return None
+
+
+class ServiceProductSerializer(serializers.ModelSerializer):
+    provider_name = serializers.CharField(source='provider.business_name', read_only=True)
+    service_type_display = serializers.CharField(source='get_service_type_display', read_only=True)
+    status_display = serializers.CharField(source='get_status_display', read_only=True)
+    linked_kitty_name = serializers.CharField(source='linked_kitty.name', read_only=True)
+    image_url = serializers.SerializerMethodField()
+
+    class Meta:
+        model = ServiceProduct
+        fields = '__all__'
+        read_only_fields = ['id', 'provider', 'created_at', 'updated_at']
+
+    def get_image_url(self, obj):
+        if obj.image:
+            request = self.context.get('request')
+            if request:
+                return request.build_absolute_uri(obj.image.url)
+            return obj.image.url
+        return None
+
+
+class ProviderTransactionSerializer(serializers.ModelSerializer):
+    provider_name = serializers.CharField(source='provider.business_name', read_only=True)
+    service_product_name = serializers.CharField(source='service_product.name', read_only=True)
+    user_name = serializers.SerializerMethodField()
+    user_email = serializers.EmailField(source='user.user.email', read_only=True)
+    transaction_type_display = serializers.CharField(source='get_transaction_type_display', read_only=True)
+    status_display = serializers.CharField(source='get_status_display', read_only=True)
+    processed_by_name = serializers.SerializerMethodField()
+
+    class Meta:
+        model = ProviderTransaction
+        fields = '__all__'
+        read_only_fields = ['id', 'provider', 'reference_number', 'commission_amount', 'provider_amount', 'platform_amount', 'processed_at', 'created_at']
+
+    def get_user_name(self, obj):
+        return f"{obj.user.user.first_name} {obj.user.user.last_name}"
+
+    def get_processed_by_name(self, obj):
+        if obj.processed_by:
+            return f"{obj.processed_by.user.user.first_name} {obj.processed_by.user.user.last_name}"
+        return None
+
+
+class ProviderQuerySerializer(serializers.ModelSerializer):
+    user_name = serializers.SerializerMethodField()
+    user_email = serializers.EmailField(source='user.user.email', read_only=True)
+    assigned_to_name = serializers.SerializerMethodField()
+    resolved_by_name = serializers.SerializerMethodField()
+    query_type_display = serializers.CharField(source='get_query_type_display', read_only=True)
+    priority_display = serializers.CharField(source='get_priority_display', read_only=True)
+    status_display = serializers.CharField(source='get_status_display', read_only=True)
+    provider_name = serializers.CharField(source='provider.business_name', read_only=True)
+
+    class Meta:
+        model = ProviderQuery
+        fields = '__all__'
+        read_only_fields = ['id', 'provider', 'resolved_by', 'resolved_at', 'created_at', 'updated_at']
+
+    def get_user_name(self, obj):
+        return f"{obj.user.user.first_name} {obj.user.user.last_name}"
+
+    def get_assigned_to_name(self, obj):
+        if obj.assigned_to:
+            return f"{obj.assigned_to.user.user.first_name} {obj.assigned_to.user.user.last_name}"
+        return None
+
+    def get_resolved_by_name(self, obj):
+        if obj.resolved_by:
+            return f"{obj.resolved_by.user.user.first_name} {obj.resolved_by.user.user.last_name}"
+        return None
+
+
+class ProviderApplicationSerializer(serializers.ModelSerializer):
+    user_name = serializers.SerializerMethodField()
+    user_email = serializers.EmailField(source='user.user.email', read_only=True)
+    service_product_name = serializers.CharField(source='service_product.name', read_only=True)
+    reviewed_by_name = serializers.SerializerMethodField()
+    application_type_display = serializers.CharField(source='get_application_type_display', read_only=True)
+    status_display = serializers.CharField(source='get_status_display', read_only=True)
+    provider_name = serializers.CharField(source='provider.business_name', read_only=True)
+    linked_policy_number = serializers.CharField(source='linked_policy.policy_number', read_only=True)
+    linked_loan_id = serializers.UUIDField(source='linked_loan.id', read_only=True)
+
+    class Meta:
+        model = ProviderApplication
+        fields = '__all__'
+        read_only_fields = ['id', 'provider', 'reviewed_by', 'reviewed_at', 'submitted_at', 'created_at', 'updated_at']
+
+    def get_user_name(self, obj):
+        return f"{obj.user.user.first_name} {obj.user.user.last_name}"
+
+    def get_reviewed_by_name(self, obj):
+        if obj.reviewed_by:
+            return f"{obj.reviewed_by.user.user.first_name} {obj.reviewed_by.user.user.last_name}"
+        return None
+
+
+class ProviderNotificationSerializer(serializers.ModelSerializer):
+    notification_type_display = serializers.CharField(source='get_notification_type_display', read_only=True)
+    is_read_display = serializers.SerializerMethodField()
+
+    class Meta:
+        model = ProviderNotification
+        fields = '__all__'
+        read_only_fields = ['id', 'provider', 'user', 'created_at']
+
+    def get_is_read_display(self, obj):
+        return 'Read' if obj.is_read else 'Unread'
+
+
+class ProviderRegistrationSerializer(serializers.ModelSerializer):
+    user_name = serializers.SerializerMethodField()
+    user_email = serializers.EmailField(source='user.user.email', read_only=True)
+    provider_type_display = serializers.CharField(source='get_provider_type_display', read_only=True)
+    category_display = serializers.CharField(source='get_category_display', read_only=True)
+    status_display = serializers.CharField(source='get_status_display', read_only=True)
+    reviewed_by_name = serializers.SerializerMethodField()
+    documents = ProviderDocumentSerializer(many=True, read_only=True)
+    staff_count = serializers.SerializerMethodField()
+    service_products_count = serializers.SerializerMethodField()
+    logo_url = serializers.SerializerMethodField()
+    linked_kitty_name = serializers.CharField(source='linked_payment_group.name', read_only=True)
+
+    class Meta:
+        model = ProviderRegistration
+        fields = '__all__'
+        read_only_fields = [
+            'id', 'user', 'status', 'rejection_reason', 'reviewed_by', 'review_notes',
+            'reviewed_at', 'linked_payment_group', 'created_at', 'updated_at'
+        ]
+
+    def get_user_name(self, obj):
+        return f"{obj.user.user.first_name} {obj.user.user.last_name}"
+
+    def get_reviewed_by_name(self, obj):
+        if obj.reviewed_by:
+            return f"{obj.reviewed_by.user.user.first_name} {obj.reviewed_by.user.user.last_name}"
+        return None
+
+    def get_staff_count(self, obj):
+        return obj.staff_members.filter(status='active').count()
+
+    def get_service_products_count(self, obj):
+        return obj.service_products.filter(status='active').count()
+
+    def get_logo_url(self, obj):
+        if obj.logo:
+            request = self.context.get('request')
+            if request:
+                return request.build_absolute_uri(obj.logo.url)
+            return obj.logo.url
+        return None
+
+
+class ProviderRegistrationCreateSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = ProviderRegistration
+        fields = [
+            'provider_type', 'business_name', 'business_email', 'business_phone',
+            'business_address', 'business_registration_number', 'tax_id', 'category',
+            'description', 'website', 'commission_rate', 'min_transaction_amount',
+            'max_transaction_amount', 'supported_payment_methods', 'auto_create_kitty',
+            'kitty_name', 'kitty_target_amount'
+        ]
+
+    def create(self, validated_data):
+        request = self.context.get('request')
+        if request and hasattr(request, 'user'):
+            profile = Profile.objects.get(user=request.user)
+            validated_data['user'] = profile
+        return super().create(validated_data)
+
+
+class ProviderRegistrationListSerializer(serializers.ModelSerializer):
+    provider_type_display = serializers.CharField(source='get_provider_type_display', read_only=True)
+    category_display = serializers.CharField(source='get_category_display', read_only=True)
+    status_display = serializers.CharField(source='get_status_display', read_only=True)
+    logo_url = serializers.SerializerMethodField()
+    staff_count = serializers.SerializerMethodField()
+    service_products_count = serializers.SerializerMethodField()
+
+    class Meta:
+        model = ProviderRegistration
+        fields = [
+            'id', 'business_name', 'provider_type', 'provider_type_display', 'category',
+            'category_display', 'status', 'status_display', 'logo_url', 'staff_count',
+            'service_products_count', 'created_at'
+        ]
+
+    def get_logo_url(self, obj):
+        if obj.logo:
+            request = self.context.get('request')
+            if request:
+                return request.build_absolute_uri(obj.logo.url)
+            return obj.logo.url
+        return None
+
+    def get_staff_count(self, obj):
+        return obj.staff_members.filter(status='active').count()
+
+    def get_service_products_count(self, obj):
+        return obj.service_products.filter(status='active').count()
+
     def get_member_email(self, obj):
         try:
             if obj.member.is_anonymous:
@@ -1365,7 +1894,7 @@ class GroupInvestmentSerializer(serializers.ModelSerializer):
     progress_percentage = serializers.SerializerMethodField()
     opportunity_name = serializers.SerializerMethodField()
     opportunity_category = serializers.SerializerMethodField()
-    approval_vote = GroupVoteSerializer(read_only=True)
+    approval_vote = serializers.SerializerMethodField()
     is_group_member = serializers.SerializerMethodField()
 
     class Meta:
@@ -1379,6 +1908,11 @@ class GroupInvestmentSerializer(serializers.ModelSerializer):
     def get_initiator_name(self, obj):
         if obj.initiated_by:
             return f"{obj.initiated_by.user.user.first_name} {obj.initiated_by.user.user.last_name}"
+        return None
+
+    def get_approval_vote(self, obj):
+        if obj.approval_vote:
+            return GroupVoteSerializer(obj.approval_vote, context=self.context).data
         return None
 
     def get_quote_count(self, obj):
@@ -1418,3 +1952,265 @@ class GroupInvestmentSerializer(serializers.ModelSerializer):
         except:
             return False
         return False
+
+# ============================================================================
+# ADVANCED GROUP FEATURES SERIALIZERS
+# ============================================================================
+
+class RoundMemberContributionSerializer(serializers.ModelSerializer):
+    member_name = serializers.CharField(source='member.payment_profile.user.user.get_full_name', read_only=True)
+    on_behalf_of_name = serializers.CharField(source='on_behalf_of.payment_profile.user.user.get_full_name', read_only=True)
+    
+    class Meta:
+        model = RoundMemberContribution
+        fields = '__all__'
+
+
+class RoundPositionSerializer(serializers.ModelSerializer):
+    member_name = serializers.CharField(source='member.payment_profile.user.user.get_full_name', read_only=True)
+    
+    class Meta:
+        model = RoundPosition
+        fields = '__all__'
+
+
+class RoundApprovalMemberSerializer(serializers.ModelSerializer):
+    member_name = serializers.SerializerMethodField()
+    profile_picture = serializers.SerializerMethodField()
+
+    class Meta:
+        model = PaymentGroupMember
+        fields = ['id', 'member_name', 'profile_picture']
+
+    def get_member_name(self, obj):
+        try:
+            user = obj.payment_profile.user.user
+            full = user.get_full_name()
+            return full if full.strip() else user.email
+        except Exception:
+            return str(obj.id)
+
+    def get_profile_picture(self, obj):
+        try:
+            profile = obj.payment_profile.user
+            if profile.profile_picture:
+                request = self.context.get('request')
+                if request:
+                    return request.build_absolute_uri(profile.profile_picture.url)
+                return profile.profile_picture.url
+        except Exception:
+            pass
+        return None
+
+
+class RoundContributionSerializer(serializers.ModelSerializer):
+    member_contributions = RoundMemberContributionSerializer(many=True, read_only=True)
+    round_number = serializers.IntegerField(read_only=True)
+    round_name = serializers.CharField(required=False, allow_blank=True)
+    approvals = RoundApprovalMemberSerializer(many=True, read_only=True)
+    rejections = RoundApprovalMemberSerializer(many=True, read_only=True)
+    user_has_approved = serializers.SerializerMethodField()
+    user_has_rejected = serializers.SerializerMethodField()
+    user_position = serializers.SerializerMethodField()
+    members_rotation = serializers.SerializerMethodField()
+    cycle_contributions = serializers.SerializerMethodField()
+    cycles_completed = serializers.IntegerField(source='total_cycles_completed', read_only=True)
+    awarded_to_name = serializers.SerializerMethodField()
+    is_recipient = serializers.SerializerMethodField()
+    has_unclaimed_payout = serializers.SerializerMethodField()
+    progress_percentage = serializers.SerializerMethodField()
+    
+    class Meta:
+        model = RoundContribution
+        fields = '__all__'
+        read_only_fields = ['approvals', 'rejections', 'approval_notes']
+
+    def validate_round_name(self, value):
+        """Ensure round name is unique per group."""
+        if not value:  # Allow empty/blank names
+            return value
+        
+        group = self.context.get('payment_group')
+        if group and RoundContribution.objects.filter(payment_group=group, round_name=value).exists():
+            if self.instance and self.instance.round_name == value:
+                return value  # Allow updating same round with same name
+            raise serializers.ValidationError(f"A round with name '{value}' already exists in this group.")
+        return value
+
+    def get_user_has_approved(self, obj):
+        request = self.context.get('request')
+        if not request or not request.user or request.user.is_anonymous:
+            return False
+        return obj.approvals.filter(payment_profile__user__user=request.user).exists()
+
+    def get_user_has_rejected(self, obj):
+        request = self.context.get('request')
+        if not request or not request.user or request.user.is_anonymous:
+            return False
+        return obj.rejections.filter(payment_profile__user__user=request.user).exists()
+
+    def get_user_position(self, obj):
+        request = self.context.get('request')
+        if not request or not request.user or request.user.is_anonymous:
+            return None
+        from Payment.models import RoundPosition
+        pos = RoundPosition.objects.filter(round=obj, member__payment_profile__user__user=request.user).first()
+        return pos.position_number if pos else None
+
+    def get_members_rotation(self, obj):
+        """Returns ordered list of members with past/current/future status."""
+        from Payment.models import RoundPosition
+        positions = RoundPosition.objects.filter(round=obj).order_by('position_number')
+        rotation = []
+        for pos in positions:
+            # Check if this member has already been awarded in award_history
+            has_received = any(str(pos.member.id) == str(history.get('member_id')) for history in obj.award_history)
+            
+            # They are current if they are the awarded_to or if it's their cycle and not received yet
+            is_current = (obj.awarded_to_id == pos.member.id) or (obj.current_cycle == pos.position_number and not has_received and obj.status == 'active')
+            
+            status = 'past' if has_received else ('current' if is_current else 'pending')
+            
+            # If the round hasn't started, everyone is pending except maybe assigned positions
+            if obj.status in ['pending_approval', 'pending']:
+                status = 'pending'
+                
+            rotation.append({
+                'member_id': pos.member.id,
+                'name': pos.member.payment_profile.user.user.get_full_name() or pos.member.payment_profile.user.user.email,
+                'position': pos.position_number,
+                'status': status
+            })
+        return rotation
+
+    def get_awarded_to_name(self, obj):
+        request = self.context.get('request')
+        if request and request.user and not request.user.is_anonymous:
+            # Check current awarded recipient
+            if obj.awarded_to and obj.awarded_to.payment_profile.user.user.id == request.user.id:
+                return "Me"
+            
+            # Check if user has an unclaimed payout in history
+            from Payment.models import PaymentGroupMember
+            try:
+                member = PaymentGroupMember.objects.get(
+                    payment_group=obj.payment_group,
+                    payment_profile__user__user=request.user
+                )
+                if any(str(h.get('member_id')) == str(member.id) and not h.get('claimed') for h in obj.award_history):
+                    return "Me"
+            except:
+                pass
+
+        if not obj.awarded_to:
+            return "Not assigned"
+        user = obj.awarded_to.payment_profile.user.user
+        return user.get_full_name() or user.email
+
+    def get_is_recipient(self, obj):
+        request = self.context.get('request')
+        if not request or not request.user or request.user.is_anonymous:
+            return False
+
+        from Payment.models import PaymentGroupMember
+        try:
+            member = PaymentGroupMember.objects.get(
+                payment_group=obj.payment_group,
+                payment_profile__user__user=request.user
+            )
+            # True if currently awarded OR has unclaimed payout in history
+            if obj.awarded_to_id == member.id:
+                return True
+            if any(str(h.get('member_id')) == str(member.id) and not h.get('claimed') for h in obj.award_history):
+                return True
+        except PaymentGroupMember.DoesNotExist:
+            pass
+
+        return False
+
+    def get_has_unclaimed_payout(self, obj):
+        request = self.context.get('request')
+        if not request or not request.user or request.user.is_anonymous:
+            return False
+
+        from Payment.models import PaymentGroupMember
+        try:
+            member = PaymentGroupMember.objects.get(
+                payment_group=obj.payment_group,
+                payment_profile__user__user=request.user
+            )
+            # Check if user is the awarded recipient with unclaimed funds
+            if obj.claim_status == 'unclaimed' and obj.awarded_to_id == member.id:
+                return True
+            # Also check award_history for backwards compatibility
+            has_payout = any(str(h.get('member_id')) == str(member.id) and not h.get('claimed') for h in obj.award_history)
+            print(f"DEBUG: Round {obj.round_number}, User {request.user.id}, Member {member.id}, Has Payout: {has_payout}, claim_status: {obj.claim_status}, awarded_to: {obj.awarded_to_id}")
+            return has_payout
+        except Exception as e:
+            print(f"DEBUG: Error in get_has_unclaimed_payout: {e}")
+            return False
+
+    def get_progress_percentage(self, obj):
+        return obj.get_progress_percentage()
+
+    def get_cycle_contributions(self, obj):
+        """Returns contributions specifically for the current cycle."""
+        contributions = obj.member_contributions.filter(cycle_number=obj.current_cycle)
+        return RoundMemberContributionSerializer(contributions, many=True, context=self.context).data
+
+
+class BenefitDistributionRuleSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = BenefitDistributionRule
+        fields = '__all__'
+
+
+class WithdrawalRequestSerializer(serializers.ModelSerializer):
+    requester_name = serializers.CharField(source='requester.payment_profile.user.user.get_full_name', read_only=True)
+    
+    class Meta:
+        model = WithdrawalRequest
+        fields = '__all__'
+        read_only_fields = ['status', 'approved_by', 'approval_date', 'rejection_reason', 'processed_at', 'transaction', 'immature_exit_deduction', 'payment_group', 'requester', 'destination_wallet']
+
+
+class PiggyBankConversionRequestSerializer(serializers.ModelSerializer):
+    proposed_by_name = serializers.CharField(source='proposed_by.payment_profile.user.user.username', read_only=True)
+    piggy_bank_name = serializers.CharField(source='piggy_bank.name', read_only=True)
+    
+    class Meta:
+        model = PiggyBankConversionRequest
+        fields = '__all__'
+        read_only_fields = ['id', 'created_at', 'updated_at', 'status', 'approval_vote']
+
+
+class GroupSettingsChangeRequestSerializer(serializers.ModelSerializer):
+    proposed_by_name = serializers.CharField(source='proposed_by.payment_profile.user.user.get_full_name', read_only=True)
+
+    class Meta:
+        model = GroupSettingsChangeRequest
+        fields = '__all__'
+        read_only_fields = ['status', 'approval_vote']
+
+
+class CurrencyConversionSerializer(serializers.Serializer):
+    from_currency = serializers.CharField(max_length=3)
+    to_currency = serializers.CharField(max_length=3)
+    amount = serializers.DecimalField(max_digits=12, decimal_places=2)
+
+
+class CurrencyConversionResultSerializer(serializers.Serializer):
+    original_amount = serializers.FloatField()
+    original_currency = serializers.CharField()
+    converted_amount = serializers.FloatField()
+    target_currency = serializers.CharField()
+    exchange_rate = serializers.FloatField()
+    provider = serializers.CharField()
+    timestamp = serializers.DateTimeField(default=None, required=False)
+
+
+class ExchangeRateSerializer(serializers.Serializer):
+    from_currency = serializers.CharField()
+    to_currency = serializers.CharField()
+    rate = serializers.DecimalField(max_digits=18, decimal_places=8)
+    timestamp = serializers.DateTimeField(default=None, required=False)

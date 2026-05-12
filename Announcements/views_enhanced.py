@@ -23,7 +23,7 @@ class AnnouncementViewSet(ModelViewSet):
     queryset = Announcements.objects.all()
     serializer_class = AnnouncementsSerializer
     permission_classes = [IsAuthenticated]
-    filterset_fields = ['user', 'status', 'visibility']
+    filterset_fields = ['user', 'send_status', 'visibility']
     search_fields = ['heading', 'content']
     ordering_fields = ['-time_stamp']
 

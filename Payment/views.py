@@ -1,4 +1,7 @@
 from django.shortcuts import render, get_object_or_404
+from django.apps import apps
+from django.conf import settings
+from Payment.utils import get_or_create_payment_profile
 from rest_framework.response import Response
 from rest_framework.viewsets import ModelViewSet
 from rest_framework.views import APIView
@@ -24,7 +27,7 @@ from Payment.models import (
     TransactionToken, PaymentAuthorization, PaymentVerification,
     TransactionHistory, TransactionTracker, PaymentGroupMember,
     Contribution, StandingOrder, GroupInvitation, GroupTarget,
-    Product, UserSubscription, IndividualShare, Partner, PartnerApplication,
+    Product, UserSubscription, Partner, PartnerApplication,
     AgentApplication, SupplierApplication, ShopRegistration,
     Order, OrderItem, MenuItem, GroupCheckoutRequest,
     GroupJoinRequest, GroupVote, GroupPhase, GroupPost, GroupPostReply,
@@ -33,12 +36,17 @@ from Payment.models import (
     EscrowTransaction, EscrowDispute,
     InsuranceProduct, InsurancePolicy, InsuranceClaim,
     Donation, DonationContribution, GroupInvestment, InvestmentQuote,
+    RoundContribution, RoundMemberContribution, BenefitDistributionRule,
+    WithdrawalRequest, GroupSettingsChangeRequest, GroupCertificate, RoundPosition,
+    PiggyBankConversionRequest,
+    ProviderRegistration, ProviderDocument, ProviderStaff, ServiceProduct,
+    ProviderTransaction, ProviderQuery, ProviderApplication, ProviderNotification
 )
 from Payment.serializers import (
     PaymentProfileSerializer, PaymentItemSerializer, PaymentLogSerializer,
     PaymentGroupsSerializer, TransactionTokenSerializer,
     PaymentAuthorizationSerializer, PaymentVerificationSerializer,
-    TransactionHistorySerializer, TransactionTrackerSerializer,
+    TransactionHistorySerializer, TransactionHistoryDetailSerializer, TransactionTrackerSerializer,
     PaymentGroupMemberSerializer, ContributionSerializer,
     StandingOrderSerializer, GroupInvitationSerializer, GroupTargetSerializer,
     PaymentGroupsCreateSerializer, CreateTransactionSerializer,
@@ -53,9 +61,20 @@ from Payment.serializers import (
     InsuranceProductSerializer, InsurancePolicySerializer, InsuranceClaimSerializer,
     DonationSerializer, DonationContributionSerializer,
     GroupInvestmentSerializer, InvestmentQuoteSerializer,
+    RoundContributionSerializer, RoundMemberContributionSerializer,
+    BenefitDistributionRuleSerializer, WithdrawalRequestSerializer,
+    GroupSettingsChangeRequestSerializer, GroupCertificateSerializer, RoundPositionSerializer,
+    PiggyBankConversionRequestSerializer,
+    ProviderRegistrationSerializer, ProviderRegistrationListSerializer, ProviderDocumentSerializer,
+    ProviderStaffSerializer, ServiceProductSerializer, ProviderTransactionSerializer,
+    ProviderQuerySerializer, ProviderApplicationSerializer, ProviderNotificationSerializer
 )
+from Funding.serializers import BusinessSerializer
+from Funding.models import Business
 from Authentication.models import Profile, CustomUser
 from Messages.models import Conversation, Message
+from Notifications.models import create_notification
+from Opinions.models import Follow
 from Payment.services.payment_service import PaymentService, StripeProvider, MpesaProvider
 import logging
 
@@ -66,25 +85,147 @@ class PaymentProfileViewSet(ModelViewSet):
     queryset = PaymentProfile.objects.all()
     serializer_class = PaymentProfileSerializer
     permission_classes = [IsAuthenticated]
-    
+
     @action(detail=False, methods=['get'])
     def my_profile(self, request):
         """Get current user's payment profile"""
         payment_profile = get_or_create_payment_profile(request.user)
         if not payment_profile:
              return Response({'error': 'Could not create payment profile'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-        
+
         serializer = self.get_serializer(payment_profile)
         return Response(serializer.data)
-    
+
     @action(detail=False, methods=['get'])
     def balance(self, request):
-        """Get current user's balance"""
+        """Get current user's balance with currency conversion for display"""
+        from Payment.currency_service import currency_service
+
         payment_profile = get_or_create_payment_profile(request.user)
         if not payment_profile:
-             return Response({'balance': 0.00})
-             
-        return Response({'balance': payment_profile.comrade_balance})
+             return Response({'balance': 0.00, 'currency': settings.PLATFORM_CURRENCY})
+
+        user_currency = currency_service.detect_currency_for_user(request)
+        platform_amount = payment_profile.comrade_balance
+
+        display_amount = platform_amount
+        if user_currency != settings.PLATFORM_CURRENCY:
+            converted = currency_service.convert(
+                Decimal(str(platform_amount)),
+                settings.PLATFORM_CURRENCY,
+                user_currency
+            )
+            display_amount = converted['converted_amount']
+
+        return Response({
+            'balance': float(platform_amount),
+            'display_balance': round(float(display_amount), 2),
+            'display_currency': user_currency,
+            'platform_currency': settings.PLATFORM_CURRENCY,
+            'exchange_rate': float(currency_service.get_rate(settings.PLATFORM_CURRENCY, user_currency)) if user_currency != settings.PLATFORM_CURRENCY else 1.0
+        })
+
+    @action(detail=False, methods=['get'])
+    def supported_currencies(self, request):
+        """Get list of supported currencies with full info"""
+        from Payment.currency_service import currency_service
+        return Response({
+            'platform_currency': settings.PLATFORM_CURRENCY,
+            'default_currency': settings.DEFAULT_CURRENCY,
+            'currencies': currency_service.get_all_currencies_info(),
+            'currency_codes': currency_service.get_supported_currencies()
+        })
+
+    @action(detail=False, methods=['get'])
+    def detect_currency(self, request):
+        """Detect the best currency for the current user based on location/profile"""
+        from Payment.currency_service import currency_service
+        currency = currency_service.detect_currency_for_user(request)
+        info = currency_service.get_currency_info(currency)
+        return Response({
+            'detected_currency': currency,
+            'currency_info': {
+                'code': currency,
+                'symbol': info.get('symbol', currency),
+                'name': info.get('name', currency)
+            },
+            'platform_currency': settings.PLATFORM_CURRENCY
+        })
+
+    @action(detail=False, methods=['get'])
+    def exchange_rate(self, request):
+        """Get exchange rate between two currencies"""
+        from_currency = request.query_params.get('from', 'USD')
+        to_currency = request.query_params.get('to', 'USD')
+        from Payment.currency_service import currency_service
+
+        rate = currency_service.get_rate(from_currency.upper(), to_currency.upper())
+        return Response({
+            'from_currency': from_currency.upper(),
+            'to_currency': to_currency.upper(),
+            'rate': float(rate)
+        })
+
+    @action(detail=False, methods=['get'])
+    def all_rates(self, request):
+        """Get all exchange rates for a base currency"""
+        base = request.query_params.get('base', 'USD')
+        from Payment.currency_service import currency_service
+        rates = currency_service.get_all_rates(base.upper())
+        return Response({
+            'base_currency': base.upper(),
+            'rates': rates
+        })
+
+    @action(detail=False, methods=['post'])
+    def convert(self, request):
+        """Convert amount between currencies"""
+        from_currency = request.data.get('from_currency', 'USD')
+        to_currency = request.data.get('to_currency', 'USD')
+        amount = request.data.get('amount')
+
+        if not amount:
+            return Response({'error': 'Amount is required'}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            amount = Decimal(str(amount))
+            if amount <= 0:
+                return Response({'error': 'Amount must be positive'}, status=status.HTTP_400_BAD_REQUEST)
+        except:
+            return Response({'error': 'Invalid amount'}, status=status.HTTP_400_BAD_REQUEST)
+
+        from Payment.currency_service import currency_service
+        result = currency_service.convert(amount, from_currency.upper(), to_currency.upper())
+        return Response(result)
+
+    @action(detail=False, methods=['post'])
+    def set_preferred_currency(self, request):
+        """Set user's preferred currency for both payment profile and user profile"""
+        currency = request.data.get('currency', 'USD').upper()
+        from Payment.currency_service import currency_service
+
+        if currency not in currency_service.get_supported_currencies():
+            return Response({'error': f'Currency {currency} is not supported'}, status=status.HTTP_400_BAD_REQUEST)
+
+        payment_profile = get_or_create_payment_profile(request.user)
+        if not payment_profile:
+            return Response({'error': 'Could not find payment profile'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+        payment_profile.preferred_currency = currency
+        payment_profile.save()
+
+        try:
+            profile = request.user.profile
+            profile.preferred_currency = currency
+            profile.save()
+        except Exception:
+            pass
+
+        return Response({
+            'status': 'success',
+            'preferred_currency': currency,
+            'platform_currency': settings.PLATFORM_CURRENCY
+        })
 
 
     @action(detail=False, methods=['post'])
@@ -185,6 +326,20 @@ class PaymentProfileViewSet(ModelViewSet):
                 except (GroupJoinRequest.DoesNotExist, ValueError):
                     pass
             
+            # Handle round contribution payment
+            if item_type == 'round_contribution' and item_id:
+                try:
+                    round_obj = RoundContribution.objects.get(id=item_id)
+                    member = PaymentGroupMember.objects.get(payment_group=round_obj.payment_group, payment_profile=payment_profile)
+                    if order.status == 'confirmed':
+                        round_obj.record_contribution(
+                            member=member,
+                            amount=Decimal(str(item.get('price', 0))),
+                            notes=item.get('notes', '')
+                        )
+                except Exception as e:
+                    logger.error(f"Error processing round contribution in checkout: {str(e)}")
+
             OrderItem.objects.create(
                 order=order,
                 product=product,
@@ -290,7 +445,8 @@ class TransactionViewSet(ModelViewSet):
             transaction_type=transaction_type,
             amount=amount,
             payment_option=payment_option,
-            pay_from='internal' if payment_option == 'comrade_balance' else 'external'
+            pay_from='internal' if payment_option == 'comrade_balance' else 'external',
+            status='completed'
         )
         
         # Create History
@@ -314,14 +470,100 @@ class TransactionViewSet(ModelViewSet):
             increment_purchase_count(sender_payment_profile)
             
         return Response(TransactionTokenSerializer(transaction).data, status=status.HTTP_201_CREATED)
-    
+
     @action(detail=False, methods=['get'])
     def history(self, request):
-        """Get transaction history"""
-        transactions = self.get_queryset()
-        serializer = self.get_serializer(transactions, many=True)
+        """Get enriched transaction history"""
+        user = request.user
+        payment_profile = get_or_create_payment_profile(user)
+        if not payment_profile:
+            return Response([])
+
+        history_qs = TransactionHistory.objects.filter(
+            Q(payment_profile=payment_profile) |
+            Q(transaction_token__recipient_profile=payment_profile)
+        ).select_related(
+            'transaction_token',
+            'transaction_token__payment_profile',
+            'transaction_token__recipient_profile',
+            'authorization_token',
+            'verification_token'
+        ).order_by('-transaction_token__created_at')
+
+        page = self.paginate_queryset(history_qs)
+        if page is not None:
+            serializer = TransactionHistoryDetailSerializer(page, many=True, context={'request': request})
+            return self.get_paginated_response(serializer.data)
+
+        serializer = TransactionHistoryDetailSerializer(history_qs, many=True, context={'request': request})
         return Response(serializer.data)
-    
+
+    @action(detail=False, methods=['post'])
+    @db_transaction.atomic
+    def reverse(self, request):
+        """Reverse a completed transaction"""
+        transaction_code = request.data.get('transaction_code')
+        reason = request.data.get('reason', '')
+
+        if not transaction_code:
+            return Response({'error': 'Transaction code is required'}, status=status.HTTP_400_BAD_REQUEST)
+
+        user = request.user
+        payment_profile = get_or_create_payment_profile(user)
+        if not payment_profile:
+            return Response({'error': 'Could not find payment profile'}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            transaction = TransactionToken.objects.select_for_update().get(
+                transaction_code=transaction_code
+            )
+        except TransactionToken.DoesNotExist:
+            return Response({'error': 'Transaction not found'}, status=status.HTTP_404_NOT_FOUND)
+
+        if transaction.status not in ['completed', 'verified', 'settled']:
+            return Response({'error': 'Transaction cannot be reversed'}, status=status.HTTP_400_BAD_REQUEST)
+
+        if transaction.reversed_at:
+            return Response({'error': 'Transaction already reversed'}, status=status.HTTP_400_BAD_REQUEST)
+
+        is_sender = transaction.payment_profile == payment_profile
+        is_recipient = transaction.recipient_profile == payment_profile
+
+        if not is_sender and not is_recipient:
+            return Response({'error': 'Not authorized to reverse this transaction'}, status=status.HTTP_403_FORBIDDEN)
+
+        sender_profile = transaction.payment_profile
+        recipient_profile = transaction.recipient_profile
+
+        if is_sender and recipient_profile:
+            sender_profile.comrade_balance += transaction.amount
+            sender_profile.save()
+        elif is_recipient and sender_profile:
+            sender_profile.comrade_balance += transaction.amount
+            sender_profile.save()
+            recipient_profile.comrade_balance -= transaction.amount
+            recipient_profile.save()
+
+        transaction.status = 'reversed'
+        transaction.reversed_at = timezone.now()
+        transaction.reversal_reason = reason
+        transaction.save()
+
+        TransactionHistory.objects.create(
+            payment_profile=payment_profile,
+            transaction_token=transaction,
+            transaction_category='reversal',
+            payment_type='individual',
+            status='reversed',
+            amount=transaction.amount
+        )
+
+        return Response({
+            'status': 'success',
+            'message': 'Transaction reversed successfully',
+            'new_balance': float(sender_profile.comrade_balance) if is_sender else float(recipient_profile.comrade_balance)
+        })
+
     @action(detail=False, methods=['post'])
     @db_transaction.atomic
     def deposit(self, request):
@@ -350,7 +592,8 @@ class TransactionViewSet(ModelViewSet):
             transaction_type='deposit',
             amount=amount,
             payment_option=payment_method,
-            pay_from='external'
+            pay_from='external',
+            status='completed'
         )
         
         # Update balance
@@ -418,7 +661,8 @@ class TransactionViewSet(ModelViewSet):
             transaction_type='withdrawal',
             amount=amount,
             payment_option=payment_method,
-            pay_from='internal'
+            pay_from='internal',
+            status='completed'
         )
         
         # Atomic deduction using F() expression
@@ -459,6 +703,177 @@ class PaymentGroupsViewSet(ModelViewSet):
     serializer_class = PaymentGroupsSerializer
     permission_classes = [IsAuthenticated]
     
+    @action(detail=False, methods=['get'])
+    def search_invitable_users(self, request):
+        """Search for users to invite based on privacy settings and follow relationships."""
+        query = request.query_params.get('q', '')
+        if len(query) < 2:
+            return Response([])
+
+        current_user = request.user
+        
+        # Search users by username, name or email
+        users = CustomUser.objects.filter(
+            Q(username__icontains=query) | 
+            Q(first_name__icontains=query) | 
+            Q(last_name__icontains=query) | 
+            Q(email__icontains=query)
+        ).exclude(id=current_user.id).distinct()[:20]
+        
+        results = []
+        for user in users:
+            try:
+                # UserProfile model from Authentication
+                profile = user.user_profile
+                allow_invites = profile.allow_group_invites
+            except Exception:
+                allow_invites = 'followers' # Default
+            
+            # Check follow relationship (bidirectional as requested)
+            is_follower = Follow.objects.filter(follower=user, following=current_user).exists()
+            is_following = Follow.objects.filter(follower=current_user, following=user).exists()
+            
+            can_invite = False
+            if allow_invites == 'anyone':
+                can_invite = True
+            elif allow_invites == 'followers' and (is_follower or is_following):
+                can_invite = True
+            
+            if can_invite:
+                avatar_url = None
+                if hasattr(user, 'user_profile') and user.user_profile.avatar:
+                    avatar_url = request.build_absolute_uri(user.user_profile.avatar.url)
+                
+                results.append({
+                    'id': user.id,
+                    'username': user.username,
+                    'full_name': f"{user.first_name} {user.last_name}",
+                    'email': user.email,
+                    'avatar': avatar_url,
+                })
+        
+        return Response(results)
+
+    @action(detail=False, methods=['get'])
+    def search_users(self, request):
+        """Search for users to send money to."""
+        query = request.query_params.get('q', '')
+        if len(query) < 2:
+            return Response([])
+
+        current_user = request.user
+        
+        # Search all users by username, name or email (more permissive for sending money)
+        users = CustomUser.objects.filter(
+            Q(username__icontains=query) | 
+            Q(first_name__icontains=query) | 
+            Q(last_name__icontains=query) | 
+            Q(email__icontains=query)
+        ).exclude(id=current_user.id).distinct()[:20]
+        
+        results = []
+        for user in users:
+            avatar_url = None
+            if hasattr(user, 'user_profile') and user.user_profile.avatar:
+                avatar_url = request.build_absolute_uri(user.user_profile.avatar.url)
+            
+            results.append({
+                'id': user.id,
+                'username': user.username,
+                'full_name': user.get_full_name() or user.email,
+                'email': user.email,
+                'avatar': avatar_url,
+            })
+        
+        return Response(results)
+
+    @action(detail=True, methods=['get'])
+    def kitty_analytics(self, request, pk=None):
+        """Get transaction analytics for a kitty."""
+        group = self.get_object()
+        if group.group_type != 'kitty':
+            return Response({'error': 'Not a kitty'}, status=status.HTTP_400_BAD_REQUEST)
+        
+        # Inflow/Outflow aggregations
+        transactions = TransactionToken.objects.filter(payment_group=group)
+        
+        # Monthly breakdown
+        from django.db.models.functions import TruncMonth
+        monthly_stats = transactions.annotate(month=TruncMonth('created_at')).values('month').annotate(
+            inflow=Sum('amount', filter=Q(transaction_type='contribution')),
+            outflow=Sum('amount', filter=Q(transaction_type='withdrawal'))
+        ).order_by('month')
+        
+        # Channel breakdown
+        channel_stats = transactions.values('payment_option').annotate(
+            total=Sum('amount')
+        )
+        
+        # Connected businesses
+        connected_businesses = []
+        if group.entity_type and group.entity_id:
+            try:
+                Business = apps.get_model('Funding', 'Business')
+                business = Business.objects.filter(id=group.entity_id).first()
+                if business:
+                    connected_businesses.append(BusinessSerializer(business).data)
+            except Exception:
+                pass
+
+        return Response({
+            'current_balance': group.current_amount,
+            'monthly_stats': monthly_stats,
+            'channel_stats': channel_stats,
+            'connected_businesses': connected_businesses
+        })
+
+    @action(detail=True, methods=['post'])
+    def create_business_with_kitty(self, request, pk=None):
+        """Create a business linked to this group, optionally auto-creating/linking a kitty."""
+        group = self.get_object()
+        payment_profile = get_or_create_payment_profile(request.user)
+        
+        # Only admin can create business for group
+        is_admin = PaymentGroupMember.objects.filter(payment_group=group, payment_profile=payment_profile, is_admin=True).exists()
+        if not is_admin and group.creator != payment_profile:
+            return Response({'error': 'Only group admins can create businesses'}, status=status.HTTP_403_FORBIDDEN)
+            
+        business_data = request.data.copy()
+        auto_create_kitty = business_data.pop('auto_create_kitty', False)
+        existing_kitty_id = business_data.pop('existing_kitty_id', None)
+        
+        serializer = BusinessSerializer(data=business_data)
+        if serializer.is_valid():
+            business = serializer.save()
+            
+            # Track business ownership to group (could be handled in Business model metadata)
+            # For now, kitty is the primary link
+            
+            if auto_create_kitty:
+                kitty = PaymentGroups.objects.create(
+                    name=f"{business.name} Kitty",
+                    group_type='kitty',
+                    creator=payment_profile,
+                    entity_type=ContentType.objects.get_for_model(business),
+                    entity_id=business.id,
+                    parent_group=group
+                )
+                # Add group admins to kitty
+                admins = PaymentGroupMember.objects.filter(payment_group=group, is_admin=True)
+                for admin in admins:
+                    PaymentGroupMember.objects.get_or_create(payment_group=kitty, payment_profile=admin.payment_profile, is_admin=True)
+            elif existing_kitty_id:
+                try:
+                    kitty = PaymentGroups.objects.get(id=existing_kitty_id, group_type='kitty')
+                    kitty.entity_type = ContentType.objects.get_for_model(business)
+                    kitty.entity_id = business.id
+                    kitty.save()
+                except PaymentGroups.DoesNotExist:
+                    pass
+            
+            return Response(serializer.data, status=status.HTTP_201_CREATED)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+    
     def get_queryset(self):
         user = self.request.user
         payment_profile = get_or_create_payment_profile(user)
@@ -478,35 +893,68 @@ class PaymentGroupsViewSet(ModelViewSet):
         if not payment_profile:
              raise serializers.ValidationError("Could not create payment profile")
         
-        # Check Limits
-        can_create, error_msg = check_group_creation_limit(payment_profile)
-        if not can_create:
-            print(error_msg)
-            print(can_create)
-            raise serializers.ValidationError(error_msg)
+        # Check if this is a kitty creation
+        is_kitty = serializer.validated_data.get('is_kitty', False) or serializer.validated_data.get('group_type') == 'kitty'
+        # Handle both parent_group and payment_group (from frontend) for kitty linkage
+        parent_group_id = serializer.validated_data.get('parent_group') or self.request.data.get('payment_group')
+        
+        # Check Limits (skip for kitties as they're sub-funds)
+        if not is_kitty:
+            can_create, error_msg = check_group_creation_limit(payment_profile)
+            if not can_create:
+                print(error_msg)
+                print(can_create)
+                raise serializers.ValidationError(error_msg)
             
-        # Set max capacity based on tier
-        max_limit = get_max_group_members(payment_profile.tier)
-        requested_capacity = serializer.validated_data.get('max_capacity', 10)
-        final_capacity = min(requested_capacity, max_limit)
-        if payment_profile.tier == 'gold':
-            final_capacity = requested_capacity # Unlimited
-            
+        # Set max capacity based on tier (skip for kitties)
+        if is_kitty:
+            max_capacity = 1000  # Default high capacity for kitties
+        else:
+            max_limit = get_max_group_members(payment_profile.tier)
+            requested_capacity = serializer.validated_data.get('max_capacity', 10)
+            max_capacity = min(requested_capacity, max_limit)
+            if payment_profile.tier == 'gold':
+                max_capacity = requested_capacity  # Unlimited
+        
         # Pop phases_data before saving the group
         phases_data = serializer.validated_data.pop('phases_data', [])
 
+        # For kitties, creator should be the parent group's creator
+        creator = payment_profile
+        if is_kitty and parent_group_id:
+            try:
+                # If parent_group_id is already an object (from serializer), use it, otherwise fetch
+                parent_group = parent_group_id if isinstance(parent_group_id, PaymentGroups) else PaymentGroups.objects.get(id=parent_group_id)
+                creator = parent_group.creator  # Group creator becomes kitty creator
+            except (PaymentGroups.DoesNotExist, ValueError):
+                pass
+
         group = serializer.save(
-            creator=payment_profile,
-            tier=payment_profile.tier,
-            max_capacity=final_capacity
+            creator=creator,
+            tier=payment_profile.tier if not is_kitty else 'standard',
+            max_capacity=max_capacity
         )
         
-        # Add creator as admin member
-        PaymentGroupMember.objects.create(
-            payment_group=group,
-            payment_profile=payment_profile,
-            is_admin=True
-        )
+        # Add creator as admin member (for kitties, add group admin members)
+        if is_kitty and parent_group_id:
+            # Add all admins from parent group to kitty
+            parent_admins = PaymentGroupMember.objects.filter(
+                payment_group_id=parent_group_id,
+                is_admin=True
+            )
+            for admin_member in parent_admins:
+                PaymentGroupMember.objects.create(
+                    payment_group=group,
+                    payment_profile=admin_member.payment_profile,
+                    is_admin=True
+                )
+        else:
+            # Regular group - add creator as admin
+            PaymentGroupMember.objects.create(
+                payment_group=group,
+                payment_profile=payment_profile,
+                is_admin=True
+            )
 
         # Create phases
         for idx, phase in enumerate(phases_data):
@@ -552,8 +1000,48 @@ class PaymentGroupsViewSet(ModelViewSet):
             anonymous_alias=anonymous_alias  # auto-generated in model.save() if blank
         )
         
+        # Upgrade capacity based on new member count
+        if hasattr(group, 'auto_upgrade_capacity'):
+            group.auto_upgrade_capacity()
+        
         return Response(PaymentGroupMemberSerializer(member).data, status=status.HTTP_201_CREATED)
     
+    @action(detail=True, methods=['post'])
+    def start_round(self, request, pk=None):
+        round_obj = self.get_object()
+        
+        if round_obj.status != 'pending':
+            return Response({'error': 'Round is already active or completed'}, status=400)
+            
+        # Automated game: randomly assign if method is random and no one is awarded
+        if round_obj.assignment_method == 'random' and not round_obj.awarded_to:
+            import random
+            group_members = list(round_obj.payment_group.members.all())
+            # Find members who haven't been awarded in previous rounds
+            awarded_member_ids = RoundContribution.objects.filter(payment_group=round_obj.payment_group, awarded_to__isnull=False).values_list('awarded_to_id', flat=True)
+            eligible_members = [m for m in group_members if m.id not in awarded_member_ids]
+            
+            if eligible_members:
+                round_obj.awarded_to = random.choice(eligible_members)
+            elif group_members:
+                # Cycle resets, everyone is eligible again
+                round_obj.awarded_to = random.choice(group_members)
+        
+        elif round_obj.assignment_method == 'sequential' and not round_obj.awarded_to:
+            # Picking position system
+            try:
+                pos = RoundPosition.objects.get(payment_group=round_obj.payment_group, position_number=round_obj.round_number)
+                round_obj.awarded_to = pos.member
+            except RoundPosition.DoesNotExist:
+                # Fallback or error
+                pass
+                
+        round_obj.status = 'active'
+        round_obj.start_date = timezone.now()
+        round_obj.save()
+        
+        return Response({'status': 'Round started', 'awarded_to': str(round_obj.awarded_to.id) if round_obj.awarded_to else None})
+
     @action(detail=True, methods=['post'])
     @db_transaction.atomic
     def contribute(self, request, pk=None):
@@ -575,12 +1063,16 @@ class PaymentGroupsViewSet(ModelViewSet):
         if not amount:
             return Response({'error': 'Amount is required'}, status=status.HTTP_400_BAD_REQUEST)
         
-        amount = float(amount)
+        from decimal import Decimal
+        try:
+            amount = Decimal(str(amount))
+        except (ValueError, TypeError):
+            return Response({'error': 'Invalid amount format'}, status=status.HTTP_400_BAD_REQUEST)
         
         # Process payment based on method
         if payment_method == 'wallet':
             if payment_profile.comrade_balance < amount:
-                return Response({'error': 'Insufficient balance'}, status=status.HTTP_400_BAD_REQUEST)
+                return Response({'error': f'Insufficient balance. Your balance is {payment_profile.comrade_balance}, but you tried to contribute {amount}.'}, status=status.HTTP_400_BAD_REQUEST)
             # Deduct from wallet
             payment_profile.comrade_balance -= amount
             payment_profile.save()
@@ -623,13 +1115,22 @@ class PaymentGroupsViewSet(ModelViewSet):
         group.save()
         
         # Update member contribution
-        member.total_contributed += amount
-        member.save()
+        on_behalf_of_id = request.data.get('on_behalf_of')
+        target_member = member
+        if on_behalf_of_id:
+            try:
+                target_member = PaymentGroupMember.objects.get(id=on_behalf_of_id, payment_group=group)
+            except (PaymentGroupMember.DoesNotExist, ValueError):
+                return Response({'error': 'Target member not found in this group'}, status=status.HTTP_404_NOT_FOUND)
+
+        target_member.total_contributed += amount
+        target_member.save()
         
         # Record contribution
         contribution = Contribution.objects.create(
             payment_group=group,
-            member=member,
+            member=target_member,
+            on_behalf_of=member if on_behalf_of_id else None,
             amount=amount,
             notes=request.data.get('notes', '')
         )
@@ -637,10 +1138,10 @@ class PaymentGroupsViewSet(ModelViewSet):
         # Create audit trail
         TransactionToken.objects.create(
             payment_profile=payment_profile,
-            transaction_code=f'grp_contrib_{uuid.uuid4().hex[:12]}',
+            transaction_code=uuid.uuid4(),
             amount=amount,
             transaction_type='contribution',
-            notes=f'Contribution to group: {group.name}'
+            description=f'Contribution to group: {group.name}'
         )
         
         # Check if target reached
@@ -651,6 +1152,225 @@ class PaymentGroupsViewSet(ModelViewSet):
         
         return Response(ContributionSerializer(contribution).data, status=status.HTTP_201_CREATED)
     
+    @action(detail=True, methods=['get'])
+    def group_donations(self, request, pk=None):
+        """Get donations belonging to this group or where this group is the recipient."""
+        group = self.get_object()
+        from django.contrib.contenttypes.models import ContentType
+        
+        group_type = ContentType.objects.get_for_model(group)
+        
+        donations = Donation.objects.filter(
+            Q(payment_group=group) | 
+            Q(recipient_content_type=group_type, recipient_object_id=str(group.id))
+        ).order_by('-created_at')
+        
+        return Response(DonationSerializer(donations, many=True).data)
+
+    @action(detail=True, methods=['get'])
+    def group_investments(self, request, pk=None):
+        """Get investments belonging to this group."""
+        group = self.get_object()
+        investments = GroupInvestment.objects.filter(payment_group=group).order_by('-created_at')
+        return Response(GroupInvestmentSerializer(investments, many=True).data)
+
+    @action(detail=True, methods=['get'])
+    def group_loans(self, request, pk=None):
+        """Get loans taken out by this group."""
+        group = self.get_object()
+        loans = LoanApplication.objects.filter(group=group).order_by('-created_at')
+        return Response(LoanApplicationSerializer(loans, many=True).data)
+
+    @action(detail=True, methods=['get'])
+    def group_kitties(self, request, pk=None):
+        """Get sub-kitties under this group."""
+        group = self.get_object()
+        kitties = PaymentGroups.objects.filter(parent_group=group, is_kitty=True).order_by('-created_at')
+        return Response(KittySerializer(kitties, many=True).data)
+
+    @action(detail=True, methods=['get'])
+    def group_businesses(self, request, pk=None):
+        """Get establishments/businesses owned by this group."""
+        group = self.get_object()
+        businesses = Business.objects.filter(payment_group=group).order_by('-created_at')
+        return Response(BusinessSerializer(businesses, many=True).data)
+
+    @action(detail=True, methods=['get'])
+    def group_rounds(self, request, pk=None):
+        """Get round contributions for this group."""
+        group = self.get_object()
+        rounds = RoundContribution.objects.filter(payment_group=group).order_by('-round_number')
+        return Response(RoundContributionSerializer(rounds, many=True).data)
+
+    @action(detail=True, methods=['get'], url_path='group_withdrawals')
+    def group_withdrawals(self, request, pk=None):
+        """List withdrawal requests for this group."""
+        group = self.get_object()
+        withdrawals = WithdrawalRequest.objects.filter(payment_group=group).order_by('-created_at')
+        return Response(WithdrawalRequestSerializer(withdrawals, many=True).data)
+
+    @action(detail=True, methods=['post'], url_path='request_withdrawal')
+    def request_withdrawal(self, request, pk=None):
+        """Create a withdrawal request for this group."""
+        group = self.get_object()
+        payment_profile = get_or_create_payment_profile(request.user)
+        try:
+            member = PaymentGroupMember.objects.get(payment_group=group, payment_profile=payment_profile)
+        except PaymentGroupMember.DoesNotExist:
+            return Response({'error': 'You are not a member of this group'}, status=status.HTTP_403_FORBIDDEN)
+            
+        serializer = WithdrawalRequestSerializer(data=request.data)
+        if serializer.is_valid():
+            serializer.save(
+                payment_group=group, 
+                requester=member,
+                destination_wallet=payment_profile
+            )
+            return Response(serializer.data, status=status.HTTP_201_CREATED)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+    @action(detail=True, methods=['get'])
+    def group_benefit_rules(self, request, pk=None):
+        """Get benefit distribution rules for this group."""
+        group = self.get_object()
+        rules = BenefitDistributionRule.objects.filter(payment_group=group).order_by('priority')
+        return Response(BenefitDistributionRuleSerializer(rules, many=True).data)
+
+    @action(detail=True, methods=['get'])
+    def group_settings_changes(self, request, pk=None):
+        """Get group settings change requests."""
+        group = self.get_object()
+        changes = GroupSettingsChangeRequest.objects.filter(payment_group=group).order_by('-created_at')
+        return Response(GroupSettingsChangeRequestSerializer(changes, many=True).data)
+
+    @action(detail=True, methods=['get', 'post'])
+    def group_ventures(self, request, pk=None):
+        """Get or create ventures for this group."""
+        from Funding.serializers import CapitalVentureSerializer
+        group = self.get_object()
+        
+        if request.method == 'POST':
+            serializer = CapitalVentureSerializer(data=request.data)
+            if serializer.is_valid():
+                serializer.save(payment_group=group)
+                return Response(serializer.data, status=status.HTTP_201_CREATED)
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+            
+        ventures = CapitalVenture.objects.filter(payment_group=group).order_by('-created_at')
+        return Response(CapitalVentureSerializer(ventures, many=True).data)
+
+    @action(detail=True, methods=['post'])
+    def contribute_on_behalf(self, request, pk=None):
+        """Contribute to a round on behalf of another member."""
+        group = self.get_object()
+        user = request.user
+        payment_profile = get_or_create_payment_profile(user)
+        if not payment_profile:
+            return Response({'error': 'Payment profile not found.'}, status=400)
+            
+        try:
+            member = PaymentGroupMember.objects.get(payment_group=group, payment_profile=payment_profile)
+        except PaymentGroupMember.DoesNotExist:
+            return Response({'error': 'You must be a member of this group.'}, status=403)
+            
+        on_behalf_of_id = request.data.get('on_behalf_of')
+        round_id = request.data.get('round_id')
+        amount = request.data.get('amount')
+        
+        if not all([on_behalf_of_id, round_id, amount]):
+            return Response({'error': 'on_behalf_of, round_id, and amount are required.'}, status=400)
+            
+        try:
+            target_member = PaymentGroupMember.objects.get(id=on_behalf_of_id, payment_group=group)
+            round_obj = RoundContribution.objects.get(id=round_id, payment_group=group)
+        except (PaymentGroupMember.DoesNotExist, RoundContribution.DoesNotExist):
+            return Response({'error': 'Target member or round not found.'}, status=404)
+            
+        if payment_profile.comrade_balance < Decimal(str(amount)):
+             return Response({'error': 'Insufficient balance in wallet.'}, status=400)
+        
+        payment_profile.comrade_balance -= Decimal(str(amount))
+        payment_profile.save()
+        
+        contribution = RoundMemberContribution.objects.create(
+            round=round_obj,
+            member=member,
+            on_behalf_of=target_member,
+            contribution_amount=amount,
+            notes=request.data.get('notes', '')
+        )
+        
+        round_obj.total_collected += Decimal(str(amount))
+        round_obj.save()
+        
+        return Response(RoundMemberContributionSerializer(contribution).data)
+
+    @action(detail=True, methods=['post'])
+    def request_certificate(self, request, pk=None):
+        """Request a verification certificate for the group."""
+        group = self.get_object()
+        payment_profile = get_or_create_payment_profile(request.user)
+        is_admin = PaymentGroupMember.objects.filter(payment_group=group, payment_profile=payment_profile, is_admin=True).exists()
+        if not is_admin and group.creator != payment_profile:
+            return Response({'error': 'Only group admins can request a certificate'}, status=status.HTTP_403_FORBIDDEN)
+            
+        cert, created = GroupCertificate.objects.get_or_create(payment_group=group)
+        if not created and cert.status == 'approved':
+            return Response({'error': 'Group is already verified', 'registration_number': cert.registration_number}, status=status.HTTP_400_BAD_REQUEST)
+            
+        cert.status = 'pending'
+        cert.save()
+        return Response({'message': 'Certificate requested successfully', 'status': cert.status})
+
+    @action(detail=True, methods=['post'], permission_classes=[permissions.IsAdminUser])
+    def verify_group(self, request, pk=None):
+        group = self.get_object()
+        action_type = request.data.get('action', 'approve') # approve or reject
+        notes = request.data.get('notes', '')
+        
+        try:
+            cert = GroupCertificate.objects.get(payment_group=group)
+        except GroupCertificate.DoesNotExist:
+            return Response({'error': 'No pending certificate request for this group'}, status=status.HTTP_404_NOT_FOUND)
+            
+        if action_type == 'approve':
+            import uuid
+            cert.status = 'approved'
+            cert.registration_number = f"QOM-{uuid.uuid4().hex[:8].upper()}-{timezone.now().year}"
+            cert.issued_at = timezone.now()
+            cert.expires_at = timezone.now() + timedelta(days=365) # 1 year validity
+            cert.verification_notes = notes or 'Verified and Contract Generated'
+            cert.save()
+            return Response({'message': 'Group verified successfully', 'registration_number': cert.registration_number})
+        elif action_type == 'reject':
+            cert.status = 'rejected'
+            cert.verification_notes = notes
+            cert.save()
+            return Response({'message': 'Group verification rejected'})
+        else:
+            return Response({'error': 'Invalid action type'}, status=status.HTTP_400_BAD_REQUEST)
+
+    @action(detail=True, methods=['get', 'post'])
+    def group_automations(self, request, pk=None):
+        group = self.get_object()
+        
+        if request.method == 'POST':
+            user = request.user
+            payment_profile = get_or_create_payment_profile(user)
+            # Basic validation
+            data = request.data.copy()
+            data['payment_group'] = group.id
+            data['payment_profile'] = payment_profile.id
+            
+            serializer = StandingOrderSerializer(data=data)
+            if serializer.is_valid():
+                serializer.save()
+                return Response(serializer.data, status=status.HTTP_201_CREATED)
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+        automations = StandingOrder.objects.filter(payment_group=group)
+        return Response(StandingOrderSerializer(automations, many=True).data)
+
     @action(detail=True, methods=['post'])
     def invite(self, request, pk=None):
         """Invite someone to the group"""
@@ -679,19 +1399,37 @@ class PaymentGroupsViewSet(ModelViewSet):
             invited_email = invited_identifier
             try:
                 invited_user = CustomUser.objects.get(email=invited_email)
-                invited_profile = Profile.objects.get(user=invited_user)
-                invited_payment_profile = PaymentProfile.objects.get(user=invited_profile)
                 user_exists = True
-            except (CustomUser.DoesNotExist, Profile.DoesNotExist, PaymentProfile.DoesNotExist):
+            except CustomUser.DoesNotExist:
                 user_exists = False
         elif invited_identifier:
             try:
                 invited_user = CustomUser.objects.get(username=invited_identifier)
                 invited_email = invited_user.email
+                user_exists = True
+                
+                # Check privacy for username search
+                try:
+                    target_profile = invited_user.user_profile
+                    allow_invites = target_profile.allow_group_invites
+                except Exception:
+                    allow_invites = 'followers'
+                
+                if allow_invites != 'anyone':
+                    is_mutual = Follow.objects.filter(follower=invited_user, following=user).exists() or \
+                                Follow.objects.filter(follower=user, following=invited_user).exists()
+                    if allow_invites == 'none' or (allow_invites == 'followers' and not is_mutual):
+                        return Response({'error': 'This user does not allow invitations from non-followers.'}, status=status.HTTP_403_FORBIDDEN)
+                        
+            except CustomUser.DoesNotExist:
+                user_exists = False
+        
+        if user_exists:
+            try:
                 invited_profile = Profile.objects.get(user=invited_user)
                 invited_payment_profile = PaymentProfile.objects.get(user=invited_profile)
-                user_exists = True
-            except (CustomUser.DoesNotExist, Profile.DoesNotExist, PaymentProfile.DoesNotExist):
+            except (Profile.DoesNotExist, PaymentProfile.DoesNotExist):
+                # User exists but might not have payment profile yet
                 user_exists = False
         
         if not user_exists:
@@ -730,33 +1468,20 @@ class PaymentGroupsViewSet(ModelViewSet):
         
         send_group_invitation_email(invited_email, group.name, inviter_name, invite_url, is_existing_user=user_exists)
         
-        # Send in-app chat notification if user exists on platform
+        # Send in-app notification if user exists on platform (instead of DM)
         if user_exists:
             try:
-                invited_user_obj = CustomUser.objects.get(email=invited_email)
-                inviter_user_obj = user
-                
-                # Find or create DM conversation
-                shared_convos = Conversation.objects.filter(
-                    conversation_type='dm',
-                    participants=inviter_user_obj
-                ).filter(participants=invited_user_obj)
-                
-                if shared_convos.exists():
-                    conversation = shared_convos.first()
-                else:
-                    conversation = Conversation.objects.create(conversation_type='dm')
-                    conversation.participants.add(inviter_user_obj, invited_user_obj)
-                
-                # Send system message with invitation link
-                Message.objects.create(
-                    conversation=conversation,
-                    sender=inviter_user_obj,
-                    message_type='system',
-                    content=f"📩 You've been invited to join the payment group \"{group.name}\"! View and accept: {invite_url}"
+                create_notification(
+                    recipient=invited_user,
+                    actor=user,
+                    notification_type='system',
+                    title='Group Invitation',
+                    message=f"You've been invited to join the payment group \"{group.name}\" by {payment_profile.user.user.username}.",
+                    action_url=invite_url,
+                    extra_data={'group_id': str(group.id), 'invitation_link': invitation_link}
                 )
             except Exception as e:
-                logger.warning(f'Failed to send chat notification for group invite: {e}')
+                logger.warning(f'Failed to send notification for group invite: {e}')
 
         return Response(GroupInvitationSerializer(invitation).data, status=status.HTTP_201_CREATED)
     
@@ -795,6 +1520,595 @@ class PaymentGroupsViewSet(ModelViewSet):
         serializer = self.get_serializer(groups, many=True)
         return Response(serializer.data)
 
+    @action(detail=True, methods=['get'], url_path='group_piggy_banks')
+    def group_piggy_banks(self, request, pk=None):
+        """Get piggy banks belonging to this group with fund isolation."""
+        group = self.get_object()
+        payment_profile = get_or_create_payment_profile(request.user)
+        if not payment_profile:
+            return Response({'error': 'Payment profile not found'}, status=status.HTTP_400_BAD_REQUEST)
+        
+        is_member = PaymentGroupMember.objects.filter(payment_group=group, payment_profile=payment_profile).exists()
+        if not is_member and group.creator != payment_profile:
+            return Response({'error': 'Not a member of this group'}, status=status.HTTP_403_FORBIDDEN)
+        
+        targets = GroupTarget.objects.filter(payment_group=group).order_by('-created_at')
+        
+        # Fund isolation: compute per-member contributions
+        data = []
+        for target in targets:
+            target_data = GroupTargetSerializer(target, context={'request': request}).data
+            # Add isolated contribution info
+            from Payment.models import Contribution
+            member_contributions = Contribution.objects.filter(
+                payment_group=group
+            ).values('member__payment_profile').annotate(
+                total=Sum('amount')
+            )
+            target_data['fund_isolation'] = {
+                'total_fund': str(target.current_amount),
+                'target_fund': str(target.target_amount),
+                'contributors': len(member_contributions),
+            }
+            data.append(target_data)
+        
+        return Response(data)
+
+    @action(detail=True, methods=['get'], url_path='analytics')
+    def analytics(self, request, pk=None):
+        """Get group analytics: contribution trends, member activity, etc."""
+        import logging
+        logger = logging.getLogger('django')
+        logger.error(f"ANALYTICS: pk={pk}, request.method={request.method}")
+        
+        from django.http import Http404
+        try:
+            group = self.get_object()
+            logger.error(f"ANALYTICS: group found, id={group.id}")
+        except PaymentGroups.DoesNotExist:
+            logger.error(f"ANALYTICS: Group {pk} does not exist")
+            return Response({'error': 'Group not found'}, status=status.HTTP_404_NOT_FOUND)
+        except Exception as e:
+            logger.error(f"ANALYTICS: Error finding group {pk}: {str(e)}")
+            return Response({'error': f'Error finding group: {str(e)}'}, status=status.HTTP_400_BAD_REQUEST)
+        
+        payment_profile = get_or_create_payment_profile(request.user)
+        if not payment_profile:
+            return Response({'error': 'Payment profile not found'}, status=status.HTTP_400_BAD_REQUEST)
+        
+        is_member = PaymentGroupMember.objects.filter(payment_group=group, payment_profile=payment_profile).exists()
+        if not is_member and group.creator != payment_profile:
+            return Response({'error': 'Not a member'}, status=status.HTTP_403_FORBIDDEN)
+        
+        from django.db.models import Sum, Count
+        from django.db.models.functions import TruncMonth
+        
+        # Monthly contribution trend
+        try:
+            monthly = Contribution.objects.filter(payment_group=group).annotate(
+                month=TruncMonth('contributed_at')
+            ).values('month').annotate(
+                total=Sum('amount'),
+                count=Count('id')
+            ).order_by('month')
+        except Exception:
+            monthly = []
+        
+        # Top contributors
+        try:
+            top_contributors = PaymentGroupMember.objects.filter(
+                payment_group=group
+            ).order_by('-total_contributed')[:5]
+        except Exception:
+            top_contributors = []
+        
+        top_list = []
+        for m in top_contributors:
+            try:
+                if m.is_anonymous:
+                    name = m.anonymous_alias or 'Anonymous'
+                elif m.payment_profile and m.payment_profile.user and m.payment_profile.user.user:
+                    user = m.payment_profile.user.user
+                    name = f"{user.first_name} {user.last_name}".strip() or user.email
+                else:
+                    name = 'Unknown Member'
+            except Exception:
+                name = 'Unknown Member'
+            top_list.append({
+                'name': name,
+                'contributed': str(m.total_contributed),
+                'is_anonymous': m.is_anonymous,
+            })
+        
+        try:
+            checkout_count = group.checkout_requests.count()
+            pending_count = group.checkout_requests.filter(status='pending').count()
+        except Exception:
+            checkout_count = 0
+            pending_count = 0
+        
+        return Response({
+            'monthly_trend': [
+                {'month': entry['month'].isoformat() if entry['month'] else None, 'total': str(entry['total']), 'count': entry['count']}
+                for entry in monthly
+            ],
+            'top_contributors': top_list,
+            'total_members': group.members.count(),
+            'total_contributed': str(group.current_amount),
+            'target_amount': str(group.target_amount or 0),
+            'progress': round(float(group.current_amount) / float(group.target_amount) * 100, 2) if group.target_amount and group.target_amount > 0 else 0,
+            'capacity_category': str(group.max_capacity),
+            'checkout_requests_count': checkout_count,
+            'pending_checkouts': pending_count,
+        })
+
+    @action(detail=True, methods=['get', 'put'], url_path='rules')
+    def rules(self, request, pk=None):
+        """Get or update group rules."""
+        group = self.get_object()
+        payment_profile = get_or_create_payment_profile(request.user)
+        if not payment_profile:
+            return Response({'error': 'Payment profile not found'}, status=status.HTTP_400_BAD_REQUEST)
+        
+        if request.method == 'GET':
+            return Response({'rules_text': group.rules_text or ''})
+        
+        # PUT — only admin/creator
+        is_creator = group.creator == payment_profile
+        is_admin = PaymentGroupMember.objects.filter(
+            payment_group=group, payment_profile=payment_profile, is_admin=True
+        ).exists()
+        if not is_creator and not is_admin:
+            return Response({'error': 'Only admins can update rules'}, status=status.HTTP_403_FORBIDDEN)
+        
+        group.rules_text = request.data.get('rules_text', '')
+        group.save(update_fields=['rules_text', 'updated_at'])
+        return Response({'message': 'Rules updated', 'rules_text': group.rules_text})
+
+    @action(detail=True, methods=['patch'], url_path='update_settings')
+    def update_settings(self, request, pk=None):
+        """Update group-level settings (admin/creator only)."""
+        group = self.get_object()
+        payment_profile = get_or_create_payment_profile(request.user)
+        if not payment_profile:
+            return Response({'error': 'Payment profile not found'}, status=status.HTTP_400_BAD_REQUEST)
+        
+        is_creator = group.creator == payment_profile
+        is_admin = PaymentGroupMember.objects.filter(
+            payment_group=group, payment_profile=payment_profile, is_admin=True
+        ).exists()
+        if not is_creator and not is_admin:
+            return Response({'error': 'Only admins can update settings'}, status=status.HTTP_403_FORBIDDEN)
+        
+        allowed_fields = [
+            'requires_approval', 'allow_anonymous', 'transaction_trigger_role',
+            'approval_threshold', 'hierarchy_mode', 'accent_color',
+            'joining_minimum', 'investment_pitch', 'loan_proposition',
+            'allow_partial_withdrawal', 'immature_exit_penalty_rate',
+            'is_lifetime', 'expiry_date', 'deadline',
+            'contribution_type', 'contribution_amount', 'frequency',
+            'is_round_contribution_enabled', 'round_frequency', 'round_amount',
+            'round_assignment_method', 'round_persistence_mode', 'round_persistence_count',
+            'target_amount', 'entry_fee_required', 'entry_fee_amount',
+            'custom_application_questions', 'is_public', 'auto_purchase',
+        ]
+        updated = []
+        for field in allowed_fields:
+            if field in request.data:
+                setattr(group, field, request.data[field])
+                updated.append(field)
+        
+        if updated:
+            group.save(update_fields=updated + ['updated_at'])
+        
+        serializer = self.get_serializer(group)
+        return Response({
+            'message': f'Updated: {", ".join(updated)}',
+            'group': serializer.data
+        })
+
+    @action(detail=True, methods=['post'], url_path='change_group_type')
+    def change_group_type(self, request, pk=None):
+        """Change group type (standard/piggy_bank/kitty). Admin/creator only."""
+        group = self.get_object()
+        payment_profile = get_or_create_payment_profile(request.user)
+        if not payment_profile:
+            return Response({'error': 'Payment profile not found'}, status=status.HTTP_400_BAD_REQUEST)
+
+        is_creator = group.creator == payment_profile
+        is_admin = PaymentGroupMember.objects.filter(
+            payment_group=group, payment_profile=payment_profile, is_admin=True
+        ).exists()
+        if not is_creator and not is_admin:
+            return Response({'error': 'Only admins can change group type'}, status=status.HTTP_403_FORBIDDEN)
+
+        new_type = request.data.get('group_type')
+        if not new_type:
+            return Response({'error': 'group_type is required'}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            group.change_group_type(new_type, requestor=payment_profile)
+        except ValueError as e:
+            return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
+        serializer = self.get_serializer(group)
+        return Response({
+            'message': f'Group type changed to {new_type}',
+            'group': serializer.data
+        })
+
+    @action(detail=True, methods=['post'], url_path='change_capacity')
+    def change_capacity(self, request, pk=None):
+        """Manually override capacity_category. Admin/creator only."""
+        group = self.get_object()
+        payment_profile = get_or_create_payment_profile(request.user)
+        if not payment_profile:
+            return Response({'error': 'Payment profile not found'}, status=status.HTTP_400_BAD_REQUEST)
+
+        is_creator = group.creator == payment_profile
+        is_admin = PaymentGroupMember.objects.filter(
+            payment_group=group, payment_profile=payment_profile, is_admin=True
+        ).exists()
+        if not is_creator and not is_admin:
+            return Response({'error': 'Only admins can change capacity'}, status=status.HTTP_403_FORBIDDEN)
+
+        new_capacity = request.data.get('capacity_category')
+        valid_categories = dict(PaymentGroups._meta.get_field('capacity_category').choices)
+        if not new_capacity or new_capacity not in valid_categories:
+            return Response({'error': f'capacity_category must be one of {list(valid_categories.keys())}'}, status=status.HTTP_400_BAD_REQUEST)
+
+        group.capacity_category = new_capacity
+        group.save(update_fields=['capacity_category', 'updated_at'])
+        serializer = self.get_serializer(group)
+        return Response({
+            'message': f'Capacity changed to {new_capacity}',
+            'group': serializer.data
+        })
+
+    @action(detail=True, methods=['get'], url_path='portfolio_snapshot')
+    def portfolio_snapshot(self, request, pk=None):
+        """Unified snapshot of all connected entities: type, gains, performance %, start date."""
+        group = self.get_object()
+        payment_profile = get_or_create_payment_profile(request.user)
+        if not payment_profile:
+            return Response({'error': 'Payment profile not found'}, status=status.HTTP_400_BAD_REQUEST)
+
+        is_member = PaymentGroupMember.objects.filter(
+            payment_group=group, payment_profile=payment_profile
+        ).exists()
+        if not is_member and group.creator != payment_profile:
+            return Response({'error': 'Not a member'}, status=status.HTTP_403_FORBIDDEN)
+
+        snapshot = []
+
+        # Piggy Banks (GroupTargets)
+        piggy_banks = GroupTarget.objects.filter(payment_group=group)
+        for pb in piggy_banks:
+            pct = round((float(pb.current_amount) / float(pb.target_amount) * 100), 2) if pb.target_amount and pb.target_amount > 0 else 0
+            snapshot.append({
+                'id': str(pb.id),
+                'type': 'piggy_bank',
+                'name': pb.name,
+                'current_amount': str(pb.current_amount),
+                'target_amount': str(pb.target_amount),
+                'gains': str(pb.current_amount - pb.target_amount) if pb.current_amount > pb.target_amount else '0',
+                'performance_pct': pct,
+                'start_date': pb.created_at.isoformat() if pb.created_at else None,
+                'status': pb.status,
+            })
+
+        # Donations
+        donations = Donation.objects.filter(payment_group=group)
+        for d in donations:
+            pct = round((float(d.current_amount) / float(d.target_amount) * 100), 2) if d.target_amount and d.target_amount > 0 else 0
+            snapshot.append({
+                'id': str(d.id),
+                'type': 'donation',
+                'name': d.title,
+                'current_amount': str(d.current_amount),
+                'target_amount': str(d.target_amount),
+                'gains': '0',
+                'performance_pct': pct,
+                'start_date': d.created_at.isoformat() if d.created_at else None,
+                'status': d.status,
+            })
+
+        # Investments
+        investments = GroupInvestment.objects.filter(payment_group=group)
+        for inv in investments:
+            pct = 0
+            if inv.contribution_balance and inv.contribution_balance > 0:
+                pct = round((float(inv.net_profit_loss or 0) / float(inv.contribution_balance) * 100), 2)
+            snapshot.append({
+                'id': str(inv.id),
+                'type': 'investment',
+                'name': inv.title,
+                'current_amount': str(inv.amount_collected),
+                'target_amount': str(inv.total_amount),
+                'gains': str(inv.net_profit_loss or 0),
+                'performance_pct': pct,
+                'start_date': inv.created_at.isoformat() if inv.created_at else None,
+                'status': inv.status,
+            })
+
+        # Round Contributions
+        rounds = RoundContribution.objects.filter(payment_group=group)
+        for r in rounds:
+            snapshot.append({
+                'id': str(r.id),
+                'type': 'round',
+                'name': f'Round {r.round_number}',
+                'current_amount': str(r.total_collected),
+                'target_amount': str(r.contribution_amount),
+                'gains': '0',
+                'performance_pct': r.get_progress_percentage(),
+                'start_date': r.start_date.isoformat() if r.start_date else None,
+                'status': r.status,
+            })
+
+        # Withdrawals
+        withdrawals = WithdrawalRequest.objects.filter(payment_group=group)
+        for w in withdrawals:
+            snapshot.append({
+                'id': str(w.id),
+                'type': 'withdrawal',
+                'name': f'{w.withdrawal_type} - {w.amount}',
+                'current_amount': str(w.amount),
+                'target_amount': '0',
+                'gains': '0',
+                'performance_pct': 0,
+                'start_date': w.created_at.isoformat() if w.created_at else None,
+                'status': w.status,
+            })
+
+        # Owned Establishments
+        establishments = Establishment.objects.filter(owning_group=group)
+        for est in establishments:
+            snapshot.append({
+                'id': str(est.id),
+                'type': 'establishment',
+                'name': est.name,
+                'current_amount': '0',
+                'target_amount': '0',
+                'gains': '0',
+                'performance_pct': 0,
+                'start_date': est.created_at.isoformat() if est.created_at else None,
+                'status': 'active' if est.is_active else 'inactive',
+            })
+
+        return Response({
+            'group_id': str(group.id),
+            'group_name': group.name,
+            'total_items': len(snapshot),
+            'entities': snapshot,
+        })
+
+    @action(detail=True, methods=['post'], url_path='update_member_role')
+    def update_member_role(self, request, pk=None):
+        """Update a member's role (admin/creator only)."""
+        group = self.get_object()
+        payment_profile = get_or_create_payment_profile(request.user)
+        if not payment_profile:
+            return Response({'error': 'Payment profile not found'}, status=status.HTTP_400_BAD_REQUEST)
+        
+        is_creator = group.creator == payment_profile
+        is_admin = PaymentGroupMember.objects.filter(
+            payment_group=group, payment_profile=payment_profile, is_admin=True
+        ).exists()
+        if not is_creator and not is_admin:
+            return Response({'error': 'Only admins can change roles'}, status=status.HTTP_403_FORBIDDEN)
+        
+        member_id = request.data.get('member_id')
+        new_role = request.data.get('role')  # 'admin', 'moderator', 'member'
+        
+        if not member_id or not new_role:
+            return Response({'error': 'member_id and role are required'}, status=status.HTTP_400_BAD_REQUEST)
+        
+        if new_role not in ['admin', 'moderator', 'member']:
+            return Response({'error': 'Invalid role. Must be admin, moderator, or member.'}, status=status.HTTP_400_BAD_REQUEST)
+        
+        try:
+            target_member = PaymentGroupMember.objects.get(id=member_id, payment_group=group)
+        except PaymentGroupMember.DoesNotExist:
+            return Response({'error': 'Member not found in this group'}, status=status.HTTP_404_NOT_FOUND)
+        
+        # Prevent demoting the group creator
+        if target_member.payment_profile == group.creator and new_role != 'admin':
+            return Response({'error': 'Cannot demote the group creator'}, status=status.HTTP_400_BAD_REQUEST)
+        
+        target_member.role = new_role
+        target_member.is_admin = (new_role == 'admin')
+        target_member.save(update_fields=['role', 'is_admin'])
+        
+        return Response({
+            'message': f'Role updated to {new_role}',
+            'member_id': member_id,
+            'role': new_role
+        })
+
+    @action(detail=True, methods=['post'], url_path='apply_certificate')
+    def apply_certificate(self, request, pk=None):
+        """Apply for group certification/verification."""
+        group = self.get_object()
+        payment_profile = get_or_create_payment_profile(request.user)
+        if not payment_profile:
+            return Response({'error': 'Payment profile not found'}, status=status.HTTP_400_BAD_REQUEST)
+            
+        is_creator = group.creator == payment_profile
+        is_admin = PaymentGroupMember.objects.filter(
+            payment_group=group, payment_profile=payment_profile, is_admin=True
+        ).exists()
+        
+        if not is_creator and not is_admin:
+            return Response({'error': 'Only admins can apply for certification'}, status=status.HTTP_403_FORBIDDEN)
+            
+        from .models import GroupCertificate
+        from .serializers import GroupCertificateSerializer
+        
+        certificate, created = GroupCertificate.objects.get_or_create(payment_group=group)
+        if not created and certificate.status in ['pending', 'approved']:
+            return Response({'error': f'Certificate is already {certificate.status}'}, status=status.HTTP_400_BAD_REQUEST)
+            
+        certificate.status = 'pending'
+        certificate.save()
+        
+        return Response({'message': 'Certificate application submitted successfully', 'certificate': GroupCertificateSerializer(certificate).data})
+
+    @action(detail=True, methods=['get'], url_path='certificate_status')
+    def certificate_status(self, request, pk=None):
+        """Get the current certificate status."""
+        group = self.get_object()
+        from .models import GroupCertificate
+        from .serializers import GroupCertificateSerializer
+        
+        try:
+            certificate = GroupCertificate.objects.get(payment_group=group)
+            return Response(GroupCertificateSerializer(certificate).data)
+        except GroupCertificate.DoesNotExist:
+            return Response({'status': 'none', 'message': 'No certificate application found.'})
+
+    @action(detail=True, methods=['post'], url_path='approve_certificate')
+    def approve_certificate(self, request, pk=None):
+        """Approve or reject a certificate (Superadmin/System level action)."""
+        if not request.user.is_staff:
+            return Response({'error': 'Only staff can approve certificates'}, status=status.HTTP_403_FORBIDDEN)
+            
+        group = self.get_object()
+        action_type = request.data.get('action', 'approved') # 'approved', 'rejected', 'revoked'
+        notes = request.data.get('notes', '')
+        
+        from .models import GroupCertificate
+        from .serializers import GroupCertificateSerializer
+        
+        try:
+            certificate = GroupCertificate.objects.get(payment_group=group)
+            certificate.status = action_type
+            certificate.verification_notes = notes
+            if action_type == 'approved':
+                certificate.issued_at = timezone.now()
+                # Dummy reg number generation
+                certificate.registration_number = f"QOM-{group.id}-{timezone.now().strftime('%Y%m%d')}"
+            certificate.save()
+            return Response({'message': f'Certificate {action_type}', 'certificate': GroupCertificateSerializer(certificate).data})
+        except GroupCertificate.DoesNotExist:
+            return Response({'error': 'No certificate application found'}, status=status.HTTP_404_NOT_FOUND)
+
+    @action(detail=True, methods=['post'], url_path='create_entity')
+    def create_entity(self, request, pk=None):
+        """Create any connected entity (piggy bank, donation, round, benefit rule, investment pitch, settings change)."""
+        group = self.get_object()
+        payment_profile = get_or_create_payment_profile(request.user)
+        if not payment_profile:
+            return Response({'error': 'Payment profile not found'}, status=status.HTTP_400_BAD_REQUEST)
+
+        is_admin = PaymentGroupMember.objects.filter(
+            payment_group=group, payment_profile=payment_profile, is_admin=True
+        ).exists() or group.creator == payment_profile
+        if not is_admin:
+            return Response({'error': 'Only admins can create entities'}, status=status.HTTP_403_FORBIDDEN)
+
+        entity_type = request.data.get('entity_type')
+        data = request.data.get('data', {})
+
+        if entity_type == 'piggy_bank':
+            name = data.get('name')
+            if not name:
+                return Response({'error': 'name is required'}, status=status.HTTP_400_BAD_REQUEST)
+            obj = GroupTarget.objects.create(
+                payment_group=group,
+                name=name,
+                target_amount=data.get('target_amount', 0),
+                description=data.get('description', ''),
+                is_sharable=data.get('is_sharable', True),
+            )
+            return Response({'entity_type': 'piggy_bank', 'id': str(obj.id), 'data': GroupTargetSerializer(obj).data}, status=status.HTTP_201_CREATED)
+
+        elif entity_type == 'donation':
+            title = data.get('title')
+            if not title:
+                return Response({'error': 'title is required'}, status=status.HTTP_400_BAD_REQUEST)
+            obj = Donation.objects.create(
+                payment_group=group,
+                title=title,
+                description=data.get('description', ''),
+                target_amount=data.get('target_amount', 0),
+                minimum_contribution=data.get('minimum_contribution', 0),
+                status='active',
+            )
+            return Response({'entity_type': 'donation', 'id': str(obj.id), 'data': DonationSerializer(obj).data}, status=status.HTTP_201_CREATED)
+
+        elif entity_type == 'round':
+            obj = RoundContribution.objects.create(
+                payment_group=group,
+                round_number=data.get('round_number', 1),
+                contribution_amount=data.get('contribution_amount', group.round_amount),
+                assignment_method=data.get('assignment_method', group.round_assignment_method),
+                start_date=timezone.now(),
+                status='pending',
+            )
+            return Response({'entity_type': 'round', 'id': str(obj.id), 'data': RoundContributionSerializer(obj).data}, status=status.HTTP_201_CREATED)
+
+        elif entity_type == 'benefit_rule':
+            obj = BenefitDistributionRule.objects.create(
+                payment_group=group,
+                distribution_criteria=data.get('distribution_criteria', 'contribution_proportional'),
+                payout_frequency=data.get('payout_frequency', 'immediate'),
+                wallet_percentage=data.get('wallet_percentage', 100),
+                group_retain_percentage=data.get('group_retain_percentage', 0),
+                requires_approval=data.get('requires_approval', False),
+                approval_threshold=data.get('approval_threshold', 51),
+                minimum_payout=data.get('minimum_payout', 0),
+            )
+            return Response({'entity_type': 'benefit_rule', 'id': str(obj.id), 'data': BenefitDistributionRuleSerializer(obj).data}, status=status.HTTP_201_CREATED)
+
+        elif entity_type == 'investment_pitch':
+            group.investment_pitch = data.get('pitch', '')
+            group.pitch_visibility = data.get('visibility', 'internal')
+            group.save(update_fields=['investment_pitch', 'pitch_visibility', 'updated_at'])
+            return Response({'entity_type': 'investment_pitch', 'message': 'Investment pitch updated', 'group': self.get_serializer(group).data}, status=status.HTTP_200_OK)
+
+        elif entity_type == 'settings_change':
+            change_type = data.get('change_type')
+            if not change_type:
+                return Response({'error': 'change_type is required'}, status=status.HTTP_400_BAD_REQUEST)
+            member = PaymentGroupMember.objects.get(payment_group=group, payment_profile=payment_profile)
+            old_values = {}
+            for field in data.get('fields', []):
+                if hasattr(group, field):
+                    old_values[field] = getattr(group, field)
+            obj = GroupSettingsChangeRequest.objects.create(
+                payment_group=group,
+                proposed_by=member,
+                change_type=change_type,
+                change_description=data.get('description', ''),
+                old_values=old_values,
+                new_values=data.get('new_values', {}),
+                impact_summary=data.get('impact_summary', ''),
+            )
+            return Response({'entity_type': 'settings_change', 'id': str(obj.id), 'data': GroupSettingsChangeRequestSerializer(obj).data}, status=status.HTTP_201_CREATED)
+
+        elif entity_type == 'withdrawal_request':
+            amount = Decimal(str(data.get('amount', 0)))
+            if amount <= 0:
+                return Response({'error': 'amount must be positive'}, status=status.HTTP_400_BAD_REQUEST)
+            member = PaymentGroupMember.objects.get(payment_group=group, payment_profile=payment_profile)
+            if amount > member.total_contributed:
+                return Response({'error': 'Amount exceeds your contributions'}, status=status.HTTP_400_BAD_REQUEST)
+            obj = WithdrawalRequest.objects.create(
+                payment_group=group,
+                requester=member,
+                amount=amount,
+                withdrawal_type=data.get('withdrawal_type', 'partial'),
+                reason=data.get('reason', ''),
+                destination_wallet=payment_profile,
+            )
+            if data.get('withdrawal_type') == 'exit':
+                obj.immature_exit_deduction = obj.calculate_immature_deduction()
+                obj.save(update_fields=['immature_exit_deduction'])
+            return Response({'entity_type': 'withdrawal_request', 'id': str(obj.id), 'data': WithdrawalRequestSerializer(obj).data}, status=status.HTTP_201_CREATED)
+
+        return Response({'error': f'Unknown entity_type: {entity_type}'}, status=status.HTTP_400_BAD_REQUEST)
+
     @action(detail=True, methods=['post'])
     def group_checkout(self, request, pk=None):
         """Initiate group checkout for unified cart."""
@@ -814,6 +2128,12 @@ class PaymentGroupsViewSet(ModelViewSet):
         amount = Decimal(str(data.get('amount', 0)))
         items_data = data.get('items', [])
         
+        # Enforce transaction_trigger_role
+        if group.transaction_trigger_role == 'admin':
+            is_admin = member.is_admin or group.creator == payment_profile
+            if not is_admin:
+                return Response({'error': 'Only admins can trigger checkouts in this group.'}, status=status.HTTP_403_FORBIDDEN)
+        
         # If amount > 500 or group requires strict approval
         requires_approval = group.requires_approval or (amount > 500)
         
@@ -822,14 +2142,18 @@ class PaymentGroupsViewSet(ModelViewSet):
                 group=group,
                 initiator=payment_profile,
                 amount=amount,
-                items_payload=items_data
+                items_payload=items_data,
+                is_locked=True,
             )
             # Auto-approve by initiator
             checkout_req.approvals.add(payment_profile)
             
-            # Check if this 1 approval is enough (e.g. 1-member group)
-            total_members = group.members.count()
-            if checkout_req.approvals.count() >= total_members:
+            # Check if this 1 approval is enough (e.g. 1-member group or low threshold)
+            total_members = PaymentGroupMember.objects.filter(payment_group=group).count()
+            import math
+            threshold_count = math.ceil((group.approval_threshold / 100.0) * total_members)
+            
+            if checkout_req.approvals.count() >= max(1, threshold_count):
                 success, error_or_order = self._execute_group_checkout(group, payment_profile, amount, items_data, user)
                 if success:
                     checkout_req.status = 'approved'
@@ -1006,15 +2330,23 @@ class PaymentGroupsViewSet(ModelViewSet):
         if checkout_req.status != 'pending':
             return Response({'error': f'Request is already {checkout_req.status}'}, status=status.HTTP_400_BAD_REQUEST)
 
+        notes = request.data.get('notes', '')
+
         if action_type == 'approve':
             checkout_req.approvals.add(payment_profile)
             checkout_req.rejections.remove(payment_profile)
+            if notes:
+                checkout_req.approval_notes = f"{checkout_req.approval_notes}\n{payment_profile.user.user.first_name}: {notes}".strip()
         elif action_type == 'reject':
             checkout_req.rejections.add(payment_profile)
             checkout_req.approvals.remove(payment_profile)
+            if notes:
+                checkout_req.rejection_notes = f"{checkout_req.rejection_notes}\n{payment_profile.user.user.first_name}: {notes}".strip()
             
-        total_members = group.members.count()
-        if checkout_req.approvals.count() >= total_members:
+        total_members = PaymentGroupMember.objects.filter(payment_group=group).count()
+        import math
+        threshold_count = math.ceil((group.approval_threshold / 100.0) * total_members)
+        if checkout_req.approvals.count() >= max(1, threshold_count):
             # Need to get user object of initiator, handling edge cases
             initiator_user = None
             if checkout_req.initiator:
@@ -1041,18 +2373,58 @@ class PaymentGroupsViewSet(ModelViewSet):
                 checkout_req.status = 'failed'
                 checkout_req.save()
                 return Response({'error': error_or_order}, status=status.HTTP_400_BAD_REQUEST)
-        elif checkout_req.rejections.count() > 0:
+
+        rejections_count = checkout_req.rejections.count()
+        approvals_count = checkout_req.approvals.count()
+        remaining_voters = total_members - approvals_count - rejections_count
+
+        # Reject if rejections make it mathematically impossible to reach threshold
+        if approvals_count + remaining_voters < max(1, threshold_count):
             checkout_req.status = 'rejected'
             checkout_req.save()
-            return Response({'success': True, 'message': 'Checkout request rejected.'})
-            
+            return Response({'success': True, 'message': 'Checkout request rejected - insufficient support.'})
+
         return Response({
             'success': True, 
             'message': f'Successfully {action_type}d request.',
             'status': checkout_req.status,
-            'approvals': checkout_req.approvals.count(),
+            'approvals': approvals_count,
+            'rejections': rejections_count,
+            'threshold_needed': max(1, threshold_count),
             'total_members': total_members
         })
+
+    @action(detail=True, methods=['post'], url_path='cancel_checkout_request')
+    def cancel_checkout_request(self, request, pk=None):
+        """Cancel a pending checkout request. Only initiator can cancel, and only if no other approvals exist."""
+        group = self.get_object()
+        payment_profile = get_or_create_payment_profile(request.user)
+        if not payment_profile:
+            return Response({'error': 'Payment profile not found'}, status=status.HTTP_400_BAD_REQUEST)
+
+        request_id = request.data.get('checkout_request_id')
+        if not request_id:
+            return Response({'error': 'checkout_request_id is required'}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            checkout_req = GroupCheckoutRequest.objects.get(id=request_id, group=group)
+        except GroupCheckoutRequest.DoesNotExist:
+            return Response({'error': 'Checkout request not found'}, status=status.HTTP_404_NOT_FOUND)
+
+        if checkout_req.status != 'pending':
+            return Response({'error': f'Cannot cancel request that is already {checkout_req.status}'}, status=status.HTTP_400_BAD_REQUEST)
+
+        if checkout_req.initiator != payment_profile:
+            return Response({'error': 'Only the initiator can cancel a checkout request'}, status=status.HTTP_403_FORBIDDEN)
+
+        # Prevent cancellation if others have already approved
+        other_approvals = checkout_req.approvals.exclude(id=payment_profile.id)
+        if other_approvals.exists():
+            return Response({'error': 'Cannot cancel after other members have approved'}, status=status.HTTP_400_BAD_REQUEST)
+
+        checkout_req.status = 'cancelled'
+        checkout_req.save(update_fields=['status', 'updated_at'])
+        return Response({'success': True, 'message': 'Checkout request cancelled.'})
 
     # ── Kitty-specific endpoints ──────────────────────────────────
 
@@ -1076,13 +2448,13 @@ class PaymentGroupsViewSet(ModelViewSet):
     @action(detail=True, methods=['post'])
     @db_transaction.atomic
     def kitty_withdraw(self, request, pk=None):
-        """Withdraw funds from a kitty to the user's personal wallet."""
+        """Withdraw funds from a kitty - keeps funds in kitty as a container."""
         kitty = self.get_object()
         user = request.user
         payment_profile = get_or_create_payment_profile(user)
         if not payment_profile:
             return Response({'error': 'Could not resolve payment profile'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-
+        
         # Only creator/admin can withdraw
         is_admin = kitty.creator == payment_profile
         if not is_admin:
@@ -1092,7 +2464,7 @@ class PaymentGroupsViewSet(ModelViewSet):
                     return Response({'error': 'Only admins can withdraw from this kitty'}, status=status.HTTP_403_FORBIDDEN)
             except PaymentGroupMember.DoesNotExist:
                 return Response({'error': 'Not a member of this kitty'}, status=status.HTTP_403_FORBIDDEN)
-
+        
         amount = request.data.get('amount')
         if not amount:
             return Response({'error': 'Amount is required'}, status=status.HTTP_400_BAD_REQUEST)
@@ -1102,29 +2474,25 @@ class PaymentGroupsViewSet(ModelViewSet):
                 return Response({'error': 'Amount must be positive'}, status=status.HTTP_400_BAD_REQUEST)
         except (ValueError, TypeError):
             return Response({'error': 'Invalid amount'}, status=status.HTTP_400_BAD_REQUEST)
-
+        
         if float(kitty.current_amount) < amount:
             return Response({
                 'error': 'Insufficient kitty balance',
                 'current_balance': float(kitty.current_amount),
             }, status=status.HTTP_400_BAD_REQUEST)
-
-        # Deduct from kitty
+        
+        # Deduct from kitty (funds stay in kitty container)
         kitty.current_amount = float(kitty.current_amount) - amount
         kitty.save()
-
-        # Credit user's personal wallet
-        payment_profile.comrade_balance += amount
-        payment_profile.save()
-
-        # Create audit transaction
+        
+        # Create audit transaction (funds stay in kitty ecosystem)
         tx = TransactionToken.objects.create(
             payment_profile=payment_profile,
             amount=amount,
-            transaction_type='withdrawal',
-            description=f'Kitty withdrawal from: {kitty.name}'
+            transaction_type='kitty_withdrawal',
+            description=f'Kitty withdrawal from: {kitty.name} (funds remain in kitty ecosystem)'
         )
-
+        
         TransactionHistory.objects.create(
             payment_profile=payment_profile,
             transaction_token=tx,
@@ -1139,12 +2507,14 @@ class PaymentGroupsViewSet(ModelViewSet):
             amount=amount,
             status='completed'
         )
-
+        
+        self.logger.info(f"Kitty withdrawal: {amount} from {kitty.name} - funds kept in kitty ecosystem")
+        
         return Response({
             'status': 'success',
-            'message': f'KES {amount:,.2f} withdrawn to your personal wallet',
+            'message': f'KES {amount:,.2f} withdrawn from kitty (funds managed in kitty ecosystem)',
             'new_kitty_balance': float(kitty.current_amount),
-            'new_wallet_balance': float(payment_profile.comrade_balance),
+            'kitty_name': kitty.name,
             'transaction_id': str(tx.transaction_code),
         })
 
@@ -1343,6 +2713,12 @@ class PaymentGroupsViewSet(ModelViewSet):
         return super().destroy(request, *args, **kwargs)
 
 
+    
+
+
+
+
+
 class GroupInvitationViewSet(ModelViewSet):
     """ViewSet for handling group invitations"""
     queryset = GroupInvitation.objects.all()
@@ -1402,6 +2778,10 @@ class GroupInvitationViewSet(ModelViewSet):
             payment_profile=payment_profile,
             is_admin=False
         )
+        
+        # Upgrade capacity based on new member count
+        if hasattr(group, 'auto_upgrade_capacity'):
+            group.auto_upgrade_capacity()
         
         # Update invitation status
         invitation.status = 'accepted'
@@ -1531,7 +2911,22 @@ class GroupTargetViewSet(ModelViewSet):
     queryset = GroupTarget.objects.all()
     serializer_class = GroupTargetSerializer
     permission_classes = [IsAuthenticated]
-    
+    logger = logging.getLogger(__name__)
+
+    def create(self, request, *args, **kwargs):
+        self.logger.debug(f"CREATE PIGGY BANK - Request data: {request.data}")
+        self.logger.debug(f"CREATE PIGGY BANK - User: {request.user}")
+        self.logger.debug(f"CREATE PIGGY BANK - Auth: {request.auth}")
+        try:
+            response = super().create(request, *args, **kwargs)
+            self.logger.debug(f"CREATE PIGGY BANK - Response status: {response.status_code}")
+            self.logger.debug(f"CREATE PIGGY BANK - Response data: {response.data}")
+            return response
+        except Exception as e:
+            self.logger.error(f"CREATE PIGGY BANK - Exception: {str(e)}")
+            self.logger.error(f"CREATE PIGGY BANK - Exception type: {type(e)}")
+            raise
+
     def get_queryset(self):
         user = self.request.user
         payment_profile = get_or_create_payment_profile(user)
@@ -1576,6 +2971,42 @@ class GroupTargetViewSet(ModelViewSet):
             serializer.save(owner=payment_profile)
 
     @action(detail=True, methods=['post'])
+    def start_round(self, request, pk=None):
+        round_obj = self.get_object()
+        
+        if round_obj.status != 'pending':
+            return Response({'error': 'Round is already active or completed'}, status=400)
+            
+        # Automated game: randomly assign if method is random and no one is awarded
+        if round_obj.assignment_method == 'random' and not round_obj.awarded_to:
+            import random
+            group_members = list(round_obj.payment_group.members.all())
+            # Find members who haven't been awarded in previous rounds
+            awarded_member_ids = RoundContribution.objects.filter(payment_group=round_obj.payment_group, awarded_to__isnull=False).values_list('awarded_to_id', flat=True)
+            eligible_members = [m for m in group_members if m.id not in awarded_member_ids]
+            
+            if eligible_members:
+                round_obj.awarded_to = random.choice(eligible_members)
+            elif group_members:
+                # Cycle resets, everyone is eligible again
+                round_obj.awarded_to = random.choice(group_members)
+        
+        elif round_obj.assignment_method == 'sequential' and not round_obj.awarded_to:
+            # Picking position system
+            try:
+                pos = RoundPosition.objects.get(payment_group=round_obj.payment_group, position_number=round_obj.round_number)
+                round_obj.awarded_to = pos.member
+            except RoundPosition.DoesNotExist:
+                # Fallback or error
+                pass
+                
+        round_obj.status = 'active'
+        round_obj.start_date = timezone.now()
+        round_obj.save()
+        
+        return Response({'status': 'Round started', 'awarded_to': str(round_obj.awarded_to.id) if round_obj.awarded_to else None})
+
+    @action(detail=True, methods=['post'])
     @db_transaction.atomic
     def contribute(self, request, pk=None):
         """Contribute to a piggy bank / target"""
@@ -1611,13 +3042,39 @@ class GroupTargetViewSet(ModelViewSet):
         payment_profile.comrade_balance -= amount
         payment_profile.save()
         
-        # Add to piggy bank
-        target.current_amount += amount
-        if target.current_amount >= target.target_amount:
-            target.achieved = True
-            target.achieved_at = timezone.now()
-            
         target.save()
+
+        # Update member total contribution if group piggy bank
+        member = None
+        if target.payment_group:
+            try:
+                member = PaymentGroupMember.objects.get(
+                    payment_group=target.payment_group, payment_profile=payment_profile
+                )
+                member.total_contributed += Decimal(str(amount))
+                member.save()
+            except PaymentGroupMember.DoesNotExist:
+                pass
+
+        # Record contribution history
+        from Payment.models import Contribution
+        Contribution.objects.create(
+            payment_group=target.payment_group,
+            target=target,
+            member=member or PaymentGroupMember.objects.filter(payment_profile=payment_profile).first(), # Fallback for individual
+            amount=amount,
+            notes=request.data.get('notes', '')
+        )
+
+        # Create audit trail
+        TransactionToken.objects.create(
+            payment_profile=payment_profile,
+            transaction_code=uuid.uuid4(),
+            amount=amount,
+            transaction_type='contribution',
+            description=f'Contribution to Piggy Bank: {target.name}',
+            payment_group=target.payment_group
+        )
         
         # Determine contributor display name (anonymous-aware)
         contributor_name = None
@@ -1737,6 +3194,166 @@ class GroupTargetViewSet(ModelViewSet):
             'maturity_date': target.maturity_date
         })
     
+    @action(detail=True, methods=['get'])
+    def piggy_members(self, request, pk=None):
+        """List members who have contributed to this piggy bank."""
+        target = self.get_object()
+        contributions = target.contributions.select_related('member__payment_profile__user__user').all()
+        
+        member_map = {}
+        for c in contributions:
+            mid = str(c.member.id)
+            if mid not in member_map:
+                member_map[mid] = {
+                    'id': mid,
+                    'name': c.member.anonymous_alias if c.member.is_anonymous else c.member.payment_profile.user.user.get_full_name(),
+                    'total_contributed': 0,
+                    'is_anonymous': c.member.is_anonymous,
+                    'role': c.member.role
+                }
+            member_map[mid]['total_contributed'] += float(c.amount)
+        
+        return Response(list(member_map.values()))
+
+    @action(detail=True, methods=['get'])
+    def piggy_analytics(self, request, pk=None):
+        """Rich analytics and contribution trends for this piggy bank."""
+        target = self.get_object()
+        now = timezone.now()
+        thirty_days_ago = now - timedelta(days=30)
+        
+        # Growth and Trends
+        all_contributions = target.contributions.all()
+        recent_contributions = all_contributions.filter(contributed_at__gte=thirty_days_ago)
+        
+        growth_30d = sum(float(c.amount) for c in recent_contributions)
+        
+        # Monthly trends (last 6 months)
+        monthly_trends = []
+        max_monthly = 0
+        for i in range(5, -1, -1):
+            month_start = (now.replace(day=1) - timedelta(days=i*30)).replace(day=1)
+            next_month = (month_start + timedelta(days=32)).replace(day=1)
+            month_amount = sum(float(c.amount) for c in all_contributions.filter(contributed_at__gte=month_start, contributed_at__lt=next_month))
+            month_label = month_start.strftime('%b')
+            monthly_trends.append({'month': month_label, 'amount': month_amount})
+            if month_amount > max_monthly:
+                max_monthly = month_amount
+
+        # Top Stakers
+        member_contributions = {}
+        for c in all_contributions:
+            if not c.member: continue
+            mid = str(c.member.id)
+            if mid not in member_contributions:
+                member_contributions[mid] = {
+                    'user_name': c.member.anonymous_alias if c.member.is_anonymous else (c.member.payment_profile.user.user.get_full_name() if c.member.payment_profile else "Unknown User"),
+                    'total_contributed': 0
+                }
+            member_contributions[mid]['total_contributed'] += float(c.amount)
+            
+        top_stakers = sorted(member_contributions.values(), key=lambda x: x['total_contributed'], reverse=True)[:5]
+        
+        return Response({
+            'total_saved': float(target.current_amount),
+            'target_amount': float(target.target_amount),
+            'growth_30d': growth_30d,
+            'max_monthly': max_monthly,
+            'is_mature': target.is_matured,
+            'total_contributors': len(member_contributions),
+            'monthly_trends': monthly_trends,
+            'top_stakers': top_stakers
+        })
+
+    @action(detail=True, methods=['post'])
+    def request_conversion(self, request, pk=None):
+        """Propose converting this piggy bank to group funds."""
+        target = self.get_object()
+        user = request.user
+        payment_profile = get_or_create_payment_profile(user)
+        
+        if not target.payment_group:
+            return Response({'error': 'Only group piggy banks can be converted.'}, status=status.HTTP_400_BAD_REQUEST)
+            
+        try:
+            member = PaymentGroupMember.objects.get(payment_group=target.payment_group, payment_profile=payment_profile)
+        except PaymentGroupMember.DoesNotExist:
+            return Response({'error': 'Not a member of this group.'}, status=status.HTTP_403_FORBIDDEN)
+            
+        if PiggyBankConversionRequest.objects.filter(piggy_bank=target, status='pending').exists():
+            return Response({'error': 'A conversion request is already pending.'}, status=status.HTTP_400_BAD_REQUEST)
+            
+        req = PiggyBankConversionRequest.objects.create(
+            piggy_bank=target,
+            proposed_by=member,
+            notes=request.data.get('notes', '')
+        )
+        
+        return Response({
+            'status': 'Conversion request created', 
+            'id': str(req.id),
+            'data': PiggyBankConversionRequestSerializer(req).data
+        })
+
+    @action(detail=True, methods=['get'])
+    def conversion_status(self, request, pk=None):
+        """Get all conversion requests for this piggy bank."""
+        target = self.get_object()
+        requests = PiggyBankConversionRequest.objects.filter(piggy_bank=target).order_by('-created_at')
+        return Response(PiggyBankConversionRequestSerializer(requests, many=True).data)
+
+    @action(detail=True, methods=['post'], url_path=r'approve_conversion/(?P<request_id>[^/.]+)')
+    @db_transaction.atomic
+    def approve_conversion(self, request, pk=None, request_id=None):
+        """Execute conversion: move funds to parent group balance."""
+        target = self.get_object()
+        user = request.user
+        payment_profile = get_or_create_payment_profile(user)
+        
+        # Admin check
+        is_creator = target.payment_group.creator == payment_profile
+        is_admin = PaymentGroupMember.objects.filter(
+            payment_group=target.payment_group, payment_profile=payment_profile, is_admin=True
+        ).exists()
+        
+        if not is_creator and not is_admin:
+            return Response({'error': 'Only admins can approve conversions.'}, status=status.HTTP_403_FORBIDDEN)
+                
+        try:
+            conv_req = PiggyBankConversionRequest.objects.get(id=request_id, piggy_bank=target, status='pending')
+        except (PiggyBankConversionRequest.DoesNotExist, ValueError):
+            return Response({'error': 'Pending conversion request not found.'}, status=status.HTTP_404_NOT_FOUND)
+            
+        amount_to_move = target.current_amount
+        
+        # Update group funds
+        target.payment_group.current_amount += amount_to_move
+        target.payment_group.save()
+        
+        # Deactivate piggy bank
+        target.current_amount = 0
+        target.status = 'converted'
+        target.save()
+        
+        # Update request
+        conv_req.status = 'approved'
+        conv_req.save()
+        
+        # Audit log
+        TransactionToken.objects.create(
+            payment_profile=payment_profile,
+            amount=amount_to_move,
+            transaction_type='transfer',
+            description=f"Conversion: Piggy Bank '{target.name}' funds moved to group balance.",
+            payment_group=target.payment_group
+        )
+        
+        return Response({
+            'status': 'Conversion successful', 
+            'amount_moved': float(amount_to_move),
+            'new_group_balance': float(target.payment_group.current_amount)
+        })
+
     @action(detail=True, methods=['post'])
     def unlock(self, request, pk=None):
         """Unlock a piggy bank"""
@@ -2843,9 +4460,13 @@ class GroupPostViewSet(ModelViewSet):
     permission_classes = [IsAuthenticated]
 
     def get_queryset(self):
-        group_id = self.request.query_params.get('group')
+        group_id = self.request.query_params.get('payment_group') or self.request.query_params.get('group')
         if not group_id:
-            return GroupPost.objects.none()
+            # If it's a list action, we require the group filter
+            if self.action == 'list':
+                return GroupPost.objects.none()
+            # For detail actions (upvote, react, etc), allow finding the object
+            return GroupPost.objects.all()
         return GroupPost.objects.filter(group_id=group_id)
 
     def perform_create(self, serializer):
@@ -2861,19 +4482,31 @@ class GroupPostViewSet(ModelViewSet):
 
     @action(detail=True, methods=['post'])
     def react(self, request, pk=None):
-        """Toggle a reaction emoji on a post."""
+        """Toggle a reaction icon on a post. Enforces single reaction per user."""
         post = self.get_object()
-        emoji = request.data.get('emoji', '👍')
+        icon = request.data.get('emoji') or request.data.get('icon') or '👍'
         user_id = str(request.user.id)
         reactions = post.reactions or {}
-        if emoji not in reactions:
-            reactions[emoji] = []
-        if user_id in reactions[emoji]:
-            reactions[emoji].remove(user_id)
+        
+        # Remove user from all other reactions first
+        for i in list(reactions.keys()):
+            if i != icon and user_id in reactions[i]:
+                reactions[i].remove(user_id)
+                if not reactions[i]:
+                    del reactions[i]
+        
+        # Now toggle the requested icon
+        if icon not in reactions:
+            reactions[icon] = []
+            
+        if user_id in reactions[icon]:
+            reactions[icon].remove(user_id)
         else:
-            reactions[emoji].append(user_id)
-        if not reactions[emoji]:
-            del reactions[emoji]
+            reactions[icon].append(user_id)
+            
+        if icon in reactions and not reactions[icon]:
+            del reactions[icon]
+            
         post.reactions = reactions
         post.save(update_fields=['reactions'])
         return Response(GroupPostSerializer(post, context={'request': request}).data)
@@ -2892,6 +4525,36 @@ class GroupPostViewSet(ModelViewSet):
         post.save(update_fields=['is_pinned'])
         return Response(GroupPostSerializer(post, context={'request': request}).data)
 
+    @action(detail=True, methods=['post'])
+    def upvote(self, request, pk=None):
+        """Toggle upvote for a post."""
+        post = self.get_object()
+        payment_profile = get_or_create_payment_profile(request.user)
+        if not payment_profile:
+            return Response({'error': 'Payment profile not found'}, status=status.HTTP_400_BAD_REQUEST)
+        if post.upvotes.filter(id=payment_profile.id).exists():
+            post.upvotes.remove(payment_profile)
+        else:
+            post.upvotes.add(payment_profile)
+        return Response(GroupPostSerializer(post, context={'request': request}).data)
+
+    @action(detail=True, methods=['post'])
+    def toggle_shareability(self, request, pk=None):
+        """Toggle whether a post can be shared/forwarded."""
+        post = self.get_object()
+        payment_profile = get_or_create_payment_profile(request.user)
+        is_admin = PaymentGroupMember.objects.filter(
+            payment_group=post.group, payment_profile=payment_profile, is_admin=True
+        ).exists()
+        if not is_admin and post.author != payment_profile:
+            return Response({'error': 'Only the author or group admin can toggle shareability'}, status=status.HTTP_403_FORBIDDEN)
+        
+        # Toggle both shareability and forwardability for now, or could handle separately
+        post.is_shareable = not post.is_shareable
+        post.is_forwardable = post.is_shareable
+        post.save(update_fields=['is_shareable', 'is_forwardable'])
+        return Response(GroupPostSerializer(post, context={'request': request}).data)
+
 
 class GroupPostReplyViewSet(ModelViewSet):
     """Threaded replies on discourse posts."""
@@ -2901,7 +4564,11 @@ class GroupPostReplyViewSet(ModelViewSet):
     def get_queryset(self):
         post_id = self.request.query_params.get('post')
         if not post_id:
-            return GroupPostReply.objects.none()
+            # If it's a list action, we require the post filter
+            if self.action == 'list':
+                return GroupPostReply.objects.none()
+            # For detail actions, allow finding the object
+            return GroupPostReply.objects.all()
         return GroupPostReply.objects.filter(post_id=post_id)
 
     def perform_create(self, serializer):
@@ -2915,6 +4582,50 @@ class GroupPostReplyViewSet(ModelViewSet):
             raise serializers.ValidationError("Post not found")
         serializer.save(author=payment_profile, post=post)
 
+    @action(detail=True, methods=['post'])
+    def react(self, request, pk=None):
+        """Toggle a reaction icon on a reply. Enforces single reaction per user."""
+        reply = self.get_object()
+        icon = request.data.get('emoji') or request.data.get('icon') or '👍'
+        user_id = str(request.user.id)
+        reactions = reply.reactions or {}
+        
+        # Remove user from all other reactions first
+        for i in list(reactions.keys()):
+            if i != icon and user_id in reactions[i]:
+                reactions[i].remove(user_id)
+                if not reactions[i]:
+                    del reactions[i]
+        
+        # Now toggle the requested icon
+        if icon not in reactions:
+            reactions[icon] = []
+            
+        if user_id in reactions[icon]:
+            reactions[icon].remove(user_id)
+        else:
+            reactions[icon].append(user_id)
+            
+        if icon in reactions and not reactions[icon]:
+            del reactions[icon]
+            
+        reply.reactions = reactions
+        reply.save(update_fields=['reactions'])
+        return Response(GroupPostReplySerializer(reply, context={'request': request}).data)
+
+    @action(detail=True, methods=['post'])
+    def upvote(self, request, pk=None):
+        """Toggle upvote for a reply."""
+        reply = self.get_object()
+        payment_profile = get_or_create_payment_profile(request.user)
+        if not payment_profile:
+            return Response({'error': 'Payment profile not found'}, status=status.HTTP_400_BAD_REQUEST)
+        if reply.upvotes.filter(id=payment_profile.id).exists():
+            reply.upvotes.remove(payment_profile)
+        else:
+            reply.upvotes.add(payment_profile)
+        return Response(GroupPostReplySerializer(reply, context={'request': request}).data)
+
 
 class GroupPhaseViewSet(ModelViewSet):
     """CRUD for contribution phases on a group."""
@@ -2924,6 +4635,9 @@ class GroupPhaseViewSet(ModelViewSet):
     def get_queryset(self):
         group_id = self.request.query_params.get('group')
         if not group_id:
+            # For detail actions, allow finding the object by PK
+            if self.action != 'list':
+                return GroupPhase.objects.all()
             return GroupPhase.objects.none()
         return GroupPhase.objects.filter(group_id=group_id)
 
@@ -2950,6 +4664,12 @@ class GroupVoteViewSet(ModelViewSet):
     permission_classes = [IsAuthenticated]
 
     def get_queryset(self):
+        # For list action, restrict to my groups.
+        # For detail actions (cast_vote), allow looking up the object
+        # and then perform membership checks inside the action.
+        if self.action != 'list':
+            return GroupVote.objects.all()
+
         user = self.request.user
         payment_profile = get_or_create_payment_profile(user)
         if not payment_profile:
@@ -3217,8 +4937,20 @@ class LoanApplicationViewSet(ModelViewSet):
     def approve(self, request, pk=None):
         loan = self.get_object()
         loan.status = 'approved'
+        loan.reviewed_by = request.user
+        loan.reviewed_at = timezone.now()
         loan.save()
         return Response({'status': 'approved'})
+    
+    @action(detail=True, methods=['post'])
+    def reject(self, request, pk=None):
+        loan = self.get_object()
+        loan.status = 'rejected'
+        loan.reviewed_by = request.user
+        loan.reviewed_at = timezone.now()
+        loan.rejection_reason = request.data.get('reason', '')
+        loan.save()
+        return Response({'status': 'rejected', 'reason': loan.rejection_reason})
     
     @action(detail=True, methods=['post'])
     def disburse(self, request, pk=None):
@@ -3226,6 +4958,7 @@ class LoanApplicationViewSet(ModelViewSet):
         if loan.status != 'approved':
             return Response({'error': 'Loan must be approved first'}, status=status.HTTP_400_BAD_REQUEST)
         loan.status = 'disbursed'
+        loan.disbursed_by = request.user
         loan.disbursed_at = timezone.now()
         loan.save()
         # Credit user balance
@@ -3236,6 +4969,39 @@ class LoanApplicationViewSet(ModelViewSet):
         except PaymentProfile.DoesNotExist:
             pass
         return Response({'status': 'disbursed', 'amount': str(loan.amount)})
+    
+    @action(detail=True, methods=['post'])
+    def repay(self, request, pk=None):
+        loan = self.get_object()
+        amount = request.data.get('amount', 0)
+        
+        # Process repayment
+        try:
+            pp = PaymentProfile.objects.get(user=loan.user)
+            if pp.comrade_balance >= float(amount):
+                pp.comrade_balance -= float(amount)
+                pp.save()
+                
+                # Create repayment record
+                LoanRepayment.objects.create(
+                    loan=loan,
+                    amount=amount,
+                    due_date=timezone.now(),
+                    status='paid',
+                    paid_at=timezone.now()
+                )
+                
+                # Check if fully paid
+                total_paid = sum(r.amount for r in loan.repayments.filter(status='paid'))
+                if total_paid >= float(loan.amount):
+                    loan.status = 'completed'
+                    loan.save()
+                
+                return Response({'status': 'repaid', 'amount': amount})
+            else:
+                return Response({'error': 'Insufficient balance'}, status=status.HTTP_400_BAD_REQUEST)
+        except PaymentProfile.DoesNotExist:
+            return Response({'error': 'Payment profile not found'}, status=status.HTTP_400_BAD_REQUEST)
 
 
 # ==================== ESCROW VIEWSETS ====================
@@ -3460,18 +5226,35 @@ class DonationViewSet(ModelViewSet):
     queryset = Donation.objects.all()
     serializer_class = DonationSerializer
     permission_classes = [IsAuthenticated]
+    logger = logging.getLogger(__name__)
+
+    def create(self, request, *args, **kwargs):
+        self.logger.debug(f"CREATE DONATION - Request data: {request.data}")
+        self.logger.debug(f"CREATE DONATION - Files: {request.FILES}")
+        self.logger.debug(f"CREATE DONATION - User: {request.user}")
+        return super().create(request, *args, **kwargs)
 
     def get_queryset(self):
         user = self.request.user
         payment_profile = get_or_create_payment_profile(user)
+        self.logger.debug(f"DONATION LIST - User: {user}, Profile: {payment_profile}")
+        
         if not payment_profile:
+            self.logger.warning(f"DONATION LIST - No payment profile for user {user}")
             return Donation.objects.none()
 
-        # Users can see donations where they are the donor, or they are in the group making the donation
-        return Donation.objects.filter(
+        queryset = Donation.objects.filter(
             Q(donor_profile=payment_profile) |
             Q(payment_group__members__payment_profile=payment_profile)
         ).distinct()
+        
+        group_id = self.request.query_params.get('payment_group', None)
+        self.logger.debug(f"DONATION LIST - Group ID filter: {group_id}")
+        if group_id:
+            queryset = queryset.filter(payment_group_id=group_id)
+            
+        self.logger.debug(f"DONATION LIST - Final queryset count: {queryset.count()}")
+        return queryset
 
     def perform_create(self, serializer):
         user = self.request.user
@@ -3479,7 +5262,6 @@ class DonationViewSet(ModelViewSet):
         if not payment_profile:
             raise serializers.ValidationError("Could not create payment profile")
 
-        # Determine donor type
         payment_group_id = self.request.data.get('payment_group')
         if payment_group_id:
             serializer.save()
@@ -3542,6 +5324,27 @@ class DonationViewSet(ModelViewSet):
 
 # ==================== GROUP INVESTMENT VIEWSETS ====================
 
+class GroupBusinessViewSet(ModelViewSet):
+    """Group-led business ventures."""
+    queryset = Business.objects.all()
+    serializer_class = BusinessSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        user = self.request.user
+        payment_profile = get_or_create_payment_profile(user)
+        if not payment_profile:
+            return Business.objects.none()
+
+        queryset = Business.objects.filter(payment_group__members__payment_profile=payment_profile).distinct()
+        
+        group_id = self.request.query_params.get('payment_group')
+        if group_id:
+            queryset = queryset.filter(payment_group_id=group_id)
+            
+        return queryset
+
+
 class GroupInvestmentViewSet(ModelViewSet):
     queryset = GroupInvestment.objects.all()
     serializer_class = GroupInvestmentSerializer
@@ -3553,10 +5356,46 @@ class GroupInvestmentViewSet(ModelViewSet):
         if not payment_profile:
             return GroupInvestment.objects.none()
 
-        return GroupInvestment.objects.filter(
+        queryset = GroupInvestment.objects.filter(
             Q(payment_group__members__payment_profile=payment_profile) |
             Q(pitch_visibility='public')
         ).distinct()
+        
+        group_id = self.request.query_params.get('payment_group')
+        if group_id:
+            queryset = queryset.filter(payment_group_id=group_id)
+            
+        return queryset
+
+    def get_serializer(self, *args, **kwargs):
+        # Ensure approval votes exist for read operations
+        if 'data' not in kwargs:
+            instances = args[0] if args else None
+            if instances:
+                try:
+                    if hasattr(instances, '__iter__'):
+                        for instance in instances:
+                            self._ensure_approval_vote(instance)
+                    else:
+                        self._ensure_approval_vote(instances)
+                except Exception as e:
+                    print(f"Error in _ensure_approval_vote: {e}")
+        return super().get_serializer(*args, **kwargs)
+
+    def _ensure_approval_vote(self, investment):
+        if not hasattr(investment, 'approval_vote'): return
+        if not investment.approval_vote and investment.payment_group:
+            from Payment.models import GroupVote
+            vote = GroupVote.objects.create(
+                group=investment.payment_group,
+                created_by=investment.initiated_by or investment.payment_group.creator,
+                title=f"Approval for {investment.name}",
+                description=investment.description,
+                vote_type='investment',
+                amount=investment.total_amount
+            )
+            investment.approval_vote = vote
+            investment.save()
 
     def perform_create(self, serializer):
         user = self.request.user
@@ -3565,6 +5404,9 @@ class GroupInvestmentViewSet(ModelViewSet):
             raise serializers.ValidationError("Could not create payment profile")
 
         payment_group = serializer.validated_data.get('payment_group')
+        # Map target_amount to total_amount if provided by frontend
+        total_amount = serializer.validated_data.get('total_amount', 0)
+        
         investment = serializer.save(initiated_by=payment_profile)
         
         # Auto-create an approval vote
@@ -3575,7 +5417,7 @@ class GroupInvestmentViewSet(ModelViewSet):
                 title=f"Approval for {investment.name}",
                 description=investment.description,
                 vote_type='investment',
-                amount=investment.total_amount
+                amount=investment.total_amount or total_amount
             )
             investment.approval_vote = vote
             investment.save()
@@ -3778,3 +5620,1564 @@ class GroupInvestmentViewSet(ModelViewSet):
             'amount': float(amount),
             'destination': msg
         })
+
+# ============================================================================
+# ADVANCED GROUP FEATURES VIEWSETS
+# ============================================================================
+
+
+class RoundPositionViewSet(ModelViewSet):
+    queryset = RoundPosition.objects.all()
+    serializer_class = RoundPositionSerializer
+    permission_classes = [IsAuthenticated]
+    
+    def get_queryset(self):
+        user = self.request.user
+        payment_profile = get_or_create_payment_profile(user)
+        if not payment_profile:
+            return RoundPosition.objects.none()
+        
+        queryset = RoundPosition.objects.filter(payment_group__members__payment_profile=payment_profile).distinct()
+        
+        group_id = self.request.query_params.get('payment_group')
+        if group_id:
+            queryset = queryset.filter(payment_group_id=group_id)
+            
+        return queryset
+
+    def perform_create(self, serializer):
+        payment_group = serializer.validated_data['payment_group']
+        member = serializer.validated_data['member']
+        pos = serializer.validated_data['position_number']
+        
+        if RoundPosition.objects.filter(payment_group=payment_group, position_number=pos).exists():
+            raise serializers.ValidationError("This position is already taken.")
+            
+        if RoundPosition.objects.filter(payment_group=payment_group, member=member).exists():
+            raise serializers.ValidationError("You already have a position in this group.")
+            
+        serializer.save()
+
+    @action(detail=False, methods=['get'], url_path='available')
+    def available_positions(self, request):
+        group_id = request.query_params.get('group')
+        round_id = request.query_params.get('round_id')  # Optional: specific round
+        
+        if not group_id:
+            return Response({'error': 'group parameter required'}, status=400)
+        
+        try:
+            group = PaymentGroups.objects.get(id=group_id)
+        except PaymentGroups.DoesNotExist:
+            return Response({'error': 'Group not found'}, status=404)
+        
+        # Get active round if round_id not provided
+        round_obj = None
+        if round_id:
+            try:
+                round_obj = RoundContribution.objects.get(id=round_id, payment_group=group)
+            except RoundContribution.DoesNotExist:
+                return Response({'error': 'Round not found'}, status=404)
+        else:
+            # Get the latest active or pending round
+            round_obj = RoundContribution.objects.filter(
+                payment_group=group,
+                status__in=['active', 'pending', 'pending_approval']
+            ).order_by('-round_number').first()
+        
+        member_count = group.members.filter(is_active=True).count()
+        
+        # Get taken positions for the specific round (or all if no round)
+        query = RoundPosition.objects.filter(payment_group=group)
+        if round_obj:
+            query = query.filter(round=round_obj)
+        taken_positions = query.values_list('position_number', flat=True)
+        
+        available = [i for i in range(1, member_count + 1) if i not in taken_positions]
+        
+        return Response({
+            'group_id': str(group.id),
+            'round_id': str(round_obj.id) if round_obj else None,
+            'member_count': member_count,
+            'total_positions': member_count,
+            'taken_count': len(taken_positions),
+            'available_positions': available,
+            'taken_positions': list(taken_positions)
+        })
+
+    @action(detail=False, methods=['post'], url_path='pick')
+    def pick_position(self, request):
+        user = request.user
+        payment_profile = get_or_create_payment_profile(user)
+        
+        group_id = request.data.get('group')
+        round_id = request.data.get('round_id')  # New: specific round for position
+        position_number = request.data.get('position_number')
+        
+        if not group_id or position_number is None:
+            return Response({'error': 'group and position_number required'}, status=400)
+        
+        try:
+            group = PaymentGroups.objects.get(id=group_id)
+        except PaymentGroups.DoesNotExist:
+            return Response({'error': 'Group not found'}, status=404)
+        
+        try:
+            member = PaymentGroupMember.objects.get(payment_group=group, payment_profile=payment_profile)
+        except PaymentGroupMember.DoesNotExist:
+            return Response({'error': 'Not a member of this group'}, status=403)
+        
+        # Get active round if round_id not provided
+        round_obj = None
+        if round_id:
+            try:
+                round_obj = RoundContribution.objects.get(id=round_id, payment_group=group)
+            except RoundContribution.DoesNotExist:
+                return Response({'error': 'Round not found'}, status=404)
+        else:
+            # Get the latest active or pending round
+            round_obj = RoundContribution.objects.filter(
+                payment_group=group,
+                status__in=['active', 'pending', 'pending_approval']
+            ).order_by('-round_number').first()
+            if not round_obj:
+                return Response({'error': 'No active round found. Create a round first.'}, status=400)
+        
+        # Check if member already has a position for this specific round
+        if RoundPosition.objects.filter(payment_group=group, member=member, round=round_obj).exists():
+            return Response({'error': 'You already have a position in this round'}, status=400)
+        
+        # Check if position is taken in this round
+        if RoundPosition.objects.filter(payment_group=group, position_number=position_number, round=round_obj).exists():
+            return Response({'error': f'Position {position_number} is already taken in this round'}, status=409)
+        
+        member_count = group.members.filter(is_active=True).count()
+        if position_number < 1 or position_number > member_count:
+            return Response({'error': f'Position must be between 1 and {member_count}'}, status=400)
+        
+        position = RoundPosition.objects.create(
+            payment_group=group,
+            round=round_obj,
+            member=member,
+            position_number=position_number
+        )
+        
+        serializer = self.get_serializer(position)
+        return Response(serializer.data, status=201)
+
+    @action(detail=False, methods=['get'], url_path='my-position')
+    def my_position(self, request):
+        user = request.user
+        payment_profile = get_or_create_payment_profile(user)
+        group_id = request.query_params.get('group')
+        round_id = request.query_params.get('round_id')  # Optional: specific round
+        
+        if not group_id:
+            return Response({'error': 'group parameter required'}, status=400)
+        
+        try:
+            group = PaymentGroups.objects.get(id=group_id)
+        except PaymentGroups.DoesNotExist:
+            return Response({'error': 'Group not found'}, status=404)
+        
+        # Get active round if round_id not provided
+        round_obj = None
+        if round_id:
+            try:
+                round_obj = RoundContribution.objects.get(id=round_id, payment_group=group)
+            except RoundContribution.DoesNotExist:
+                return Response({'error': 'Round not found'}, status=404)
+        else:
+            # Get the latest active or pending round
+            round_obj = RoundContribution.objects.filter(
+                payment_group=group,
+                status__in=['active', 'pending', 'pending_approval']
+            ).order_by('-round_number').first()
+        
+        # Query positions for the specific round (or all if no round specified)
+        query = RoundPosition.objects.filter(payment_group=group, member__payment_profile=payment_profile)
+        if round_obj:
+            query = query.filter(round=round_obj)
+        
+        try:
+            position = query.first()
+            if not position:
+                return Response({'has_position': False, 'position': None})
+        except RoundPosition.DoesNotExist:
+            return Response({'has_position': False, 'position': None})
+        
+        serializer = self.get_serializer(position)
+        return Response({'has_position': True, 'position': serializer.data})
+
+class RoundContributionViewSet(ModelViewSet):
+    queryset = RoundContribution.objects.all()
+    serializer_class = RoundContributionSerializer
+    permission_classes = [IsAuthenticated]
+    logger = logging.getLogger(__name__)
+
+    def create(self, request, *args, **kwargs):
+        self.logger.debug(f"CREATE ROUND - Request data: {request.data}")
+        self.logger.debug(f"CREATE ROUND - User: {request.user}")
+        self.logger.debug(f"CREATE ROUND - Auth: {request.auth}")
+        try:
+            response = super().create(request, *args, **kwargs)
+            self.logger.debug(f"CREATE ROUND - Response status: {response.status_code}")
+            self.logger.debug(f"CREATE ROUND - Response data: {response.data}")
+            return response
+        except Exception as e:
+            self.logger.error(f"CREATE ROUND - Exception: {str(e)}")
+            self.logger.error(f"CREATE ROUND - Exception type: {type(e)}")
+            raise
+
+    def perform_create(self, serializer):
+        self.logger.debug(f"Creating round with data: {serializer.validated_data}")
+        user = self.request.user
+        payment_profile = get_or_create_payment_profile(user)
+        self.logger.debug(f"User: {user}, Payment Profile: {payment_profile}")
+        
+        if not payment_profile:
+            self.logger.error("Failed to get or create payment profile")
+            raise serializers.ValidationError("Could not verify payment profile.")
+        
+        group = serializer.validated_data['payment_group']
+        self.logger.debug(f"Group: {group.id} - {group.name}")
+        
+        try:
+            member = PaymentGroupMember.objects.get(payment_group=group, payment_profile=payment_profile)
+            self.logger.debug(f"Member found: {member.id}")
+        except PaymentGroupMember.DoesNotExist:
+            self.logger.error(f"User {user} is not a member of group {group}")
+            raise serializers.ValidationError("Not a member of this group.")
+        
+        # Check for unique round name
+        round_name = serializer.validated_data.get('round_name', '')
+        if round_name and RoundContribution.objects.filter(payment_group=group, round_name=round_name).exists():
+            raise serializers.ValidationError(f"A round with name '{round_name}' already exists in this group.")
+        
+        existing_rounds = RoundContribution.objects.filter(payment_group=group).count()
+        round_number = serializer.validated_data.get('round_number', existing_rounds + 1)
+        self.logger.debug(f"Round number: {round_number}, Existing rounds: {existing_rounds}")
+        
+        # Get previous round for position copying
+        use_previous_positions = serializer.validated_data.get('use_previous_positions', False)
+        previous_round = None
+        if use_previous_positions:
+            previous_round = RoundContribution.objects.filter(
+                payment_group=group
+            ).order_by('-round_number').first()
+            if previous_round:
+                self.logger.debug(f"Using positions from previous round: {previous_round.id}")
+            
+        round_obj = serializer.save(
+            status='pending_approval',
+            round_number=round_number,
+            start_date=timezone.now(),
+            use_previous_positions=use_previous_positions,
+            previous_round=previous_round,
+            currency=serializer.validated_data.get('currency') or user.preferred_currency or 'KES'
+        )
+        self.logger.debug(f"Round created: {round_obj.id}")
+        round_obj.approvals.add(member)
+        self.logger.debug(f"Round approval added for member: {member}")
+        
+        # Setup positions
+        group_members = list(group.members.filter(is_active=True))
+        if use_previous_positions and previous_round:
+            previous_positions = RoundPosition.objects.filter(payment_group=group, round=previous_round)
+            for pos in previous_positions:
+                RoundPosition.objects.create(
+                    payment_group=group,
+                    round=round_obj,
+                    member=pos.member,
+                    position_number=pos.position_number
+                )
+            self.logger.debug(f"Copied {previous_positions.count()} positions from previous round")
+        elif round_obj.assignment_method == 'random':
+            import random
+            random.shuffle(group_members)
+            for i, m in enumerate(group_members, start=1):
+                RoundPosition.objects.create(
+                    payment_group=group,
+                    round=round_obj,
+                    member=m,
+                    position_number=i
+                )
+            self.logger.debug("Generated random positions")
+            
+        # Send notifications to all group members
+        for gm in group_members:
+            if gm.payment_profile.user.user != user:
+                create_notification(
+                    recipient=gm.payment_profile.user.user,
+                    notification_type='group_round',
+                    message=f"New round '{round_obj.round_name or round_obj.round_number}' needs your approval in {group.name}",
+                    actor=user,
+                    action_url=f"/payments/groups/{group.id}?tab=rounds",
+                    extra_data={'group_id': str(group.id), 'round_id': str(round_obj.id)}
+                )
+
+    @action(detail=True, methods=['get'], url_path='approval-status')
+    def approval_status(self, request, pk=None):
+        round_obj = self.get_object()
+        member_count = round_obj.payment_group.members.filter(is_active=True).count()
+        approvals = round_obj.approvals.all()
+        rejections = round_obj.rejections.all()
+        
+        def get_member_info(member):
+            name = str(member.id)
+            pic = None
+            try:
+                profile = member.payment_profile.user
+                auth_user = profile.user
+                
+                full_name = f"{auth_user.first_name} {auth_user.last_name}".strip()
+                name = full_name if full_name else auth_user.email
+                
+                if profile.profile_picture:
+                    try:
+                        pic = request.build_absolute_uri(profile.profile_picture.url)
+                    except ValueError:
+                        pass
+                elif hasattr(auth_user, 'user_profile') and auth_user.user_profile.avatar:
+                    try:
+                        pic = request.build_absolute_uri(auth_user.user_profile.avatar.url)
+                    except ValueError:
+                        pass
+            except Exception as e:
+                import logging
+                logging.error(f"Error in get_member_info: {str(e)}")
+            return name, pic
+
+        approval_data = []
+        for member in approvals:
+            name, pic = get_member_info(member)
+            approval_data.append({
+                'member_id': str(member.id),
+                'member_name': name,
+                'profile_picture': pic,
+                'voted': 'approve',
+                'note': round_obj.approval_notes.get(str(member.id), '')
+            })
+        for member in rejections:
+            name, pic = get_member_info(member)
+            approval_data.append({
+                'member_id': str(member.id),
+                'member_name': name,
+                'profile_picture': pic,
+                'voted': 'reject',
+                'note': round_obj.approval_notes.get(str(member.id), '')
+            })
+        
+        threshold = round_obj.payment_group.approval_threshold
+        current_percentage = (approvals.count() / member_count * 100) if member_count > 0 else 0
+        
+        # Override threshold if start_condition is all_members
+        if round_obj.start_condition == 'all_members':
+            threshold = 100.0
+            
+        return Response({
+            'round_id': str(round_obj.id),
+            'round_number': round_obj.round_number,
+            'status': round_obj.status,
+            'member_count': member_count,
+            'approvals_count': approvals.count(),
+            'rejections_count': rejections.count(),
+            'approval_percentage': round(current_percentage, 1),
+            'required_threshold': threshold,
+            'threshold_met': current_percentage >= threshold,
+            'votes': approval_data
+        })
+
+    @action(detail=True, methods=['post'])
+    def approve_round(self, request, pk=None):
+        round_obj = self.get_object()
+        user = request.user
+        payment_profile = get_or_create_payment_profile(user)
+        
+        if round_obj.status not in ['pending_approval', 'pending']:
+            return Response({'error': 'Round is not awaiting approval'}, status=400)
+        
+        try:
+            member = PaymentGroupMember.objects.get(payment_group=round_obj.payment_group, payment_profile=payment_profile)
+        except PaymentGroupMember.DoesNotExist:
+            return Response({'error': 'Not a member of this group.'}, status=403)
+        
+        if round_obj.rejections.filter(id=member.id).exists():
+            round_obj.rejections.remove(member)
+            
+        round_obj.approvals.add(member)
+        
+        member_count = round_obj.payment_group.members.filter(is_active=True).count()
+        approval_percentage = (round_obj.approvals.count() / member_count * 100) if member_count > 0 else 0
+        
+        threshold = round_obj.payment_group.approval_threshold
+        if round_obj.start_condition == 'all_members':
+            threshold = 100.0
+            
+        if approval_percentage >= threshold and round_obj.status == 'pending_approval':
+            round_obj.status = 'pending'
+            # Notify creator
+            creator_member = round_obj.approvals.first()
+            if creator_member:
+                create_notification(
+                    recipient=creator_member.payment_profile.user.user,
+                    notification_type='group_round',
+                    message=f"Your round '{round_obj.round_name or round_obj.round_number}' has been approved and is ready to start.",
+                    action_url=f"/payments/groups/{round_obj.payment_group.id}?tab=rounds"
+                )
+        
+        round_obj.save()
+        return Response({
+            'status': 'Round approved',
+            'current_status': round_obj.status,
+            'approval_percentage': round(approval_percentage, 1),
+            'threshold_met': approval_percentage >= threshold
+        })
+
+    @action(detail=True, methods=['post'])
+    def reject_round(self, request, pk=None):
+        round_obj = self.get_object()
+        user = request.user
+        payment_profile = get_or_create_payment_profile(user)
+        
+        if round_obj.status not in ['pending_approval', 'pending']:
+            return Response({'error': 'Round is not awaiting approval'}, status=400)
+        
+        try:
+            member = PaymentGroupMember.objects.get(payment_group=round_obj.payment_group, payment_profile=payment_profile)
+        except PaymentGroupMember.DoesNotExist:
+            return Response({'error': 'Not a member of this group.'}, status=403)
+            
+        round_obj.rejections.add(member)
+        round_obj.approvals.remove(member)
+        
+        notes = request.data.get('note', '')
+        if notes:
+            round_obj.approval_notes[str(member.id)] = notes
+        
+        rejection_percentage = (round_obj.rejections.count() / max(1, round_obj.payment_group.members.filter(is_active=True).count()) * 100)
+        if rejection_percentage > 50:
+            round_obj.status = 'cancelled'
+            
+        round_obj.save()
+        return Response({
+            'status': 'Round rejected',
+            'current_status': round_obj.status,
+            'rejection_percentage': round(rejection_percentage, 1)
+        })
+
+    @action(detail=True, methods=['post'], url_path='swap-positions')
+    def swap_positions(self, request, pk=None):
+        """Allows two members to swap their positions in the round."""
+        round_obj = self.get_object()
+        user = request.user
+        payment_profile = get_or_create_payment_profile(user)
+        
+        if round_obj.status not in ['pending', 'pending_approval']:
+            return Response({'error': 'Positions can only be swapped before the round starts.'}, status=400)
+            
+        try:
+            member = PaymentGroupMember.objects.get(payment_group=round_obj.payment_group, payment_profile=payment_profile)
+        except PaymentGroupMember.DoesNotExist:
+            return Response({'error': 'Not a member of this group.'}, status=403)
+            
+        target_pos_number = request.data.get('target_position')
+        other_member_id = request.data.get('other_member_id')
+        
+        if not target_pos_number and not other_member_id:
+            return Response({'error': 'Provide target_position or other_member_id.'}, status=400)
+            
+        try:
+            with db_transaction.atomic():
+                my_pos = RoundPosition.objects.get(round=round_obj, member=member)
+                if other_member_id:
+                    other_pos = RoundPosition.objects.get(round=round_obj, member_id=other_member_id)
+                else:
+                    other_pos = RoundPosition.objects.get(round=round_obj, position_number=target_pos_number)
+                    
+                # Swap
+                temp_num = my_pos.position_number
+                my_pos.position_number = other_pos.position_number
+                other_pos.position_number = temp_num
+                
+                my_pos.save()
+                other_pos.save()
+        except RoundPosition.DoesNotExist:
+            return Response({'error': 'One or both positions not found.'}, status=404)
+        except Exception as e:
+            return Response({'error': f'Swap failed: {str(e)}'}, status=500)
+            
+        return Response({'status': 'Positions swapped successfully'})
+
+    def get_queryset(self):
+        user = self.request.user
+        payment_profile = get_or_create_payment_profile(user)
+        if not payment_profile:
+            return RoundContribution.objects.none()
+        
+        queryset = RoundContribution.objects.filter(payment_group__members__payment_profile=payment_profile).distinct()
+        
+        group_id = self.request.query_params.get('payment_group')
+        if group_id:
+            queryset = queryset.filter(payment_group_id=group_id)
+            
+        return queryset
+
+    @action(detail=True, methods=['post'])
+    def start_round(self, request, pk=None):
+        round_obj = self.get_object()
+        
+        if round_obj.status == 'pending_approval':
+            return Response({'error': 'Round must be approved by members before it can start'}, status=400)
+        if round_obj.status != 'pending':
+            return Response({'error': 'Round is already active or completed'}, status=400)
+            
+        try:
+            pos = RoundPosition.objects.get(payment_group=round_obj.payment_group, round=round_obj, position_number=1)
+            round_obj.awarded_to = pos.member
+        except RoundPosition.DoesNotExist:
+            return Response({'error': 'Positions must be assigned before starting the round'}, status=400)
+                
+        round_obj.status = 'active'
+        round_obj.start_date = timezone.now()
+        round_obj.next_contribution_date = round_obj.get_next_contribution_date()
+        round_obj.current_cycle = 1
+        round_obj.save()
+        
+        # Notify all members
+        for gm in round_obj.payment_group.members.filter(is_active=True):
+            create_notification(
+                recipient=gm.payment_profile.user.user,
+                notification_type='group_round',
+                message=f"Round '{round_obj.round_name or round_obj.round_number}' has started. Contribute {round_obj.currency} {round_obj.contribution_amount} by {round_obj.next_contribution_date.strftime('%Y-%m-%d')}.",
+                action_url=f"/payments/groups/{round_obj.payment_group.id}?tab=rounds"
+            )
+            
+        # Notify the first recipient
+        if round_obj.awarded_to:
+            create_notification(
+                recipient=round_obj.awarded_to.payment_profile.user.user,
+                notification_type='group_round',
+                message=f"You are the first recipient for round '{round_obj.round_name or round_obj.round_number}'.",
+                action_url=f"/payments/groups/{round_obj.payment_group.id}?tab=rounds"
+            )
+        
+        return Response({
+            'status': 'Round started',
+            'awarded_to': str(round_obj.awarded_to.id) if round_obj.awarded_to else None,
+            'round_number': round_obj.round_number,
+            'current_cycle': 1
+        })
+
+    @action(detail=True, methods=['post'])
+    @db_transaction.atomic
+    def randomize_positions(self, request, pk=None):
+        """Randomly assign positions for all active members in this round."""
+        round_obj = self.get_object()
+        group = round_obj.payment_group
+        
+        if round_obj.status not in ['pending', 'pending_approval']:
+             return Response({'error': 'Cannot randomize positions for active or completed rounds.'}, status=400)
+             
+        from Payment.models import RoundPosition
+        RoundPosition.objects.filter(round=round_obj).delete()
+        
+        members = list(group.members.filter(is_active=True))
+        import random
+        random.shuffle(members)
+        
+        created_positions = []
+        for index, member in enumerate(members):
+            pos = RoundPosition.objects.create(
+                payment_group=group,
+                round=round_obj,
+                member=member,
+                position_number=index + 1
+            )
+            created_positions.append(pos)
+            
+        return Response({'status': 'positions randomized', 'count': len(created_positions)})
+
+    @action(detail=True, methods=['post'])
+    @db_transaction.atomic
+    def contribute(self, request, pk=None):
+        """Contribute to a specific round cycle."""
+        round_obj = self.get_object()
+        user = request.user
+        payment_profile = get_or_create_payment_profile(user)
+        
+        if round_obj.status != 'active':
+            return Response({'error': 'Round is not active.'}, status=400)
+        
+        try:
+            member = PaymentGroupMember.objects.get(payment_group=round_obj.payment_group, payment_profile=payment_profile)
+        except PaymentGroupMember.DoesNotExist:
+            return Response({'error': 'Not a member of this group.'}, status=403)
+            
+        amount = Decimal(str(request.data.get('amount', round_obj.contribution_amount)))
+        on_behalf_of_id = request.data.get('on_behalf_of')
+        
+        target_member = member
+        if on_behalf_of_id:
+            try:
+                target_member = PaymentGroupMember.objects.get(id=on_behalf_of_id, payment_group=round_obj.payment_group)
+            except (PaymentGroupMember.DoesNotExist, ValueError):
+                return Response({'error': 'Target member not found in this group'}, status=status.HTTP_404_NOT_FOUND)
+        
+        # Check if already contributed to THIS CYCLE
+        if RoundMemberContribution.objects.filter(round=round_obj, member=target_member, cycle_number=round_obj.current_cycle).exists():
+             return Response({'error': f'Member {target_member} has already contributed to cycle {round_obj.current_cycle}.'}, status=400)
+             
+        # Check balance
+        if payment_profile.comrade_balance < amount:
+            return Response({'error': 'Insufficient wallet balance.'}, status=400)
+            
+        # Deduct
+        payment_profile.comrade_balance -= amount
+        payment_profile.save()
+        
+        # Record using model method
+        contribution, error = round_obj.record_contribution(
+            member=target_member,
+            amount=amount,
+            on_behalf_of=member if on_behalf_of_id else None,
+            notes=request.data.get('notes', '')
+        )
+        
+        if error:
+            return Response({'error': error}, status=400)
+                
+        return Response({'status': 'contribution recorded', 'round': RoundContributionSerializer(round_obj, context={'request': request}).data})
+
+    @action(detail=True, methods=['post'])
+    @db_transaction.atomic
+    def claim(self, request, pk=None):
+        """Claim the collected funds for the current cycle."""
+        round_obj = self.get_object()
+        user = request.user
+        payment_profile = get_or_create_payment_profile(user)
+        
+        if round_obj.claim_status != 'unclaimed':
+            return Response({'error': 'Funds are not ready to be claimed.'}, status=400)
+            
+        try:
+            member = PaymentGroupMember.objects.get(payment_group=round_obj.payment_group, payment_profile=payment_profile)
+        except PaymentGroupMember.DoesNotExist:
+            return Response({'error': 'Not a member of this group.'}, status=403)
+            
+        # The requester must be the awarded member for the cycle that just completed
+        # The history_entry tracks the last completed cycle
+        if not round_obj.award_history:
+            return Response({'error': 'No completed cycles found.'}, status=400)
+            
+        # Find all unclaimed entries for this member
+        unclaimed_entries = [
+            (i, h) for i, h in enumerate(round_obj.award_history)
+            if str(h.get('member_id')) == str(member.id) and not h.get('claimed')
+        ]
+        
+        if not unclaimed_entries:
+            return Response({'error': 'No unclaimed payouts found for you in this round.'}, status=403)
+            
+        destination = request.data.get('destination', 'wallet')
+        claim_mode = request.data.get('claim_mode', 'wallet')
+        recipient_id = request.data.get('recipient_id')
+        total_amount = Decimal('0')
+        claimed_at = timezone.now()
+        
+        for idx, entry in unclaimed_entries:
+            amount = Decimal(str(entry.get('amount', 0)))
+            total_amount += amount
+            
+            # Update history entry
+            entry['claimed'] = True
+            entry['claimed_at'] = claimed_at.isoformat()
+            round_obj.award_history[idx] = entry
+            
+        if claim_mode == 'send_to_user' and recipient_id:
+            # Find recipient and transfer to their wallet
+            from Authentication.models import CustomUser
+            try:
+                recipient_user = CustomUser.objects.get(id=recipient_id)
+                recipient_profile = get_or_create_payment_profile(recipient_user)
+                recipient_profile.comrade_balance += total_amount
+                recipient_profile.save()
+                destination = f'user_{recipient_id}'
+            except CustomUser.DoesNotExist:
+                return Response({'error': 'Recipient user not found.'}, status=404)
+        elif destination == 'wallet':
+            payment_profile.comrade_balance += total_amount
+            payment_profile.save()
+        elif destination in ['mpesa', 'bank', 'card']:
+            # Process external payout (integrate with payment gateway via .env)
+            payment_profile.comrade_balance += total_amount
+            payment_profile.save()
+        else:
+            return Response({'error': 'Invalid destination.'}, status=400)
+            
+        round_obj.claim_status = 'claimed'
+        round_obj.claimed_at = claimed_at
+        round_obj.claim_destination = destination
+        round_obj.save()
+        
+        return Response({'status': 'payouts claimed', 'amount': float(total_amount)})
+        
+        # Notify group
+        for gm in round_obj.payment_group.members.filter(is_active=True):
+            if gm.id != member.id:
+                create_notification(
+                    recipient=gm.payment_profile.user.user,
+                    notification_type='group_claim',
+                    message=f"{member.payment_profile.user.user.get_full_name()} has claimed their payout from round '{round_obj.round_name or round_obj.round_number}'.",
+                    action_url=f"/payments/groups/{round_obj.payment_group.id}?tab=rounds"
+                )
+        
+        return Response({'status': 'Funds claimed successfully.', 'destination': destination, 'claim_mode': claim_mode, 'amount': float(total_amount)})
+
+    @action(detail=True, methods=['get'])
+    def detail_view(self, request, pk=None):
+        """Rich detail view for the round."""
+        round_obj = self.get_object()
+        serializer = self.get_serializer(round_obj)
+        return Response(serializer.data)
+
+
+
+class WithdrawalRequestViewSet(ModelViewSet):
+    queryset = WithdrawalRequest.objects.all()
+    serializer_class = WithdrawalRequestSerializer
+    permission_classes = [IsAuthenticated]
+    logger = logging.getLogger(__name__)
+
+    def get_queryset(self):
+        user = self.request.user
+        payment_profile = get_or_create_payment_profile(user)
+        if not payment_profile:
+            return WithdrawalRequest.objects.none()
+        # Return withdrawals for groups the user is a member of
+        queryset = WithdrawalRequest.objects.filter(payment_group__members__payment_profile=payment_profile).distinct()
+        
+        group_id = self.request.query_params.get('payment_group', None)
+        if group_id:
+            queryset = queryset.filter(payment_group_id=group_id)
+            
+        return queryset
+
+    def perform_create(self, serializer):
+        user = self.request.user
+        payment_profile = get_or_create_payment_profile(user)
+        if not payment_profile:
+            raise serializers.ValidationError("Could not find payment profile")
+        
+        payment_group_id = self.request.data.get('payment_group')
+        if not payment_group_id:
+            raise serializers.ValidationError("payment_group is required")
+        
+        try:
+            member = PaymentGroupMember.objects.get(
+                payment_group_id=payment_group_id,
+                payment_profile=payment_profile
+            )
+        except PaymentGroupMember.DoesNotExist:
+            raise serializers.ValidationError("You are not a member of this group")
+        
+        serializer.save(
+            requester=member,
+            destination_wallet=payment_profile
+        )
+        
+    @action(detail=True, methods=['post'])
+    @db_transaction.atomic
+    def approve(self, request, pk=None):
+        """Approve a withdrawal request."""
+        withdrawal = self.get_object()
+        user = request.user
+        payment_profile = get_or_create_payment_profile(user)
+        
+        group = withdrawal.payment_group
+        try:
+            admin_member = PaymentGroupMember.objects.get(payment_group=group, payment_profile=payment_profile)
+            
+            # Hierarchy Logic
+            if group.hierarchy_mode:
+                # If group has hierarchy mode, and user is not creator, check if they are an admin
+                if group.creator != payment_profile and not admin_member.is_admin:
+                     return Response({'error': 'Hierarchy mode active: Approval required from higher authority (Admin/Creator).'}, status=403)
+                
+                # Threshold logic: Large withdrawals (> 25% of group fund) require Creator specifically
+                if withdrawal.amount > (group.current_amount * Decimal('0.25')) and group.creator != payment_profile:
+                     return Response({'error': 'Large withdrawal threshold reached. Approval from group creator required.'}, status=403)
+            else:
+                # Standard mode: any admin can approve
+                if not admin_member.is_admin and group.creator != payment_profile:
+                     return Response({'error': 'Only admins can approve withdrawals.'}, status=403)
+                     
+        except PaymentGroupMember.DoesNotExist:
+            return Response({'error': 'You are not a member of this group.'}, status=403)
+        withdrawal.status = 'approved'
+        withdrawal.approved_by = admin_member
+        withdrawal.approval_date = timezone.now()
+        
+        # Process the payout to withdrawal.destination_wallet
+        deduction = Decimal('0.00')
+        if withdrawal.withdrawal_type == 'exit' and not withdrawal.payment_group.is_matured and getattr(withdrawal.payment_group, 'is_lifetime', False) == False:
+            deduction = Decimal(str(withdrawal.calculate_immature_deduction()))
+            withdrawal.immature_exit_deduction = deduction
+            
+        payout = withdrawal.amount - deduction
+        withdrawal.destination_wallet.comrade_balance += payout
+        withdrawal.destination_wallet.save()
+        
+        # Deduct from group amount
+        withdrawal.payment_group.current_amount -= payout
+        withdrawal.payment_group.save()
+        
+        withdrawal.processed_at = timezone.now()
+        withdrawal.status = 'completed'
+        withdrawal.save()
+        
+        return Response({'status': 'approved and completed', 'withdrawal': WithdrawalRequestSerializer(withdrawal).data})
+        
+    @action(detail=True, methods=['post'])
+    @db_transaction.atomic
+    def reject(self, request, pk=None):
+        """Reject a withdrawal request."""
+        withdrawal = self.get_object()
+        user = request.user
+        payment_profile = get_or_create_payment_profile(user)
+        
+        try:
+            admin_member = PaymentGroupMember.objects.get(payment_group=withdrawal.payment_group, payment_profile=payment_profile)
+            if not admin_member.is_admin and withdrawal.payment_group.creator != payment_profile:
+                 return Response({'error': 'Only admins can reject withdrawals.'}, status=403)
+        except PaymentGroupMember.DoesNotExist:
+            return Response({'error': 'You are not a member of this group.'}, status=403)
+            
+        withdrawal.status = 'rejected'
+        withdrawal.rejection_reason = request.data.get('reason', 'No reason provided')
+        withdrawal.save()
+        
+        return Response({'status': 'rejected', 'withdrawal': WithdrawalRequestSerializer(withdrawal).data})
+
+
+class BenefitDistributionRuleViewSet(ModelViewSet):
+    queryset = BenefitDistributionRule.objects.all()
+    serializer_class = BenefitDistributionRuleSerializer
+    permission_classes = [IsAuthenticated]
+    
+    def get_queryset(self):
+        user = self.request.user
+        payment_profile = get_or_create_payment_profile(user)
+        if not payment_profile:
+            return BenefitDistributionRule.objects.none()
+        return BenefitDistributionRule.objects.filter(payment_group__members__payment_profile=payment_profile).distinct()
+
+
+class GroupSettingsChangeRequestViewSet(ModelViewSet):
+    queryset = GroupSettingsChangeRequest.objects.all()
+    serializer_class = GroupSettingsChangeRequestSerializer
+    permission_classes = [IsAuthenticated]
+    
+    def get_queryset(self):
+        user = self.request.user
+        payment_profile = get_or_create_payment_profile(user)
+        if not payment_profile:
+            return GroupSettingsChangeRequest.objects.none()
+        return GroupSettingsChangeRequest.objects.filter(payment_group__members__payment_profile=payment_profile).distinct()
+    @action(detail=True, methods=['post'])
+    def vote(self, request, pk=None):
+        """Vote on a settings change request."""
+        change_req = self.get_object()
+        user = request.user
+        payment_profile = get_or_create_payment_profile(user)
+        vote_type = request.data.get('vote') # 'for' or 'against'
+        
+        try:
+            member = PaymentGroupMember.objects.get(payment_group=change_req.payment_group, payment_profile=payment_profile)
+        except PaymentGroupMember.DoesNotExist:
+            return Response({'error': 'Not a member of this group.'}, status=403)
+            
+        # Check if already voted
+        # In a real scenario, we'd have a separate table for votes to prevent multiple voting
+        # For now, let's just increment and check status
+        if vote_type == 'for':
+            change_req.votes_for += 1
+        else:
+            change_req.votes_against += 1
+            
+        note = request.data.get('note', '')
+        if note:
+            # Store sentiments safely
+            current_sentiments = change_req.voter_sentiments
+            current_sentiments[str(member.id)] = {'vote': vote_type, 'note': note}
+            change_req.voter_sentiments = current_sentiments
+            
+        # Check threshold
+        threshold = change_req.payment_group.approval_threshold
+        member_count = change_req.payment_group.members.count()
+        required_votes = (threshold / 100) * member_count
+        
+        if change_req.votes_for >= required_votes:
+            self._apply_settings_change(change_req)
+            change_req.status = 'approved'
+            
+        change_req.save()
+        return Response({'status': 'vote recorded', 'request': GroupSettingsChangeRequestSerializer(change_req).data})
+
+    def _apply_settings_change(self, change_req):
+        """Apply the proposed changes to the group."""
+        group = change_req.payment_group
+        new_values = change_req.new_values
+        
+        if change_req.change_type == 'settings_update':
+            for key, value in new_values.items():
+                if hasattr(group, key):
+                    setattr(group, key, value)
+            group.save()
+
+
+class KittyViewSet(ModelViewSet):
+    '''
+    ViewSet for managing Kitties, which are specialized PaymentGroups.
+    '''
+    serializer_class = KittySerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        user = self.request.user
+        payment_profile = get_or_create_payment_profile(user)
+        if not payment_profile:
+            return PaymentGroups.objects.none()
+
+        # Kitties are PaymentGroups where is_kitty is True or group_type is 'kitty'
+        queryset = PaymentGroups.objects.filter(
+            Q(is_kitty=True) | Q(group_type='kitty'),
+            members__payment_profile=payment_profile
+        ).distinct()
+
+        parent_group = self.request.query_params.get('parent_group', None)
+        if parent_group:
+            queryset = queryset.filter(parent_group_id=parent_group)
+
+        return queryset
+
+    def perform_create(self, serializer):
+        user = self.request.user
+        payment_profile = get_or_create_payment_profile(user)
+        
+        serializer.save(
+            creator=payment_profile,
+            is_kitty=True,
+            group_type='kitty'
+        )
+
+
+# ============================================================================
+# PROVIDER REGISTRATION & MANAGEMENT VIEWS
+# ============================================================================
+
+class ProviderRegistrationViewSet(ModelViewSet):
+    serializer_class = ProviderRegistrationSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        user = self.request.user
+        profile = Profile.objects.get(user=user)
+        return ProviderRegistration.objects.filter(user=profile)
+
+    def get_serializer_class(self):
+        if self.action == 'list':
+            return ProviderRegistrationListSerializer
+        return ProviderRegistrationSerializer
+
+    def perform_create(self, serializer):
+        profile = Profile.objects.get(user=self.request.user)
+        provider = serializer.save(user=profile)
+
+        if provider.auto_create_kitty:
+            payment_profile = get_or_create_payment_profile(self.request.user)
+            kitty = PaymentGroups.objects.create(
+                name=provider.kitty_name or f"{provider.business_name} Operations Kit",
+                description=f"Operations kitty for {provider.business_name}",
+                creator=payment_profile,
+                group_type='kitty',
+                is_kitty=True,
+                target_amount=provider.kitty_target_amount,
+                auto_purchase=False,
+                requires_approval=True,
+                contribution_type='flexible',
+            )
+            provider.linked_payment_group = kitty
+            provider.save()
+
+            PaymentGroupMember.objects.create(
+                payment_group=kitty,
+                payment_profile=payment_profile,
+                is_admin=True,
+            )
+
+            create_notification(
+                recipient=self.request.user,
+                notification_type='kitty_created',
+                message=f"Kitty '{kitty.name}' has been created for {provider.business_name}",
+                action_url=f"/payments/groups/{kitty.id}",
+            )
+
+    @action(detail=True, methods=['get'])
+    def dashboard(self, request, pk=None):
+        provider = self.get_object()
+        stats = {
+            'total_transactions': provider.transactions.count(),
+            'total_queries': provider.queries.count(),
+            'pending_applications': provider.applications.filter(status__in=['submitted', 'under_review']).count(),
+            'active_products': provider.service_products.filter(status='active').count(),
+            'staff_count': provider.staff_members.filter(status='active').count(),
+            'total_volume': float(provider.transactions.aggregate(Sum('amount'))['amount__sum'] or 0),
+            'pending_queries': provider.queries.filter(status__in=['open', 'in_progress', 'pending_response']).count(),
+        }
+        return Response(stats)
+
+    @action(detail=True, methods=['post'])
+    def submit(self, request, pk=None):
+        provider = self.get_object()
+        if provider.status != 'draft':
+            return Response({'error': 'Provider can only be submitted from draft status'}, status=status.HTTP_400_BAD_REQUEST)
+        provider.status = 'submitted'
+        provider.save()
+        create_notification(
+            recipient=request.user,
+            notification_type='provider_submitted',
+            message=f"Provider registration for {provider.business_name} submitted for review",
+            action_url=f"/payments/provider-registrations/{provider.id}",
+        )
+        return Response({'status': 'submitted', 'provider': ProviderRegistrationSerializer(provider).data})
+
+    @action(detail=True, methods=['post'])
+    def approve(self, request, pk=None):
+        provider = self.get_object()
+        profile = Profile.objects.get(user=request.user)
+        if not request.user.is_staff and not request.user.is_superuser:
+            return Response({'error': 'Only admins can approve providers'}, status=status.HTTP_403_FORBIDDEN)
+        provider.status = 'approved'
+        provider.reviewed_by = profile
+        provider.reviewed_at = timezone.now()
+        provider.save()
+        create_notification(
+            recipient=provider.user.user,
+            notification_type='provider_approved',
+            message=f"Provider registration for {provider.business_name} has been approved",
+            action_url=f"/payments/provider-registrations/{provider.id}",
+        )
+        return Response({'status': 'approved', 'provider': ProviderRegistrationSerializer(provider).data})
+
+    @action(detail=True, methods=['post'])
+    def reject(self, request, pk=None):
+        provider = self.get_object()
+        profile = Profile.objects.get(user=request.user)
+        if not request.user.is_staff and not request.user.is_superuser:
+            return Response({'error': 'Only admins can reject providers'}, status=status.HTTP_403_FORBIDDEN)
+        provider.status = 'rejected'
+        provider.rejection_reason = request.data.get('reason', '')
+        provider.reviewed_by = profile
+        provider.reviewed_at = timezone.now()
+        provider.save()
+        create_notification(
+            recipient=provider.user.user,
+            notification_type='provider_rejected',
+            message=f"Provider registration for {provider.business_name} has been rejected",
+            action_url=f"/payments/provider-registrations/{provider.id}",
+        )
+        return Response({'status': 'rejected', 'reason': provider.rejection_reason})
+
+    @action(detail=False, methods=['get'])
+    def public_providers(self, request):
+        category = request.query_params.get('category')
+        provider_type = request.query_params.get('provider_type')
+        qs = ProviderRegistration.objects.filter(status='approved', is_active=True)
+        if category:
+            qs = qs.filter(category=category)
+        if provider_type:
+            qs = qs.filter(provider_type=provider_type)
+        return Response(ProviderRegistrationListSerializer(qs, many=True).data)
+
+
+class ProviderDocumentViewSet(ModelViewSet):
+    serializer_class = ProviderDocumentSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        profile = Profile.objects.get(user=self.request.user)
+        return ProviderDocument.objects.filter(provider__user=profile)
+
+    def perform_create(self, serializer):
+        provider_id = self.request.data.get('provider')
+        try:
+            provider = ProviderRegistration.objects.get(id=provider_id, user__user=self.request.user)
+        except ProviderRegistration.DoesNotExist:
+            raise serializers.ValidationError("Provider not found or not authorized")
+        serializer.save(provider=provider)
+
+    @action(detail=True, methods=['post'])
+    def verify(self, request, pk=None):
+        doc = self.get_object()
+        profile = Profile.objects.get(user=request.user)
+        if not request.user.is_staff and not request.user.is_superuser:
+            return Response({'error': 'Only admins can verify documents'}, status=status.HTTP_403_FORBIDDEN)
+        doc.status = request.data.get('status', 'approved')
+        doc.reviewer_notes = request.data.get('notes', '')
+        doc.verified_by = profile
+        doc.verified_at = timezone.now()
+        doc.save()
+        return Response({'status': doc.status, 'notes': doc.reviewer_notes})
+
+
+class ProviderStaffViewSet(ModelViewSet):
+    serializer_class = ProviderStaffSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        profile = Profile.objects.get(user=self.request.user)
+        return ProviderStaff.objects.filter(provider__user=profile)
+
+    def perform_create(self, serializer):
+        provider_id = self.request.data.get('provider')
+        try:
+            provider = ProviderRegistration.objects.get(id=provider_id, user__user=self.request.user)
+        except ProviderRegistration.DoesNotExist:
+            raise serializers.ValidationError("Provider not found or not authorized")
+        creator_profile = Profile.objects.get(user=self.request.user)
+        serializer.save(provider=provider, created_by=creator_profile)
+
+    @action(detail=True, methods=['post'])
+    def activate(self, request, pk=None):
+        staff = self.get_object()
+        staff.status = 'active'
+        staff.save()
+        return Response({'status': 'active'})
+
+    @action(detail=True, methods=['post'])
+    def deactivate(self, request, pk=None):
+        staff = self.get_object()
+        staff.status = 'inactive'
+        staff.save()
+        return Response({'status': 'inactive'})
+
+    @action(detail=True, methods=['post'])
+    def update_permissions(self, request, pk=None):
+        staff = self.get_object()
+        for field in ['can_handle_queries', 'can_review_applications', 'can_manage_transactions',
+                      'can_approve_claims', 'email_notifications']:
+            if field in request.data:
+                setattr(staff, field, request.data[field])
+        if 'max_transaction_limit' in request.data:
+            staff.max_transaction_limit = request.data['max_transaction_limit']
+        if 'assigned_categories' in request.data:
+            staff.assigned_categories = request.data['assigned_categories']
+        if 'working_hours' in request.data:
+            staff.working_hours = request.data['working_hours']
+        staff.save()
+        return Response(ProviderStaffSerializer(staff).data)
+
+    @action(detail=False, methods=['get'])
+    def by_provider(self, request):
+        provider_id = request.query_params.get('provider_id')
+        if not provider_id:
+            return Response({'error': 'provider_id is required'}, status=status.HTTP_400_BAD_REQUEST)
+        staff = ProviderStaff.objects.filter(provider_id=provider_id, status='active')
+        return Response(ProviderStaffSerializer(staff, many=True).data)
+
+
+class ServiceProductViewSet(ModelViewSet):
+    serializer_class = ServiceProductSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        profile = Profile.objects.get(user=self.request.user)
+        return ServiceProduct.objects.filter(provider__user=profile)
+
+    def perform_create(self, serializer):
+        provider_id = self.request.data.get('provider')
+        try:
+            provider = ProviderRegistration.objects.get(id=provider_id, user__user=self.request.user)
+        except ProviderRegistration.DoesNotExist:
+            raise serializers.ValidationError("Provider not found or not authorized")
+        product = serializer.save(provider=provider)
+
+        if product.auto_link_kitty and provider.linked_payment_group:
+            product.linked_kitty = provider.linked_payment_group
+            product.save()
+
+    @action(detail=True, methods=['post'])
+    def activate(self, request, pk=None):
+        product = self.get_object()
+        product.status = 'active'
+        product.is_active = True
+        product.save()
+        return Response({'status': 'active'})
+
+    @action(detail=True, methods=['post'])
+    def suspend(self, request, pk=None):
+        product = self.get_object()
+        product.status = 'suspended'
+        product.is_active = False
+        product.save()
+        return Response({'status': 'suspended'})
+
+    @action(detail=False, methods=['get'])
+    def public_products(self, request):
+        category = request.query_params.get('category')
+        service_type = request.query_params.get('service_type')
+        qs = ServiceProduct.objects.filter(status='active', is_active=True)
+        if category:
+            qs = qs.filter(category=category)
+        if service_type:
+            qs = qs.filter(service_type=service_type)
+        return Response(ServiceProductSerializer(qs, many=True).data)
+
+    @action(detail=False, methods=['get'])
+    def by_provider(self, request):
+        provider_id = request.query_params.get('provider_id')
+        if not provider_id:
+            return Response({'error': 'provider_id is required'}, status=status.HTTP_400_BAD_REQUEST)
+        products = ServiceProduct.objects.filter(provider_id=provider_id, status='active')
+        return Response(ServiceProductSerializer(products, many=True).data)
+
+
+class ProviderTransactionViewSet(ModelViewSet):
+    serializer_class = ProviderTransactionSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        profile = Profile.objects.get(user=self.request.user)
+        return ProviderTransaction.objects.filter(provider__user=profile)
+
+    def perform_create(self, serializer):
+        profile = Profile.objects.get(user=self.request.user)
+        tx = serializer.save(user=profile, status='pending')
+        tx.commission_amount = tx.amount * tx.provider.commission_rate
+        tx.save()
+
+    @action(detail=True, methods=['post'])
+    def process(self, request, pk=None):
+        tx = self.get_object()
+        profile = Profile.objects.get(user=self.request.user)
+        try:
+            staff = ProviderStaff.objects.get(provider=tx.provider, user=profile, can_manage_transactions=True)
+        except ProviderStaff.DoesNotExist:
+            return Response({'error': 'You do not have permission to process transactions'}, status=status.HTTP_403_FORBIDDEN)
+        tx.status = 'completed'
+        tx.processed_by = staff
+        tx.processed_at = timezone.now()
+        tx.save()
+        return Response({'status': 'completed'})
+
+    @action(detail=True, methods=['post'])
+    def refund(self, request, pk=None):
+        tx = self.get_object()
+        if tx.status != 'completed':
+            return Response({'error': 'Only completed transactions can be refunded'}, status=status.HTTP_400_BAD_REQUEST)
+        tx.status = 'refunded'
+        tx.save()
+        return Response({'status': 'refunded'})
+
+    @action(detail=False, methods=['get'])
+    def summary(self, request):
+        profile = Profile.objects.get(user=self.request.user)
+        txs = ProviderTransaction.objects.filter(provider__user=profile)
+        return Response({
+            'total_transactions': txs.count(),
+            'total_volume': float(txs.aggregate(Sum('amount'))['amount__sum'] or 0),
+            'total_commission': float(txs.aggregate(Sum('commission_amount'))['commission_amount__sum'] or 0),
+            'pending_count': txs.filter(status='pending').count(),
+            'completed_count': txs.filter(status='completed').count(),
+        })
+
+
+class ProviderQueryViewSet(ModelViewSet):
+    serializer_class = ProviderQuerySerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        profile = Profile.objects.get(user=self.request.user)
+        return ProviderQuery.objects.filter(provider__user=profile)
+
+    def perform_create(self, serializer):
+        provider_id = self.request.data.get('provider')
+        try:
+            provider = ProviderRegistration.objects.get(id=provider_id)
+        except ProviderRegistration.DoesNotExist:
+            raise serializers.ValidationError("Provider not found")
+        profile = Profile.objects.get(user=self.request.user)
+        serializer.save(provider=provider, user=profile)
+
+    @action(detail=True, methods=['post'])
+    def assign(self, request, pk=None):
+        query = self.get_object()
+        staff_id = request.data.get('staff_id')
+        try:
+            staff = ProviderStaff.objects.get(id=staff_id, provider=query.provider)
+        except ProviderStaff.DoesNotExist:
+            return Response({'error': 'Staff member not found'}, status=status.HTTP_404_NOT_FOUND)
+        query.assigned_to = staff
+        query.status = 'in_progress'
+        query.save()
+        return Response({'assigned_to': staff.user.user.get_full_name(), 'status': query.status})
+
+    @action(detail=True, methods=['post'])
+    def resolve(self, request, pk=None):
+        query = self.get_object()
+        profile = Profile.objects.get(user=self.request.user)
+        try:
+            staff = ProviderStaff.objects.get(provider=query.provider, user=profile)
+        except ProviderStaff.DoesNotExist:
+            return Response({'error': 'Not authorized'}, status=status.HTTP_403_FORBIDDEN)
+        query.status = 'resolved'
+        query.resolution_notes = request.data.get('notes', '')
+        query.resolved_by = staff
+        query.resolved_at = timezone.now()
+        query.save()
+        return Response({'status': 'resolved'})
+
+    @action(detail=True, methods=['post'])
+    def escalate(self, request, pk=None):
+        query = self.get_object()
+        query.status = 'escalated'
+        query.save()
+        create_notification(
+            recipient=query.provider.user.user,
+            notification_type='query_escalated',
+            message=f"Query '{query.subject}' has been escalated",
+            action_url=f"/payments/provider-queries/{query.id}",
+        )
+        return Response({'status': 'escalated'})
+
+    @action(detail=True, methods=['post'])
+    def rate(self, request, pk=None):
+        query = self.get_object()
+        query.satisfaction_rating = request.data.get('rating')
+        query.satisfaction_comment = request.data.get('comment', '')
+        query.save()
+        return Response({'rating': query.satisfaction_rating})
+
+    @action(detail=False, methods=['get'])
+    def my_queries(self, request):
+        profile = Profile.objects.get(user=request.user)
+        queries = ProviderQuery.objects.filter(user=profile).order_by('-created_at')
+        return Response(ProviderQuerySerializer(queries, many=True).data)
+
+
+class ProviderApplicationViewSet(ModelViewSet):
+    serializer_class = ProviderApplicationSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        profile = Profile.objects.get(user=self.request.user)
+        return ProviderApplication.objects.filter(provider__user=profile)
+
+    def perform_create(self, serializer):
+        provider_id = self.request.data.get('provider')
+        try:
+            provider = ProviderRegistration.objects.get(id=provider_id)
+        except ProviderRegistration.DoesNotExist:
+            raise serializers.ValidationError("Provider not found")
+        profile = Profile.objects.get(user=self.request.user)
+        serializer.save(provider=provider, user=profile)
+
+    @action(detail=True, methods=['post'])
+    def submit(self, request, pk=None):
+        app = self.get_object()
+        if app.status != 'draft':
+            return Response({'error': 'Application can only be submitted from draft status'}, status=status.HTTP_400_BAD_REQUEST)
+        app.status = 'submitted'
+        app.submitted_at = timezone.now()
+        app.save()
+        create_notification(
+            recipient=app.provider.user.user,
+            notification_type='application_submitted',
+            message=f"New application from {app.user.user.get_full_name()}",
+            action_url=f"/payments/provider-applications/{app.id}",
+        )
+        return Response({'status': 'submitted'})
+
+    @action(detail=True, methods=['post'])
+    def review(self, request, pk=None):
+        app = self.get_object()
+        profile = Profile.objects.get(user=request.user)
+        try:
+            staff = ProviderStaff.objects.get(provider=app.provider, user=profile, can_review_applications=True)
+        except ProviderStaff.DoesNotExist:
+            return Response({'error': 'You do not have permission to review applications'}, status=status.HTTP_403_FORBIDDEN)
+        decision = request.data.get('decision')
+        if decision not in ['approved', 'rejected']:
+            return Response({'error': 'Decision must be approved or rejected'}, status=status.HTTP_400_BAD_REQUEST)
+        app.status = decision
+        app.reviewed_by = staff
+        app.reviewed_at = timezone.now()
+        app.review_notes = request.data.get('notes', '')
+        app.save()
+
+        if decision == 'approved':
+            if app.application_type == 'insurance_policy':
+                policy = InsurancePolicy.objects.create(
+                    user=app.user,
+                    product=app.service_product,
+                    status='active',
+                    total_premiums_due=app.service_product.price,
+                )
+                app.linked_policy = policy
+                app.save()
+            elif app.application_type == 'loan_application':
+                loan = LoanApplication.objects.create(
+                    user=app.user,
+                    loan_product=app.service_product,
+                    amount=app.application_data.get('amount', 0),
+                    tenure_months=app.application_data.get('tenure_months', 1),
+                )
+                app.linked_loan = loan
+                app.save()
+
+        create_notification(
+            recipient=app.user.user,
+            notification_type='application_reviewed',
+            message=f"Your application has been {decision}",
+            action_url=f"/payments/provider-applications/{app.id}",
+        )
+        return Response({'status': decision})
+
+    @action(detail=True, methods=['post'])
+    def request_documents(self, request, pk=None):
+        app = self.get_object()
+        required_docs = request.data.get('documents', [])
+        app.status = 'pending_documents'
+        app.required_documents = required_docs
+        app.save()
+        create_notification(
+            recipient=app.user.user,
+            notification_type='documents_required',
+            message=f"Additional documents required for your application",
+            action_url=f"/payments/provider-applications/{app.id}",
+        )
+        return Response({'status': 'pending_documents', 'required_documents': required_docs})
+
+    @action(detail=False, methods=['get'])
+    def my_applications(self, request):
+        profile = Profile.objects.get(user=request.user)
+        apps = ProviderApplication.objects.filter(user=profile).order_by('-created_at')
+        return Response(ProviderApplicationSerializer(apps, many=True).data)
+
+
+class ProviderNotificationViewSet(ModelViewSet):
+    serializer_class = ProviderNotificationSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        profile = Profile.objects.get(user=self.request.user)
+        return ProviderNotification.objects.filter(user=profile)
+
+    @action(detail=True, methods=['post'])
+    def mark_read(self, request, pk=None):
+        notification = self.get_object()
+        notification.is_read = True
+        notification.read_at = timezone.now()
+        notification.save()
+        return Response({'status': 'read'})
+
+    @action(detail=False, methods=['post'])
+    def mark_all_read(self, request):
+        profile = Profile.objects.get(user=request.user)
+        ProviderNotification.objects.filter(user=profile, is_read=False).update(is_read=True, read_at=timezone.now())
+        return Response({'status': 'all_read'})
+
+    @action(detail=False, methods=['get'])
+    def unread_count(self, request):
+        profile = Profile.objects.get(user=request.user)
+        count = ProviderNotification.objects.filter(user=profile, is_read=False).count()
+        return Response({'unread_count': count})
+
+
+class GroupAnalyticsView(APIView):
+    """Dedicated view for group analytics"""
+    permission_classes = [IsAuthenticated]
+    
+    def get(self, request, group_id):
+        import logging
+        logger = logging.getLogger('django')
+        logger.error(f"GroupAnalyticsView: group_id={group_id}")
+        
+        try:
+            group = PaymentGroups.objects.get(id=group_id)
+        except PaymentGroups.DoesNotExist:
+            logger.error(f"GroupAnalyticsView: Group {group_id} does not exist")
+            return Response({'error': 'Group not found'}, status=status.HTTP_404_NOT_FOUND)
+        except Exception as e:
+            logger.error(f"GroupAnalyticsView: Error finding group {group_id}: {str(e)}")
+            return Response({'error': f'Error finding group: {str(e)}'}, status=status.HTTP_400_BAD_REQUEST)
+        
+        payment_profile = get_or_create_payment_profile(request.user)
+        if not payment_profile:
+            return Response({'error': 'Payment profile not found'}, status=status.HTTP_400_BAD_REQUEST)
+        
+        is_member = PaymentGroupMember.objects.filter(payment_group=group, payment_profile=payment_profile).exists()
+        if not is_member and group.creator != payment_profile:
+            return Response({'error': 'Not a member'}, status=status.HTTP_403_FORBIDDEN)
+        
+        from django.db.models import Sum, Count
+        from django.db.models.functions import TruncMonth
+        
+        try:
+            monthly = list(Contribution.objects.filter(payment_group=group).annotate(
+                month=TruncMonth('contributed_at')
+            ).values('month').annotate(
+                total=Sum('amount'),
+                count=Count('id')
+            ).order_by('month'))
+        except Exception:
+            monthly = []
+        
+        try:
+            top_contributors = PaymentGroupMember.objects.filter(
+                payment_group=group
+            ).order_by('-total_contributed')[:5]
+        except Exception:
+            top_contributors = []
+        
+        top_list = []
+        for m in top_contributors:
+            try:
+                if m.is_anonymous:
+                    name = m.anonymous_alias or 'Anonymous'
+                elif m.payment_profile and m.payment_profile.user and m.payment_profile.user.user:
+                    user = m.payment_profile.user.user
+                    name = f"{user.first_name} {user.last_name}".strip() or user.email
+                else:
+                    name = 'Unknown Member'
+            except Exception:
+                name = 'Unknown Member'
+            top_list.append({
+                'name': name,
+                'contributed': str(m.total_contributed),
+                'is_anonymous': m.is_anonymous,
+            })
+        
+        try:
+            checkout_count = group.checkout_requests.count()
+            pending_count = group.checkout_requests.filter(status='pending').count()
+        except Exception:
+            checkout_count = 0
+            pending_count = 0
+        
+        return Response({
+            'monthly_trend': [
+                {'month': entry['month'].isoformat() if entry['month'] else None, 'total': str(entry['total']), 'count': entry['count']}
+                for entry in monthly
+            ],
+            'top_contributors': top_list,
+            'total_members': group.members.count(),
+            'total_contributed': str(group.current_amount),
+            'target_amount': str(group.target_amount or 0),
+            'progress': round(float(group.current_amount) / float(group.target_amount) * 100, 2) if group.target_amount and group.target_amount > 0 else 0,
+            'capacity_category': str(group.max_capacity),
+            'checkout_requests_count': checkout_count,
+            'pending_checkouts': pending_count,
+        })
+

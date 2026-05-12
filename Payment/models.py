@@ -1,3 +1,5 @@
+import uuid
+from decimal import Decimal
 from django.db import models
 from Authentication.models import Profile
 from datetime import datetime
@@ -84,10 +86,11 @@ class PaymentProfile(models.Model):
     transaction_token = models.CharField(max_length=10000, default='')
     comrade_balance = models.DecimalField(decimal_places=2, max_digits=12, default=0.00)
     profile_token = models.CharField(max_length=10000, default='', unique=True)
-    
+    preferred_currency = models.CharField(max_length=3, default='USD')
+
     # Tier Management
     tier = models.CharField(max_length=20, choices=TIER_OPT, default='free')
-    
+
     # Purchase Tracking for Limits
     monthly_purchases = models.IntegerField(default=0)
     last_purchase_month = models.IntegerField(default=1) # Month index (1-12)
@@ -112,6 +115,9 @@ class TransactionToken(models.Model):
     created_at = models.DateTimeField(default=timezone.now)
     recipient_profile = models.ForeignKey(PaymentProfile, on_delete=models.CASCADE, related_name='recipient_profile', null=True, blank=True)
     payment_group = models.ForeignKey('PaymentGroups', on_delete=models.SET_NULL, null=True, blank=True, related_name='transactions')
+    status = models.CharField(max_length=200, choices=TRANSACTION_STATUS, default='completed')
+    reversed_at = models.DateTimeField(null=True, blank=True)
+    reversal_reason = models.TextField(blank=True, null=True)
     
     class Meta:
         indexes = [
@@ -140,8 +146,10 @@ class TransactionTracker(models.Model):
 class TransactionHistory(models.Model):
     payment_profile = models.ForeignKey(PaymentProfile, on_delete=models.CASCADE)
     transaction_token = models.ForeignKey(TransactionToken, on_delete=models.CASCADE)
-    authorization_token = models.ForeignKey(PaymentAuthorization, on_delete=models.CASCADE)
-    verification_token = models.ForeignKey(PaymentVerification, on_delete=models.CASCADE)
+    authorization_token = models.ForeignKey(PaymentAuthorization, on_delete=models.CASCADE, blank=True, null=True)
+    verification_token = models.ForeignKey(PaymentVerification, on_delete=models.CASCADE, blank=True, null=True)
+    amount = models.DecimalField(decimal_places=2, max_digits=12, default=Decimal('0.00'))
+    transaction_category = models.CharField(max_length=200, default='transfer')
     payment_type = models.CharField(max_length=200, choices=PAY_TYPE, default='individual')
     status = models.CharField(max_length=200, choices=TRANSACTION_STATUS, default='pending')
     created_at = models.DateTimeField(default=timezone.now)
@@ -261,7 +269,23 @@ class PaymentGroups(models.Model):
         max_length=7, default='#6366f1', blank=True,
         help_text='Hex accent colour for UI theming, e.g. #6366f1'
     )
+    # Advanced Features
+    is_kitty = models.BooleanField(default=False, help_text='Is this a group kitty?')
+    immature_exit_penalty_rate = models.DecimalField(max_digits=5, decimal_places=2, default=2.00, help_text='Penalty % for early exit')
+    round_amount = models.DecimalField(max_digits=12, decimal_places=2, default=0.00, help_text='Default amount for rounds')
+    round_assignment_method = models.CharField(max_length=20, default='random', help_text='Default assignment method')
+    pitch_visibility = models.CharField(max_length=20, default='internal', help_text='Visibility of the pitch')
+    approval_threshold = models.IntegerField(default=51, help_text='Percentage of votes required for approval')
+    hierarchy_mode = models.CharField(max_length=20, default='flat', help_text='Hierarchy mode: flat, tiered, or strict')
+    transaction_trigger_role = models.CharField(max_length=50, default='admin', help_text='Role required to trigger group transactions')
+    allow_partial_withdrawal = models.BooleanField(default=True)
+    is_lifetime = models.BooleanField(default=False, help_text='Does the group have no expiry?')
+    is_round_contribution_enabled = models.BooleanField(default=False)
+    round_frequency = models.CharField(max_length=20, default='monthly')
+    round_persistence_mode = models.CharField(max_length=20, default='none', help_text='none, carry_over, or auto_restart')
+    round_persistence_count = models.IntegerField(default=0)
     
+    rules_text = models.TextField(blank=True, default='', help_text='Official group rules and regulations')
     created_at = models.DateTimeField(default=timezone.now)
     updated_at = models.DateTimeField(auto_now=True)
     
@@ -311,6 +335,8 @@ class GroupPost(models.Model):
     image = models.ImageField(upload_to='group_posts/', blank=True, null=True)
     is_pinned = models.BooleanField(default=False)
     reactions = models.JSONField(default=dict, blank=True, help_text='{"👍": [user_id,...], ...}')
+    upvotes = models.ManyToManyField(PaymentProfile, related_name='upvoted_group_posts', blank=True)
+    can_share = models.BooleanField(default=True)
     created_at = models.DateTimeField(default=timezone.now)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -330,7 +356,10 @@ class GroupPostReply(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     post = models.ForeignKey(GroupPost, on_delete=models.CASCADE, related_name='replies')
     author = models.ForeignKey(PaymentProfile, on_delete=models.CASCADE, related_name='group_replies')
+    parent_reply = models.ForeignKey('self', on_delete=models.CASCADE, null=True, blank=True, related_name='child_replies')
     content = models.TextField()
+    reactions = models.JSONField(default=dict, blank=True, help_text='{"👍": [user_id,...], ...}')
+    upvotes = models.ManyToManyField(PaymentProfile, related_name='upvoted_group_replies', blank=True)
     created_at = models.DateTimeField(default=timezone.now)
 
     class Meta:
@@ -380,6 +409,7 @@ class PaymentGroupMember(models.Model):
     contribution_percentage = models.DecimalField(decimal_places=2, max_digits=5, default=0.00)
     total_contributed = models.DecimalField(decimal_places=2, max_digits=12, default=0.00)
     joined_at = models.DateTimeField(default=timezone.now)
+    is_active = models.BooleanField(default=True)
     
     class Meta:
         unique_together = ['payment_group', 'payment_profile']
@@ -399,9 +429,11 @@ class Contribution(models.Model):
     import uuid
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     payment_group = models.ForeignKey(PaymentGroups, on_delete=models.CASCADE, related_name='contributions')
+    target = models.ForeignKey('GroupTarget', on_delete=models.CASCADE, null=True, blank=True, related_name='contributions')
     member = models.ForeignKey(PaymentGroupMember, on_delete=models.CASCADE)
     amount = models.DecimalField(decimal_places=2, max_digits=12)
     transaction = models.ForeignKey(TransactionToken, on_delete=models.SET_NULL, null=True, blank=True)
+    on_behalf_of = models.ForeignKey(PaymentGroupMember, on_delete=models.SET_NULL, null=True, blank=True, related_name='group_contributions_on_behalf')
     contributed_at = models.DateTimeField(default=timezone.now)
     notes = models.TextField(blank=True)
     
@@ -527,6 +559,12 @@ class GroupTarget(models.Model):
         ('equal', 'Equal Contributions'),
         ('proportional', 'Proportional Contributions'),
     )
+
+    WITHDRAWAL_MODE_CHOICES = (
+        ('free', 'Free Withdrawal'),
+        ('locked', 'Locked (No early withdrawal)'),
+        ('flexible', 'Flexible (Limited amount/time)'),
+    )
     
     # Owner for individual piggy banks (null if group piggy bank)
     owner = models.ForeignKey(PaymentProfile, on_delete=models.CASCADE, null=True, blank=True, related_name='individual_piggy_banks')
@@ -572,6 +610,12 @@ class GroupTarget(models.Model):
     
     is_bid = models.BooleanField(default=False) # Is this a bid?
     bid_status = models.CharField(max_length=20, default='pending') # pending, accumulated, confirmed
+    
+    # Withdrawal rules
+    withdrawal_mode = models.CharField(max_length=20, choices=WITHDRAWAL_MODE_CHOICES, default='free')
+    flexible_max_amount = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True)
+    flexible_min_gap_days = models.IntegerField(default=0)
+    last_withdrawal_date = models.DateTimeField(null=True, blank=True)
     
     achieved = models.BooleanField(default=False)
     achieved_at = models.DateTimeField(null=True, blank=True)
@@ -625,6 +669,26 @@ class IndividualShare(models.Model):
     current_amount = models.DecimalField(decimal_places=2, max_digits=12, default=0.00)
     quantity = models.IntegerField(default=1) # Target quantity of item
     achieved = models.BooleanField(default=False)
+
+class PiggyBankConversionRequest(models.Model):
+    STATUS_CHOICES = (
+        ('pending', 'Pending Approval'),
+        ('approved', 'Approved'),
+        ('rejected', 'Rejected'),
+        ('converted', 'Converted/Archived'),
+    )
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    piggy_bank = models.ForeignKey(GroupTarget, on_delete=models.CASCADE, related_name='conversion_requests')
+    proposed_by = models.ForeignKey(PaymentGroupMember, on_delete=models.CASCADE)
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending')
+    approval_vote = models.ForeignKey('GroupVote', on_delete=models.SET_NULL, null=True, blank=True)
+    
+    notes = models.TextField(blank=True)
+    created_at = models.DateTimeField(default=timezone.now)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return f"Conversion Request for {self.piggy_bank.name} by {self.proposed_by.payment_profile.user.user.username}"
 
 
 # ============================================================================
@@ -853,6 +917,15 @@ class GroupInvestment(models.Model):
         ('public', 'Public Pitch'),
     )
     pitch_visibility = models.CharField(max_length=20, choices=PITCH_VISIBILITY_CHOICES, default='internal')
+    approval_threshold = models.IntegerField(default=51, help_text='Percentage of votes required for approval')
+    hierarchy_mode = models.CharField(max_length=20, default='flat', help_text='Hierarchy mode: flat, tiered, or strict')
+    transaction_trigger_role = models.CharField(max_length=50, default='admin', help_text='Role required to trigger group transactions')
+    allow_partial_withdrawal = models.BooleanField(default=True)
+    is_lifetime = models.BooleanField(default=False, help_text='Does the group have no expiry?')
+    is_round_contribution_enabled = models.BooleanField(default=False)
+    round_frequency = models.CharField(max_length=20, default='monthly')
+    round_persistence_mode = models.CharField(max_length=20, default='none', help_text='none, carry_over, or auto_restart')
+    round_persistence_count = models.IntegerField(default=0)
     
     created_at = models.DateTimeField(default=timezone.now)
     updated_at = models.DateTimeField(auto_now=True)
@@ -1922,6 +1995,7 @@ class BillPayment(models.Model):
     reference = models.CharField(max_length=100, unique=True)
     payment_method = models.CharField(max_length=50, choices=PAY_OPT, default='comrade_balance')
     transaction = models.ForeignKey(TransactionToken, on_delete=models.SET_NULL, null=True, blank=True)
+    on_behalf_of = models.ForeignKey(PaymentGroupMember, on_delete=models.SET_NULL, null=True, blank=True, related_name='bill_payments_on_behalf')
     error_message = models.TextField(blank=True)
     created_at = models.DateTimeField(default=timezone.now)
     completed_at = models.DateTimeField(null=True, blank=True)
@@ -2072,6 +2146,7 @@ class LoanRepayment(models.Model):
     paid_date = models.DateTimeField(null=True, blank=True)
     status = models.CharField(max_length=20, choices=REPAYMENT_STATUS, default='upcoming')
     transaction = models.ForeignKey(TransactionToken, on_delete=models.SET_NULL, null=True, blank=True)
+    on_behalf_of = models.ForeignKey(PaymentGroupMember, on_delete=models.SET_NULL, null=True, blank=True, related_name='loan_repayments_on_behalf')
 
     class Meta:
         ordering = ['due_date']
@@ -2361,3 +2436,667 @@ class BillStandingOrder(models.Model):
     def __str__(self):
         return f"Standing Order: {self.provider.name} - KES {self.amount}/{self.frequency}"
 
+
+
+# ============================================================================
+# CHAMA ROUNDS & ADVANCED GROUP FEATURES (RECONSTRUCTED)
+# ============================================================================
+
+class RoundPosition(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    payment_group = models.ForeignKey('PaymentGroups', on_delete=models.CASCADE, related_name='chama_positions')
+    round = models.ForeignKey('RoundContribution', on_delete=models.CASCADE, null=True, blank=True, related_name='positions')
+    member = models.ForeignKey('PaymentGroupMember', on_delete=models.CASCADE, related_name='chama_positions')
+    position_number = models.PositiveIntegerField(help_text='Position in the sequence (1, 2, 3...)')
+    created_at = models.DateTimeField(default=timezone.now)
+
+    class Meta:
+        unique_together = [('payment_group', 'round', 'position_number')]
+        ordering = ['position_number']
+        
+    def __str__(self):
+        return f"Position {self.position_number}: {self.member}"
+
+class RoundContribution(models.Model):
+    STATUS_CHOICES = [
+        ('pending_approval', 'Pending Approval'),
+        ('pending', 'Pending - Awaiting Start'),
+        ('active', 'Active - Collecting'),
+        ('completed', 'Completed - All Cycles Done'),
+        ('cancelled', 'Cancelled'),
+    ]
+    ASSIGNMENT_METHODS = [
+        ('random', 'Random assignment each round'),
+        ('sequential', 'Sequential (by position)'),
+        ('manual', 'Manual selection'),
+    ]
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    payment_group = models.ForeignKey('PaymentGroups', on_delete=models.CASCADE, related_name='round_contributions')
+    round_number = models.PositiveIntegerField(default=1)
+    round_name = models.CharField(max_length=255, blank=True, default='')
+    contribution_amount = models.DecimalField(max_digits=12, decimal_places=2, default=0.00)
+    contribution_frequency = models.CharField(max_length=20, default='monthly')
+    frequency_days = models.IntegerField(default=30)
+    start_date = models.DateTimeField(default=timezone.now)
+    start_condition = models.CharField(max_length=50, default='all_members')
+    voting_deadline = models.DateTimeField(null=True, blank=True)
+    assignment_method = models.CharField(max_length=20, choices=ASSIGNMENT_METHODS, default='random')
+    use_previous_positions = models.BooleanField(default=False)
+    previous_round = models.ForeignKey('self', on_delete=models.SET_NULL, null=True, blank=True)
+    currency = models.CharField(max_length=10, default='KES')
+    
+    total_collected = models.DecimalField(max_digits=12, decimal_places=2, default=0.00)
+    total_generated = models.DecimalField(max_digits=12, decimal_places=2, default=0.00)
+    total_cycles_completed = models.IntegerField(default=0)
+    current_cycle = models.IntegerField(default=1)
+    next_contribution_date = models.DateTimeField(null=True, blank=True)
+    
+    claim_status = models.CharField(max_length=20, default='none')
+    claim_destination = models.CharField(max_length=50, blank=True)
+    claimed_at = models.DateTimeField(null=True, blank=True)
+    award_history = models.JSONField(default=list, blank=True)
+    awarded_to = models.ForeignKey('PaymentGroupMember', on_delete=models.SET_NULL, null=True, blank=True, related_name='rounds_awarded')
+    
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending')
+    approvals = models.ManyToManyField('PaymentGroupMember', related_name='approved_rounds', blank=True)
+    rejections = models.ManyToManyField('PaymentGroupMember', related_name='rejected_rounds', blank=True)
+    approval_notes = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(default=timezone.now)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['-round_number']
+        unique_together = [('payment_group', 'round_number')]
+
+    def __str__(self):
+        return f"{self.payment_group.name} - {self.round_name or f'Round {self.round_number}'}"
+
+    def get_progress_percentage(self):
+        member_count = self.get_member_count()
+        if member_count == 0: return 0
+        contributions = self.member_contributions.filter(cycle_number=self.current_cycle).count()
+        return (contributions / member_count) * 100
+
+    def get_member_count(self):
+        return self.payment_group.members.filter(is_active=True).count()
+
+    def get_next_contribution_date(self):
+        from datetime import timedelta
+        base = self.next_contribution_date or self.start_date or timezone.now()
+        if self.contribution_frequency == 'daily': return base + timedelta(days=1)
+        elif self.contribution_frequency == 'weekly': return base + timedelta(days=7)
+        elif self.contribution_frequency == 'biweekly': return base + timedelta(days=14)
+        elif self.contribution_frequency == 'monthly': return base + timedelta(days=30)
+        elif self.contribution_frequency == 'custom' and self.frequency_days: return base + timedelta(days=self.frequency_days)
+        return base + timedelta(days=30)
+
+    def record_contribution(self, member, amount, on_behalf_of=None, notes=''):
+        if self.member_contributions.filter(member=member, cycle_number=self.current_cycle).exists():
+            return None, "Member already contributed to this cycle"
+        contribution = RoundMemberContribution.objects.create(
+            round=self, member=member, on_behalf_of=on_behalf_of,
+            contribution_amount=amount, cycle_number=self.current_cycle, notes=notes
+        )
+        self.total_collected += amount
+        self.save()
+        self.check_cycle_completion()
+        return contribution, None
+
+    def check_cycle_completion(self):
+        from Notifications.models import create_notification
+        member_count = self.get_member_count()
+        cycle_contributions = self.member_contributions.filter(cycle_number=self.current_cycle).count()
+        if cycle_contributions >= member_count:
+            self.claim_status = 'unclaimed'
+            history_entry = {
+                'cycle': self.current_cycle,
+                'member_id': str(self.awarded_to.id) if self.awarded_to else None,
+                'member_name': self.awarded_to.payment_profile.user.user.get_full_name() if self.awarded_to else 'Unknown',
+                'amount': float(self.total_collected),
+                'claimed': False, 'claimed_at': None
+            }
+            self.award_history.append(history_entry)
+            if self.awarded_to:
+                create_notification(
+                    recipient=self.awarded_to.payment_profile.user.user,
+                    notification_type='group_claim',
+                    message=f"Funds ready to claim from round '{self.round_name or self.round_number}'.",
+                    action_url=f"/payments/groups/{self.payment_group.id}?tab=rounds"
+                )
+            self.total_generated += self.total_collected
+            self.total_cycles_completed += 1
+            self.total_collected = 0
+            if self.current_cycle >= member_count:
+                self.status = 'completed'
+            else:
+                self.current_cycle += 1
+                self.next_contribution_date = self.get_next_contribution_date()
+                try:
+                    pos = RoundPosition.objects.get(payment_group=self.payment_group, round=self, position_number=self.current_cycle)
+                    self.awarded_to = pos.member
+                except Exception: pass
+            self.save()
+
+class RoundMemberContribution(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    round = models.ForeignKey(RoundContribution, on_delete=models.CASCADE, related_name='member_contributions')
+    member = models.ForeignKey('PaymentGroupMember', on_delete=models.CASCADE, related_name='round_member_contributions')
+    on_behalf_of = models.ForeignKey('PaymentGroupMember', on_delete=models.CASCADE, null=True, blank=True, related_name='contributions_on_behalf')
+    contribution_amount = models.DecimalField(max_digits=12, decimal_places=2)
+    contribution_date = models.DateTimeField(default=timezone.now)
+    cycle_number = models.PositiveIntegerField(default=1)
+    notes = models.TextField(blank=True)
+    transaction = models.ForeignKey('TransactionToken', on_delete=models.SET_NULL, null=True, blank=True, related_name='round_contributions')
+
+    class Meta:
+        unique_together = [('round', 'member', 'cycle_number')]
+
+    def __str__(self):
+        return f"{self.member} - Cycle {self.cycle_number}"
+
+class BenefitDistributionRule(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    payment_group = models.ForeignKey('PaymentGroups', on_delete=models.CASCADE, related_name='benefit_rules')
+    distribution_criteria = models.CharField(max_length=50, default='contribution_proportional')
+    payout_frequency = models.CharField(max_length=20, default='immediate')
+    wallet_percentage = models.IntegerField(default=100)
+    group_retain_percentage = models.IntegerField(default=0)
+    requires_approval = models.BooleanField(default=False)
+    approval_threshold = models.IntegerField(default=51)
+    minimum_payout = models.DecimalField(max_digits=12, decimal_places=2, default=0.00)
+    created_at = models.DateTimeField(default=timezone.now)
+    updated_at = models.DateTimeField(auto_now=True)
+
+class WithdrawalRequest(models.Model):
+    WITHDRAWAL_TYPES = [
+        ('excess_contribution', 'Excess of expected average'),
+        ('maturity', 'Group maturity reached'),
+        ('emergency', 'Emergency withdrawal'),
+        ('partial', 'Partial withdrawal (ongoing participation)'),
+        ('exit', 'Full exit from group'),
+    ]
+    STATUS_CHOICES = [
+        ('pending', 'Pending Review'),
+        ('under_review', 'Under Review'),
+        ('approved', 'Approved'),
+        ('rejected', 'Rejected'),
+        ('processing', 'Processing'),
+        ('completed', 'Completed'),
+        ('cancelled', 'Cancelled'),
+    ]
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    payment_group = models.ForeignKey('PaymentGroups', on_delete=models.CASCADE, related_name='withdrawal_requests')
+    requester = models.ForeignKey('PaymentGroupMember', on_delete=models.CASCADE, related_name='withdrawal_requests')
+    amount = models.DecimalField(max_digits=12, decimal_places=2)
+    withdrawal_type = models.CharField(max_length=20, choices=WITHDRAWAL_TYPES, default='excess_contribution')
+    reason = models.TextField()
+    supporting_document = models.FileField(upload_to='withdrawal_documents/', null=True, blank=True)
+    hierarchy_level = models.IntegerField(default=0)
+    requires_hierarchy_approval = models.BooleanField(default=False)
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending')
+    approval_date = models.DateTimeField(null=True, blank=True)
+    rejection_reason = models.TextField(blank=True)
+    approved_by = models.ForeignKey('PaymentGroupMember', on_delete=models.SET_NULL, null=True, blank=True, related_name='approved_withdrawals')
+    early_withdrawal_penalty = models.DecimalField(max_digits=12, decimal_places=2, default=0.00)
+    immature_exit_deduction = models.DecimalField(max_digits=12, decimal_places=2, default=0.00)
+    destination_wallet = models.ForeignKey('PaymentProfile', on_delete=models.CASCADE, related_name='withdrawal_destinations')
+    transaction = models.ForeignKey('TransactionToken', on_delete=models.SET_NULL, null=True, blank=True, related_name='withdrawal_requests')
+    processed_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(default=timezone.now)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def calculate_immature_deduction(self):
+        return self.amount * (self.payment_group.immature_exit_penalty_rate / 100)
+
+class GroupSettingsChangeRequest(models.Model):
+    STATUS_CHOICES = [
+        ('pending', 'Pending Approval'),
+        ('approved', 'Approved'),
+        ('rejected', 'Rejected'),
+        ('applied', 'Applied'),
+    ]
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    payment_group = models.ForeignKey('PaymentGroups', on_delete=models.CASCADE, related_name='settings_change_requests')
+    proposed_by = models.ForeignKey('PaymentGroupMember', on_delete=models.CASCADE, related_name='proposed_settings_changes')
+    change_type = models.CharField(max_length=100)
+    change_description = models.TextField()
+    old_values = models.JSONField(default=dict, blank=True)
+    new_values = models.JSONField(default=dict, blank=True)
+    impact_summary = models.TextField(blank=True)
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending')
+    approval_vote = models.ForeignKey('GroupVote', on_delete=models.SET_NULL, null=True, blank=True, related_name='settings_change')
+    votes_for = models.IntegerField(default=0)
+    votes_against = models.IntegerField(default=0)
+    voter_sentiments = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(default=timezone.now)
+    updated_at = models.DateTimeField(auto_now=True)
+
+class GroupCertificate(models.Model):
+    STATUS_CHOICES = [
+        ('pending', 'Pending Approval'),
+        ('approved', 'Approved'),
+        ('rejected', 'Rejected'),
+        ('revoked', 'Revoked'),
+        ('active', 'Active'),
+        ('expired', 'Expired'),
+    ]
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    payment_group = models.OneToOneField('PaymentGroups', on_delete=models.CASCADE, related_name='certificate')
+    registration_number = models.CharField(max_length=100, unique=True, blank=True, null=True)
+    issued_at = models.DateTimeField(null=True, blank=True)
+    expires_at = models.DateTimeField(null=True, blank=True)
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending')
+    verification_notes = models.TextField(blank=True)
+    document = models.FileField(upload_to='group_certificates/', null=True, blank=True)
+    created_at = models.DateTimeField(default=timezone.now)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return f"Certificate for {self.payment_group.name}"
+
+
+# ============================================================================
+# PROVIDER REGISTRATION & MANAGEMENT
+# ============================================================================
+
+PROVIDER_REGISTRATION_STATUS = (
+    ('draft', 'Draft'),
+    ('submitted', 'Submitted'),
+    ('under_review', 'Under Review'),
+    ('pending_documents', 'Pending Documents'),
+    ('approved', 'Approved'),
+    ('rejected', 'Rejected'),
+    ('suspended', 'Suspended'),
+)
+
+PROVIDER_TYPE = (
+    ('bill_provider', 'Bill Provider'),
+    ('insurance_provider', 'Insurance Provider'),
+    ('loan_provider', 'Loan Provider'),
+    ('utility_provider', 'Utility Provider'),
+    ('financial_service', 'Financial Service'),
+    ('government_service', 'Government Service'),
+)
+
+
+class ProviderRegistration(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    user = models.ForeignKey(Profile, on_delete=models.CASCADE, related_name='provider_registrations')
+    provider_type = models.CharField(max_length=50, choices=PROVIDER_TYPE)
+    business_name = models.CharField(max_length=255)
+    business_email = models.EmailField()
+    business_phone = models.CharField(max_length=30)
+    business_address = models.TextField()
+    business_registration_number = models.CharField(max_length=100, blank=True)
+    tax_id = models.CharField(max_length=100, blank=True)
+    category = models.CharField(max_length=50, choices=BILL_CATEGORY, default='other')
+    description = models.TextField(blank=True)
+    logo = models.ImageField(upload_to='provider_logos/', blank=True, null=True)
+    website = models.URLField(blank=True, null=True)
+    commission_rate = models.DecimalField(decimal_places=4, max_digits=6, default=Decimal('0.00'))
+    min_transaction_amount = models.DecimalField(decimal_places=2, max_digits=12, default=Decimal('0.00'))
+    max_transaction_amount = models.DecimalField(decimal_places=2, max_digits=12, default=Decimal('100000.00'))
+    supported_payment_methods = models.JSONField(default=list, blank=True)
+    status = models.CharField(max_length=30, choices=PROVIDER_REGISTRATION_STATUS, default='draft')
+    rejection_reason = models.TextField(blank=True)
+    reviewed_by = models.ForeignKey(Profile, on_delete=models.SET_NULL, null=True, blank=True, related_name='reviewed_providers')
+    review_notes = models.TextField(blank=True)
+    reviewed_at = models.DateTimeField(null=True, blank=True)
+    auto_create_kitty = models.BooleanField(default=True, help_text='Automatically create a kitty for this provider')
+    kitty_name = models.CharField(max_length=255, blank=True)
+    kitty_target_amount = models.DecimalField(decimal_places=2, max_digits=12, null=True, blank=True)
+    linked_payment_group = models.ForeignKey('PaymentGroups', on_delete=models.SET_NULL, null=True, blank=True, related_name='provider_link')
+    created_at = models.DateTimeField(default=timezone.now)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['user', 'status']),
+            models.Index(fields=['provider_type']),
+            models.Index(fields=['category']),
+        ]
+
+    def __str__(self):
+        return f"{self.business_name} ({self.get_provider_type_display()})"
+
+    def save(self, *args, **kwargs):
+        if not self.kitty_name:
+            self.kitty_name = f"{self.business_name} Operations Kit"
+        super().save(*args, **kwargs)
+
+
+class ProviderDocument(models.Model):
+    DOCUMENT_TYPES = (
+        ('business_license', 'Business License'),
+        ('tax_certificate', 'Tax Certificate'),
+        ('identity_proof', 'Identity Proof'),
+        ('address_proof', 'Address Proof'),
+        ('bank_details', 'Bank Account Details'),
+        ('regulatory_approval', 'Regulatory Approval'),
+        ('kyc', 'KYC Document'),
+        ('other', 'Other'),
+    )
+
+    DOCUMENT_STATUS = (
+        ('pending', 'Pending Review'),
+        ('approved', 'Approved'),
+        ('rejected', 'Rejected'),
+        ('expired', 'Expired'),
+    )
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    provider = models.ForeignKey(ProviderRegistration, on_delete=models.CASCADE, related_name='documents')
+    document_type = models.CharField(max_length=50, choices=DOCUMENT_TYPES)
+    file = models.FileField(upload_to='provider_documents/')
+    file_name = models.CharField(max_length=255)
+    file_size = models.IntegerField(default=0)
+    mime_type = models.CharField(max_length=100, blank=True)
+    status = models.CharField(max_length=20, choices=DOCUMENT_STATUS, default='pending')
+    reviewer_notes = models.TextField(blank=True)
+    verified_by = models.ForeignKey(Profile, on_delete=models.SET_NULL, null=True, blank=True, related_name='verified_provider_documents')
+    verified_at = models.DateTimeField(null=True, blank=True)
+    expiry_date = models.DateField(null=True, blank=True)
+    created_at = models.DateTimeField(default=timezone.now)
+
+    class Meta:
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f"{self.provider.business_name} - {self.get_document_type_display()}"
+
+
+class ProviderStaff(models.Model):
+    STAFF_ROLES = (
+        ('admin', 'Provider Admin'),
+        ('support', 'Customer Support'),
+        ('applications', 'Applications Handler'),
+        ('transactions', 'Transactions Manager'),
+        ('queries', 'Query Handler'),
+        ('compliance', 'Compliance Officer'),
+    )
+
+    STAFF_STATUS = (
+        ('active', 'Active'),
+        ('inactive', 'Inactive'),
+        ('pending', 'Pending Approval'),
+        ('suspended', 'Suspended'),
+    )
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    provider = models.ForeignKey(ProviderRegistration, on_delete=models.CASCADE, related_name='staff_members')
+    user = models.ForeignKey(Profile, on_delete=models.CASCADE, related_name='provider_staff_roles')
+    role = models.CharField(max_length=30, choices=STAFF_ROLES)
+    status = models.CharField(max_length=20, choices=STAFF_STATUS, default='pending')
+    can_handle_queries = models.BooleanField(default=True)
+    can_review_applications = models.BooleanField(default=False)
+    can_manage_transactions = models.BooleanField(default=False)
+    can_approve_claims = models.BooleanField(default=False)
+    max_transaction_limit = models.DecimalField(decimal_places=2, max_digits=12, null=True, blank=True)
+    assigned_categories = models.JSONField(default=list, blank=True)
+    working_hours = models.JSONField(default=dict, blank=True)
+    email_notifications = models.BooleanField(default=True)
+    created_by = models.ForeignKey(Profile, on_delete=models.SET_NULL, null=True, related_name='created_staff_members')
+    created_at = models.DateTimeField(default=timezone.now)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        unique_together = ['provider', 'user']
+        indexes = [
+            models.Index(fields=['provider', 'status']),
+            models.Index(fields=['user', 'role']),
+        ]
+
+    def __str__(self):
+        return f"{self.user.user.get_full_name()} - {self.get_role_display()} @ {self.provider.business_name}"
+
+
+class ServiceProduct(models.Model):
+    SERVICE_TYPES = (
+        ('bill_payment', 'Bill Payment'),
+        ('insurance', 'Insurance'),
+        ('loan', 'Loan'),
+        ('savings', 'Savings'),
+        ('investment', 'Investment'),
+        ('utility', 'Utility'),
+        ('subscription', 'Subscription'),
+        ('membership', 'Membership'),
+    )
+
+    PRODUCT_STATUS = (
+        ('draft', 'Draft'),
+        ('pending_approval', 'Pending Approval'),
+        ('active', 'Active'),
+        ('suspended', 'Suspended'),
+        ('archived', 'Archived'),
+    )
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    provider = models.ForeignKey(ProviderRegistration, on_delete=models.CASCADE, related_name='service_products')
+    name = models.CharField(max_length=255)
+    description = models.TextField()
+    service_type = models.CharField(max_length=30, choices=SERVICE_TYPES)
+    category = models.CharField(max_length=50, choices=BILL_CATEGORY, default='other')
+    price = models.DecimalField(decimal_places=2, max_digits=12, default=Decimal('0.00'))
+    price_type = models.CharField(max_length=20, default='fixed', help_text='fixed, variable, percentage, free')
+    commission_rate = models.DecimalField(decimal_places=4, max_digits=6, default=Decimal('0.00'))
+    processing_fee = models.DecimalField(decimal_places=2, max_digits=10, default=Decimal('0.00'))
+    min_amount = models.DecimalField(decimal_places=2, max_digits=12, default=Decimal('0.00'))
+    max_amount = models.DecimalField(decimal_places=2, max_digits=12, default=Decimal('100000.00'))
+    min_tenure_days = models.IntegerField(default=0)
+    max_tenure_days = models.IntegerField(default=365)
+    eligibility_criteria = models.JSONField(default=dict, blank=True)
+    required_documents = models.JSONField(default=list, blank=True)
+    terms_conditions = models.TextField(blank=True)
+    benefits = models.JSONField(default=list, blank=True)
+    exclusions = models.JSONField(default=list, blank=True)
+    icon = models.CharField(max_length=50, default='📦')
+    color = models.CharField(max_length=50, default='from-blue-500 to-blue-600')
+    image = models.ImageField(upload_to='service_products/', blank=True, null=True)
+    is_active = models.BooleanField(default=True)
+    is_featured = models.BooleanField(default=False)
+    status = models.CharField(max_length=20, choices=PRODUCT_STATUS, default='draft')
+    auto_link_kitty = models.BooleanField(default=True)
+    linked_kitty = models.ForeignKey('PaymentGroups', on_delete=models.SET_NULL, null=True, blank=True, related_name='linked_service_products')
+    created_at = models.DateTimeField(default=timezone.now)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['provider', 'status']),
+            models.Index(fields=['service_type', 'is_active']),
+            models.Index(fields=['category']),
+        ]
+
+    def __str__(self):
+        return f"{self.name} - {self.provider.business_name}"
+
+
+class ProviderTransaction(models.Model):
+    TRANSACTION_TYPES = (
+        ('payment', 'Payment'),
+        ('refund', 'Refund'),
+        ('commission', 'Commission'),
+        ('payout', 'Payout'),
+        ('adjustment', 'Adjustment'),
+        ('fee', 'Fee'),
+    )
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    provider = models.ForeignKey(ProviderRegistration, on_delete=models.CASCADE, related_name='transactions')
+    service_product = models.ForeignKey(ServiceProduct, on_delete=models.SET_NULL, null=True, blank=True, related_name='transactions')
+    user = models.ForeignKey(Profile, on_delete=models.CASCADE, related_name='provider_transactions')
+    transaction_type = models.CharField(max_length=30, choices=TRANSACTION_TYPES)
+    amount = models.DecimalField(decimal_places=2, max_digits=12)
+    commission_amount = models.DecimalField(decimal_places=2, max_digits=12, default=Decimal('0.00'))
+    provider_amount = models.DecimalField(decimal_places=2, max_digits=12, default=Decimal('0.00'))
+    platform_amount = models.DecimalField(decimal_places=2, max_digits=12, default=Decimal('0.00'))
+    reference_number = models.CharField(max_length=100, unique=True)
+    payment_method = models.CharField(max_length=50, choices=PAY_OPT, default='comrade_balance')
+    status = models.CharField(max_length=20, choices=TRANSACTION_STATUS, default='pending')
+    description = models.TextField(blank=True)
+    metadata = models.JSONField(default=dict, blank=True)
+    processed_by = models.ForeignKey(ProviderStaff, on_delete=models.SET_NULL, null=True, blank=True, related_name='processed_transactions')
+    processed_at = models.DateTimeField(null=True, blank=True)
+    linked_transaction = models.ForeignKey('TransactionToken', on_delete=models.SET_NULL, null=True, blank=True, related_name='provider_transaction')
+    created_at = models.DateTimeField(default=timezone.now)
+
+    class Meta:
+        ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['provider', '-created_at']),
+            models.Index(fields=['user', '-created_at']),
+            models.Index(fields=['status']),
+            models.Index(fields=['reference_number']),
+        ]
+
+    def save(self, *args, **kwargs):
+        if not self.reference_number:
+            self.reference_number = f"PTXN-{uuid.uuid4().hex[:12].upper()}"
+        super().save(*args, **kwargs)
+
+    def __str__(self):
+        return f"{self.transaction_type} - {self.reference_number} - KES {self.amount}"
+
+
+class ProviderQuery(models.Model):
+    QUERY_STATUS = (
+        ('open', 'Open'),
+        ('in_progress', 'In Progress'),
+        ('pending_response', 'Pending Response'),
+        ('resolved', 'Resolved'),
+        ('escalated', 'Escalated'),
+        ('closed', 'Closed'),
+    )
+
+    QUERY_PRIORITY = (
+        ('low', 'Low'),
+        ('medium', 'Medium'),
+        ('high', 'High'),
+        ('urgent', 'Urgent'),
+    )
+
+    QUERY_TYPES = (
+        ('application', 'Application Status'),
+        ('transaction', 'Transaction Issue'),
+        ('claim', 'Claim Inquiry'),
+        ('document', 'Document Query'),
+        ('technical', 'Technical Support'),
+        ('general', 'General Inquiry'),
+    )
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    provider = models.ForeignKey(ProviderRegistration, on_delete=models.CASCADE, related_name='queries')
+    user = models.ForeignKey(Profile, on_delete=models.CASCADE, related_name='provider_queries')
+    assigned_to = models.ForeignKey(ProviderStaff, on_delete=models.SET_NULL, null=True, blank=True, related_name='assigned_queries')
+    query_type = models.CharField(max_length=30, choices=QUERY_TYPES)
+    subject = models.CharField(max_length=255)
+    description = models.TextField()
+    priority = models.CharField(max_length=20, choices=QUERY_PRIORITY, default='medium')
+    status = models.CharField(max_length=20, choices=QUERY_STATUS, default='open')
+    reference_id = models.CharField(max_length=100, blank=True, help_text='Related application, transaction, or claim ID')
+    attachments = models.JSONField(default=list, blank=True)
+    resolution_notes = models.TextField(blank=True)
+    resolved_by = models.ForeignKey(ProviderStaff, on_delete=models.SET_NULL, null=True, blank=True, related_name='resolved_queries')
+    resolved_at = models.DateTimeField(null=True, blank=True)
+    satisfaction_rating = models.IntegerField(null=True, blank=True)
+    satisfaction_comment = models.TextField(blank=True)
+    created_at = models.DateTimeField(default=timezone.now)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['provider', 'status']),
+            models.Index(fields=['assigned_to', 'status']),
+            models.Index(fields=['user', '-created_at']),
+        ]
+
+    def __str__(self):
+        return f"Query #{self.id} - {self.subject[:50]}"
+
+
+class ProviderApplication(models.Model):
+    APPLICATION_TYPES = (
+        ('service_enrollment', 'Service Enrollment'),
+        ('insurance_policy', 'Insurance Policy'),
+        ('loan_application', 'Loan Application'),
+        ('account_setup', 'Account Setup'),
+    )
+
+    APPLICATION_STATUS = (
+        ('draft', 'Draft'),
+        ('submitted', 'Submitted'),
+        ('under_review', 'Under Review'),
+        ('pending_documents', 'Pending Documents'),
+        ('pending_payment', 'Pending Payment'),
+        ('approved', 'Approved'),
+        ('rejected', 'Rejected'),
+        ('cancelled', 'Cancelled'),
+    )
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    provider = models.ForeignKey(ProviderRegistration, on_delete=models.CASCADE, related_name='applications')
+    service_product = models.ForeignKey(ServiceProduct, on_delete=models.SET_NULL, null=True, blank=True, related_name='applications')
+    user = models.ForeignKey(Profile, on_delete=models.CASCADE, related_name='provider_applications')
+    application_type = models.CharField(max_length=30, choices=APPLICATION_TYPES)
+    application_data = models.JSONField(default=dict)
+    required_documents = models.JSONField(default=list, blank=True)
+    submitted_documents = models.JSONField(default=list, blank=True)
+    status = models.CharField(max_length=30, choices=APPLICATION_STATUS, default='draft')
+    rejection_reason = models.TextField(blank=True)
+    reviewed_by = models.ForeignKey(ProviderStaff, on_delete=models.SET_NULL, null=True, blank=True, related_name='reviewed_applications')
+    review_notes = models.TextField(blank=True)
+    reviewed_at = models.DateTimeField(null=True, blank=True)
+    submitted_at = models.DateTimeField(null=True, blank=True)
+    processing_deadline = models.DateTimeField(null=True, blank=True)
+    linked_policy = models.ForeignKey('InsurancePolicy', on_delete=models.SET_NULL, null=True, blank=True, related_name='provider_application')
+    linked_loan = models.ForeignKey('LoanApplication', on_delete=models.SET_NULL, null=True, blank=True, related_name='provider_application')
+    created_at = models.DateTimeField(default=timezone.now)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['provider', 'status']),
+            models.Index(fields=['user', '-created_at']),
+            models.Index(fields=['application_type']),
+        ]
+
+    def __str__(self):
+        return f"Application #{self.id} - {self.get_application_type_display()}"
+
+
+class ProviderNotification(models.Model):
+    NOTIFICATION_TYPES = (
+        ('application_update', 'Application Update'),
+        ('transaction_complete', 'Transaction Complete'),
+        ('claim_update', 'Claim Update'),
+        ('document_required', 'Document Required'),
+        ('system_alert', 'System Alert'),
+        ('general', 'General'),
+    )
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    provider = models.ForeignKey(ProviderRegistration, on_delete=models.CASCADE, related_name='notifications')
+    user = models.ForeignKey(Profile, on_delete=models.CASCADE, related_name='provider_notifications')
+    notification_type = models.CharField(max_length=30, choices=NOTIFICATION_TYPES)
+    title = models.CharField(max_length=255)
+    message = models.TextField()
+    related_application = models.ForeignKey(ProviderApplication, on_delete=models.SET_NULL, null=True, blank=True, related_name='notifications')
+    related_transaction = models.ForeignKey(ProviderTransaction, on_delete=models.SET_NULL, null=True, blank=True, related_name='notifications')
+    is_read = models.BooleanField(default=False)
+    read_at = models.DateTimeField(null=True, blank=True)
+    metadata = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(default=timezone.now)
+
+    class Meta:
+        ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['provider', 'is_read']),
+            models.Index(fields=['user', '-created_at']),
+        ]
+
+    def __str__(self):
+        return f"{self.title} - {self.provider.business_name}"

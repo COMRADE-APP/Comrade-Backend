@@ -75,7 +75,7 @@ class BusinessCreateSerializer(serializers.ModelSerializer):
     class Meta:
         model = Business
         fields = ['id', 'name', 'industry', 'description', 'stage', 'website', 
-                  'valuation', 'is_charity', 'charity_goal',
+                  'valuation', 'is_charity', 'charity_goal', 'payment_group',
                   'contact_email', 'country', 'city', 'country_code', 'phone_number']
         read_only_fields = ['id']
 
@@ -159,7 +159,7 @@ class CapitalVentureSerializer(serializers.ModelSerializer):
     class Meta:
         model = CapitalVenture
         fields = ['id', 'name', 'description', 'organisation', 'organisation_name', 'institution',
-                  'created_by', 'total_fund', 'available_fund', 'investment_criteria',
+                  'created_by', 'payment_group', 'total_fund', 'available_fund', 'investment_criteria',
                   'investment_focus', 'min_investment', 'max_investment',
                   'custom_investment_form',
                   'is_active', 'is_verified',

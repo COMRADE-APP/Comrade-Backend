@@ -273,7 +273,7 @@ class MeView(APIView):
     
     def get(self, request):
         profile, created = UserProfile.objects.get_or_create(user=request.user)
-        serializer = UserProfileSerializer(profile, context={'request': request})
+        serializer = ProfileSerializer(profile, context={'request': request})
         return Response(serializer.data)
 
 

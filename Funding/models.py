@@ -32,6 +32,7 @@ class Business(models.Model):
     logo = models.ImageField(upload_to='business_logos/', null=True, blank=True)
     stage = models.CharField(max_length=50, choices=STAGE_CHOICES, default='idea')
     website = models.URLField(null=True, blank=True)
+    payment_group = models.ForeignKey('Payment.PaymentGroups', on_delete=models.SET_NULL, null=True, blank=True, related_name='businesses')
     
     # Contact Information
     contact_email = models.EmailField(null=True, blank=True)
@@ -312,6 +313,7 @@ class CapitalVenture(models.Model):
     organisation = models.ForeignKey('Organisation.Organisation', on_delete=models.SET_NULL, null=True, blank=True, related_name='capital_ventures')
     institution = models.ForeignKey('Institution.Institution', on_delete=models.SET_NULL, null=True, blank=True, related_name='capital_ventures')
     created_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='created_ventures', null=True)
+    payment_group = models.ForeignKey('Payment.PaymentGroups', on_delete=models.SET_NULL, null=True, blank=True, related_name='ventures')
     
     total_fund = models.DecimalField(max_digits=15, decimal_places=2)
     available_fund = models.DecimalField(max_digits=15, decimal_places=2)

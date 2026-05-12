@@ -19,9 +19,9 @@ from Rooms.models import Room
 class AnnouncementsViewSet(ModelViewSet):
     queryset = Announcements.objects.all()
     serializer_class = AnnouncementsSerializer
-    filterset_fields = ['user', 'status', 'time_stamp', 'visibility']
+    filterset_fields = ['user', 'send_status', 'time_stamp', 'visibility']
     search_fields = ['heading', 'content']
-    ordering_fields = ['time_stamp', 'status']
+    ordering_fields = ['time_stamp', 'send_status']
 
     def perform_create(self, serializer):
         """Create announcement and optionally link to a room"""
@@ -379,7 +379,7 @@ class AnnouncementsViewSet(ModelViewSet):
 class TaskViewSet(ModelViewSet):
     queryset = Task.objects.all()
     serializer_class = TaskSerializer
-    filterset_fields = ['user', 'status', 'time_stamp']
+    filterset_fields = ['user', 'time_stamp']
     search_fields = ['content']
     ordering_fields = ['time_stamp', 'status']  
 
@@ -580,44 +580,44 @@ class TaskViewSet(ModelViewSet):
 class QuestionViewSet(ModelViewSet):
     queryset = Question.objects.all()
     serializer_class = QuestionSerializer
-    filterset_fields = ['user', 'status', 'time_stamp']
+    filterset_fields = ['time_stamp']
     search_fields = ['description']
-    ordering_fields = ['time_stamp', 'status']
+    ordering_fields = ['time_stamp']
 
 class ChoiceViewSet(ModelViewSet):
     queryset = Choice.objects.all()
     serializer_class = ChoiceSerializer
-    filterset_fields = ['user', 'status', 'time_stamp']
+    filterset_fields = ['time_stamp']
     search_fields = ['content']
-    ordering_fields = ['time_stamp', 'status']
+    ordering_fields = ['time_stamp']
 
 class FileResponseViewSet(ModelViewSet):
     queryset = FileResponse.objects.all()
     serializer_class = FileResponseSerializer
-    filterset_fields = ['user', 'status', 'time_stamp']
+    filterset_fields = ['time_stamp']
     search_fields = ['task']
-    ordering_fields = ['time_stamp', 'status']
+    ordering_fields = ['time_stamp']
 
 class CompletedTaskViewSet(ModelViewSet):
     queryset = CompletedTask.objects.all()
     serializer_class = CompletedTaskSerializer
-    filterset_fields = ['user', 'status', 'time_stamp']
+    filterset_fields = ['user', 'time_stamp']
     search_fields = ['task']
-    ordering_fields = ['time_stamp', 'status']
+    ordering_fields = ['time_stamp']
 
 class QuestionResponseViewSet(ModelViewSet):
     queryset = QuestionResponse.objects.all()
     serializer_class = QuestionResponseSerializer
-    filterset_fields = ['user', 'status', 'time_stamp']
+    filterset_fields = ['user', 'time_stamp']
     search_fields = ['description']
-    ordering_fields = ['time_stamp', 'status']
+    ordering_fields = ['time_stamp']
 
 class SubQuestionViewSet(ModelViewSet):
     queryset = SubQuestion.objects.all()
     serializer_class = SubQuestionSerializer
-    filterset_fields = ['user', 'status', 'time_stamp']
+    filterset_fields = ['time_stamp']
     search_fields = ['description']
-    ordering_fields = ['time_stamp', 'status']
+    ordering_fields = ['time_stamp']
 
 """Task methods are next"""
 
@@ -634,7 +634,7 @@ class SubQuestionViewSet(ModelViewSet):
 class TextViewSet(ModelViewSet):
     queryset = Text.objects.all()
     serializer_class = TextSerializer
-    filterset_fields = ['user', 'status', 'time_stamp']
+    filterset_fields = ['user', 'time_stamp']
     search_fields = ['content']
     ordering_fields = ['time_stamp', 'status']  
 
@@ -672,7 +672,7 @@ class RepostsViewSet(ModelViewSet):
 class PinViewSet(ModelViewSet):
     queryset = Pin.objects.all()
     serializer_class = PinSerializer
-    filterset_fields = ['user', 'status', 'time_stamp']
+    filterset_fields = ['user', 'time_stamp']
     search_fields = ['task']
     ordering_fields = ['time_stamp', 'status']
 
