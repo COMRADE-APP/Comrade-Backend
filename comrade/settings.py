@@ -563,8 +563,8 @@ else:
 # ============================================================================
 # SENTRY ERROR TRACKING
 # ============================================================================
-sentry_dsn = os.getenv('SENTRY_DSN')
-if sentry_dsn:
+sentry_dsn = os.getenv('SENTRY_DSN', '')
+if sentry_dsn and sentry_dsn.startswith('https://'):
     try:
         import sentry_sdk
         from sentry_sdk.integrations.django import DjangoIntegration
@@ -585,4 +585,7 @@ if sentry_dsn:
     except ImportError:
         import warnings
         warnings.warn('sentry-sdk not installed. Error tracking disabled.', stacklevel=1)
+    except Exception as exc:
+        import warnings
+        warnings.warn(f'Sentry initialization failed: {exc}. Error tracking disabled.', stacklevel=1)
 

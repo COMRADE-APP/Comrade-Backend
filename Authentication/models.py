@@ -153,14 +153,6 @@ class CustomUser(AbstractUser):
             models.Index(fields=['email', 'is_active']),
             models.Index(fields=['username']),
         ]
-    
-    @property
-    def followers_count(self):
-        return self.followers_set.count()
-    
-    @property
-    def following_count(self):
-        return self.following_set.count()
 
 
 class Student(models.Model):

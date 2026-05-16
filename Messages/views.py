@@ -14,6 +14,7 @@ from .serializers import (
 )
 from Authentication.models import CustomUser
 from Opinions.models import Follow
+from Notifications.models import create_notification
 
 
 def get_relationship(user1, user2):
@@ -220,7 +221,25 @@ class ConversationViewSet(viewsets.ModelViewSet):
         if participant:
             participant.last_read_at = timezone.now()
             participant.save()
-        
+
+        # Create notifications for group chat members
+        if conversation.conversation_type == 'group':
+            group_name = conversation.name or f"Group {conversation.id}"
+            for participant_obj in conversation.participant_details.all():
+                recipient = participant_obj.user
+                if recipient.id != request.user.id and not participant_obj.is_muted:
+                    content_preview = content[:50] + '...' if len(content) > 50 else content
+                    create_notification(
+                        recipient=recipient,
+                        notification_type='group_message',
+                        message=f"{request.user.first_name or request.user.email} sent a message in {group_name}: {content_preview}",
+                        actor=request.user,
+                        content_type='conversation',
+                        content_id=str(conversation.id),
+                        title=f"New message in {group_name}",
+                        action_url=f"/messages/{conversation.id}"
+                    )
+
         return Response(
             MessageSerializer(message, context={'request': request}).data,
             status=status.HTTP_201_CREATED
@@ -358,6 +377,7 @@ class ConversationViewSet(viewsets.ModelViewSet):
         
         messages = messages.order_by('-created_at')[:limit]
         
+        previous_cursor = None
         serializer = MessageSerializer(
             messages, 
             many=True, 

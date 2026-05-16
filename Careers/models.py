@@ -118,6 +118,12 @@ class CareerOpportunity(models.Model):
         ('executive', 'Executive'),
     ]
 
+    STATUS_CHOICES = [
+        ('active', 'Active'),
+        ('closed', 'Closed'),
+        ('draft', 'Draft'),
+    ]
+
     INDUSTRY_CHOICES = Gig.INDUSTRY_CHOICES  # Reuse from Gig
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
@@ -146,6 +152,7 @@ class CareerOpportunity(models.Model):
     industry = models.CharField(max_length=50, choices=INDUSTRY_CHOICES)
     
     application_deadline = models.DateTimeField(null=True, blank=True)
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='active')
     is_active = models.BooleanField(default=True)
     
     created_at = models.DateTimeField(auto_now_add=True)
