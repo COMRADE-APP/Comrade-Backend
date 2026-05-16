@@ -153,6 +153,14 @@ class CustomUser(AbstractUser):
             models.Index(fields=['email', 'is_active']),
             models.Index(fields=['username']),
         ]
+    
+    @property
+    def followers_count(self):
+        return self.followers_set.count()
+    
+    @property
+    def following_count(self):
+        return self.following_set.count()
 
 
 class Student(models.Model):
@@ -585,4 +593,7 @@ class ArchivedUserData(models.Model):
     
     def __str__(self):
         return f"Archived: {self.email} ({self.archived_at.strftime('%Y-%m-%d')})"
+
+
+
 

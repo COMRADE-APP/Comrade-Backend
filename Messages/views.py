@@ -330,6 +330,51 @@ class ConversationViewSet(viewsets.ModelViewSet):
         
         return Response({'error': 'Not found'}, status=status.HTTP_404_NOT_FOUND)
     
+    @action(detail=True, methods=['get'])
+    def history(self, request, pk=None):
+        """
+        Get message history for a conversation with pagination.
+        Supports infinite scroll with before/after parameters.
+        """
+        conversation = self.get_object()
+        
+        limit = int(request.query_params.get('limit', 30))
+        before_id = request.query_params.get('before')
+        after_id = request.query_params.get('after')
+        
+        limit = min(limit, 100)
+        
+        messages = conversation.messages.filter(is_deleted=False)
+        
+        if before_id:
+            before_msg = Message.objects.filter(id=before_id, conversation=conversation).first()
+            if before_msg:
+                messages = messages.filter(created_at__lt=before_msg.created_at)
+        
+        if after_id:
+            after_msg = Message.objects.filter(id=after_id, conversation=conversation).first()
+            if after_msg:
+                messages = messages.filter(created_at__gt=after_msg.created_at)
+        
+        messages = messages.order_by('-created_at')[:limit]
+        
+        serializer = MessageSerializer(
+            messages, 
+            many=True, 
+            context={'request': request}
+        )
+        
+        has_more = len(messages) == limit
+        next_cursor = messages[0].id if messages and has_more else None
+        previous_cursor = messages[-1].id if messages and len(messages) > 1 else None
+        
+        return Response({
+            'messages': serializer.data,
+            'has_more': has_more,
+            'next_cursor': next_cursor,
+            'previous_cursor': previous_cursor
+        })
+    
     @action(detail=False, methods=['get'])
     def requests(self, request):
         """Get message requests"""

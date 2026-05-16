@@ -27,6 +27,7 @@ NOTIFICATION_TYPES = (
     ('group_round', 'Group Round'),
     ('group_contribution', 'Group Contribution'),
     ('group_claim', 'Group Claim'),
+    ('group_message', 'Group Message'),
 )
 
 
