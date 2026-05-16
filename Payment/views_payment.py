@@ -493,6 +493,11 @@ class StripeWebhookView(APIView):
             return Response({'error': 'Invalid signature'}, status=400)
         
         event_type = event.get('type', '')
+        event_id = event.get('id', '')
+        
+        from Payment.idempotency import is_webhook_idempotent
+        if not is_webhook_idempotent(event_id, prefix="stripe"):
+            return Response({'status': 'ignored duplicate event'})
         
         # Support for Thin Events (Event Destinations V2) & standard Webhooks (V1)
         if 'data' in event and 'object' in event['data']:
@@ -620,6 +625,11 @@ class FlutterwaveWebhookView(APIView):
         event_data = request.data
         event_type = event_data.get('event', '')
         data = event_data.get('data', {})
+        event_id = event_data.get('id') or data.get('id', '')
+        
+        from Payment.idempotency import is_webhook_idempotent
+        if event_id and not is_webhook_idempotent(event_id, prefix="flw"):
+            return Response({'status': 'ignored duplicate event'})
         
         if event_type == 'charge.completed' and data.get('status') == 'successful':
             tx_ref = data.get('tx_ref', '')
@@ -671,6 +681,14 @@ class PesapalIPNView(APIView):
         
         if not order_tracking_id:
             return Response({'error': 'Missing OrderTrackingId'}, status=status.HTTP_400_BAD_REQUEST)
+            
+        from Payment.idempotency import is_webhook_idempotent
+        if not is_webhook_idempotent(order_tracking_id, prefix="pesapal"):
+            return Response({
+                'orderTrackingId': order_tracking_id,
+                'orderMerchantReference': merchant_reference,
+                'status': 'already_processed',
+            })
         
         # Verify transaction status with Pesapal API
         from Payment.services.payment_service import PesapalProvider
@@ -775,6 +793,11 @@ class PayPalWebhookView(APIView):
         
         event_type = request.data.get('event_type', '')
         resource = request.data.get('resource', {})
+        event_id = request.data.get('id', '')
+        
+        from Payment.idempotency import is_webhook_idempotent
+        if event_id and not is_webhook_idempotent(event_id, prefix="paypal"):
+            return Response({'message': 'ignored duplicate event'})
         
         if event_type == 'PAYMENT.CAPTURE.COMPLETED':
             order_id = resource.get('supplementary_data', {}).get('related_ids', {}).get('order_id')
@@ -824,6 +847,13 @@ class MpesaCallbackView(APIView):
         checkout_request_id = callback.get('CheckoutRequestID', '')
         
         if result_code == 0 and checkout_request_id:
+            from Payment.idempotency import is_webhook_idempotent
+            if not is_webhook_idempotent(checkout_request_id, prefix="mpesa"):
+                return Response({
+                    'ResultCode': 0,
+                    'ResultDesc': 'Success (Duplicate)'
+                })
+                
             # Payment successful
             try:
                 transaction = TransactionToken.objects.get(

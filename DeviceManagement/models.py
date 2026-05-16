@@ -20,6 +20,7 @@ class UserDevice(models.Model):
     os = models.CharField(max_length=100, blank=True)
     os_version = models.CharField(max_length=50, blank=True)
     user_agent = models.TextField()
+    fcm_token = models.CharField(max_length=255, blank=True, null=True, help_text="Firebase Cloud Messaging token for push notifications")
     
     # Activity
     last_ip = models.GenericIPAddressField(null=True, blank=True)

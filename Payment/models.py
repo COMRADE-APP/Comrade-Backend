@@ -56,6 +56,11 @@ TRANSACTION_CATEGORY = (
     ('subscription', 'Subscription'),
     ('fee', 'Fee'),
     ('contribution', 'Contribution'),
+    ('savings_deposit', 'Savings Deposit'),
+    ('savings_withdrawal', 'Savings Withdrawal'),
+    ('savings_withdrawal_penalty', 'Savings Withdrawal with Penalty'),
+    ('piggy_bank_contribution', 'Piggy Bank Savings'),
+    ('piggy_bank_withdrawal', 'Piggy Bank Withdrawal'),
     ('other', 'Other'),
 )
 
@@ -115,6 +120,7 @@ class TransactionToken(models.Model):
     created_at = models.DateTimeField(default=timezone.now)
     recipient_profile = models.ForeignKey(PaymentProfile, on_delete=models.CASCADE, related_name='recipient_profile', null=True, blank=True)
     payment_group = models.ForeignKey('PaymentGroups', on_delete=models.SET_NULL, null=True, blank=True, related_name='transactions')
+    piggy_bank = models.ForeignKey('GroupTarget', on_delete=models.SET_NULL, null=True, blank=True, related_name='transactions')
     status = models.CharField(max_length=200, choices=TRANSACTION_STATUS, default='completed')
     reversed_at = models.DateTimeField(null=True, blank=True)
     reversal_reason = models.TextField(blank=True, null=True)
@@ -608,6 +614,46 @@ class GroupTarget(models.Model):
     maturity_date = models.DateTimeField(null=True, blank=True)
     is_sharable = models.BooleanField(default=True) # If false, funds are segregated per user
     
+    # Visibility settings
+    VISIBILITY_CHOICES = (
+        ('public', 'Public - Visible to everyone'),
+        ('group', 'Group - Visible to group members only'),
+        ('private', 'Private - Visible to owner only'),
+    )
+    visibility = models.CharField(max_length=20, choices=VISIBILITY_CHOICES, default='group', help_text='Who can see this piggy bank')
+    
+    # Automation settings - what happens when piggy bank matures or is withdrawn
+    AUTOMATION_TRIGGER_CHOICES = (
+        ('none', 'No Automation'),
+        ('maturity', 'On Maturity Date'),
+        ('withdrawal', 'On Withdrawal'),
+        ('goal_achieved', 'When Goal is Achieved'),
+        ('manual', 'Manual Trigger Only'),
+    )
+    automation_trigger = models.CharField(max_length=20, choices=AUTOMATION_TRIGGER_CHOICES, default='manual')
+    
+    AUTOMATION_ACTION_CHOICES = (
+        ('none', 'Do Nothing'),
+        ('wallet', 'Transfer to My Wallet'),
+        ('group_fund', 'Add to Group Fund'),
+        ('product', 'Purchase a Product'),
+        ('service', 'Purchase a Service'),
+        ('investment', 'Invest in Opportunity'),
+        ('course', 'Buy Course/Masterclass'),
+        ('group_join', 'Join Group (Pay Fee)'),
+        ('donation', 'Make Donation'),
+        ('custom', 'Custom Automation'),
+    )
+    automation_action = models.CharField(max_length=20, choices=AUTOMATION_ACTION_CHOICES, default='wallet')
+    
+    # Automation targets - for product/service/investment/course/group
+    automation_target_type = models.CharField(max_length=50, blank=True, null=True, help_text='Type of target (product, service, investment, course, group)')
+    automation_target_id = models.CharField(max_length=100, blank=True, null=True, help_text='ID of the target item')
+    automation_target_name = models.CharField(max_length=255, blank=True, null=True, help_text='Name of target for display')
+    automation_amount = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True, help_text='Amount to use for automation (default: full balance)')
+    automation_executed = models.BooleanField(default=False, help_text='Whether automation has been executed')
+    automation_executed_at = models.DateTimeField(null=True, blank=True)
+    
     is_bid = models.BooleanField(default=False) # Is this a bid?
     bid_status = models.CharField(max_length=20, default='pending') # pending, accumulated, confirmed
     
@@ -616,6 +662,15 @@ class GroupTarget(models.Model):
     flexible_max_amount = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True)
     flexible_min_gap_days = models.IntegerField(default=0)
     last_withdrawal_date = models.DateTimeField(null=True, blank=True)
+    
+    # Additional withdrawal constraints
+    min_withdrawal_amount = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True, help_text='Minimum amount that can be withdrawn at once')
+    max_withdrawal_amount = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True, help_text='Maximum amount that can be withdrawn at once')
+    max_withdrawals_per_day = models.IntegerField(default=0, help_text='Maximum number of withdrawals per day (0 = unlimited)')
+    require_min_balance = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True, help_text='Minimum balance that must remain in piggy bank')
+    require_min_savings_period_days = models.IntegerField(default=0, help_text='Must save for this many days before first withdrawal')
+    require_min_member_age_days = models.IntegerField(default=0, help_text='Member must be in group for this many days before withdrawing')
+    require_min_contribution_amount = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True, help_text='Must have contributed at least this amount total')
     
     achieved = models.BooleanField(default=False)
     achieved_at = models.DateTimeField(null=True, blank=True)
@@ -672,16 +727,45 @@ class IndividualShare(models.Model):
 
 class PiggyBankConversionRequest(models.Model):
     STATUS_CHOICES = (
+        ('draft', 'Draft'),
         ('pending', 'Pending Approval'),
         ('approved', 'Approved'),
         ('rejected', 'Rejected'),
         ('converted', 'Converted/Archived'),
+        ('partial', 'Partially Completed'),
     )
+    
+    CONVERSION_TYPE_CHOICES = (
+        ('full', 'Full Conversion - All funds to group'),
+        ('split', 'Split - Form new subgroup with approvers'),
+    )
+    
+    APPROVAL_MODE_CHOICES = (
+        ('unanimous', 'Unanimous - All must approve'),
+        ('majority', 'Majority - Approvers move, rest get refund'),
+        ('any', 'Any - Anyone can approve and form new group'),
+    )
+    
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     piggy_bank = models.ForeignKey(GroupTarget, on_delete=models.CASCADE, related_name='conversion_requests')
     proposed_by = models.ForeignKey(PaymentGroupMember, on_delete=models.CASCADE)
-    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending')
-    approval_vote = models.ForeignKey('GroupVote', on_delete=models.SET_NULL, null=True, blank=True)
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='draft')
+    
+    # Conversion details
+    conversion_type = models.CharField(max_length=20, choices=CONVERSION_TYPE_CHOICES, default='full')
+    approval_mode = models.CharField(max_length=20, choices=APPROVAL_MODE_CHOICES, default='unanimous')
+    reason = models.TextField(blank=True, help_text='Reason for conversion request')
+    
+    # For split conversion - new group details
+    new_group_name = models.CharField(max_length=255, blank=True, help_text='Name for new subgroup if splitting')
+    new_piggy_name = models.CharField(max_length=255, blank=True, help_text='Name for new piggy bank in new group')
+    new_piggy_target = models.DecimalField(decimal_places=2, max_digits=12, null=True, blank=True, help_text='Target amount for new piggy bank')
+    
+    # Results
+    approving_members = models.ManyToManyField(PaymentGroupMember, related_name='approving_conversion_requests', blank=True)
+    rejecting_members = models.ManyToManyField(PaymentGroupMember, related_name='rejecting_conversion_requests', blank=True)
+    new_group = models.ForeignKey('PaymentGroups', on_delete=models.SET_NULL, null=True, blank=True, related_name='created_from_conversion')
+    new_piggy_bank = models.ForeignKey(GroupTarget, on_delete=models.SET_NULL, null=True, blank=True, related_name='conversion_parent')
     
     notes = models.TextField(blank=True)
     created_at = models.DateTimeField(default=timezone.now)
@@ -2240,6 +2324,7 @@ class EscrowDispute(models.Model):
     status = models.CharField(max_length=30, choices=DISPUTE_STATUS, default='open')
     resolution_notes = models.TextField(blank=True)
     resolved_by = models.ForeignKey(Profile, on_delete=models.SET_NULL, null=True, blank=True, related_name='resolved_disputes')
+    escalated = models.BooleanField(default=False, help_text='True if escalated to platform staff')
     created_at = models.DateTimeField(default=timezone.now)
     resolved_at = models.DateTimeField(null=True, blank=True)
 
@@ -2478,12 +2563,19 @@ class RoundContribution(models.Model):
     contribution_frequency = models.CharField(max_length=20, default='monthly')
     frequency_days = models.IntegerField(default=30)
     start_date = models.DateTimeField(default=timezone.now)
+    scheduled_start_date = models.DateTimeField(null=True, blank=True, help_text='When contributions officially begin after approval')
+    contribution_day_of_week = models.IntegerField(null=True, blank=True, help_text='Day of week for contributions (0=Monday, 6=Sunday)')
+    contribution_window_days = models.IntegerField(default=3, help_text='Days before/after contribution day to allow contributions')
     start_condition = models.CharField(max_length=50, default='all_members')
     voting_deadline = models.DateTimeField(null=True, blank=True)
     assignment_method = models.CharField(max_length=20, choices=ASSIGNMENT_METHODS, default='random')
     use_previous_positions = models.BooleanField(default=False)
     previous_round = models.ForeignKey('self', on_delete=models.SET_NULL, null=True, blank=True)
     currency = models.CharField(max_length=10, default='KES')
+    
+    # Position switching tracking
+    position_swap_requests = models.JSONField(default=list, blank=True, help_text='Track position swap requests between members')
+    allowed_swap_cycles = models.JSONField(default=list, blank=True, help_text='Cycles where swapping is allowed (e.g., [1, 2] means can swap before cycles 1 and 2)')
     
     total_collected = models.DecimalField(max_digits=12, decimal_places=2, default=0.00)
     total_generated = models.DecimalField(max_digits=12, decimal_places=2, default=0.00)
@@ -2529,6 +2621,125 @@ class RoundContribution(models.Model):
         elif self.contribution_frequency == 'monthly': return base + timedelta(days=30)
         elif self.contribution_frequency == 'custom' and self.frequency_days: return base + timedelta(days=self.frequency_days)
         return base + timedelta(days=30)
+    
+    def is_contribution_open(self):
+        """Check if contributions are currently allowed based on scheduling"""
+        if self.status != 'active':
+            return False
+        
+        now = timezone.now()
+        
+        # If scheduled_start_date is set and we haven't reached it yet
+        if self.scheduled_start_date and now < self.scheduled_start_date:
+            return False
+        
+        # Check contribution window based on day of week
+        if self.contribution_day_of_week is not None:
+            current_day = now.weekday()  # 0=Monday, 6=Sunday
+            window_days = getattr(self, 'contribution_window_days', 3)
+            
+            # Calculate the difference in days
+            day_diff = abs(current_day - self.contribution_day_of_week)
+            
+            # Allow if within window (before or after the contribution day)
+            if day_diff > window_days:
+                return False
+        
+        # Check if we're past the next contribution date + window
+        if self.next_contribution_date:
+            from datetime import timedelta
+            window_end = self.next_contribution_date + timedelta(days=getattr(self, 'contribution_window_days', 3))
+            if now > window_end:
+                # Past the window - but still allow if not all have contributed
+                member_count = self.get_member_count()
+                contributions = self.member_contributions.filter(cycle_number=self.current_cycle).count()
+                if contributions < member_count:
+                    # Late contributions still allowed but maybe with penalty?
+                    pass  # For now, allow
+        
+        return True
+    
+    def can_switch_positions(self, cycle_number=None):
+        """Check if position switching is allowed for the given cycle"""
+        if self.status not in ['pending', 'pending_approval']:
+            return False
+        
+        target_cycle = cycle_number or self.current_cycle
+        
+        allowed_cycles = self.allowed_swap_cycles or [1]  # Default to allowing swap before cycle 1
+        return target_cycle in allowed_cycles
+    
+    def add_position_swap_request(self, member1_id, member2_id, cycle_number, notes=''):
+        """Add a position swap request"""
+        from datetime import datetime
+        request = {
+            'id': str(uuid.uuid4()),
+            'member1_id': str(member1_id),
+            'member2_id': str(member2_id),
+            'cycle_number': cycle_number,
+            'notes': notes,
+            'status': 'pending',  # pending, approved_member1, approved_member2, completed, rejected
+            'created_at': datetime.now().isoformat(),
+            'approved_by_member1': False,
+            'approved_by_member2': False
+        }
+        
+        current_requests = self.position_swap_requests or []
+        current_requests.append(request)
+        self.position_swap_requests = current_requests
+        self.save()
+        return request['id']
+    
+    def approve_swap_request(self, request_id, member_id):
+        """Approve a position swap request"""
+        request = next((r for r in (self.position_swap_requests or []) if r['id'] == request_id), None)
+        if not request:
+            return False, "Request not found"
+        
+        if request['status'] not in ['pending', 'approved_member1', 'approved_member2']:
+            return False, "Request already processed"
+        
+        member_id_str = str(member_id)
+        
+        if request['member1_id'] == member_id_str:
+            request['approved_by_member1'] = True
+            request['status'] = 'approved_member2' if request['approved_by_member2'] else 'approved_member1'
+        elif request['member2_id'] == member_id_str:
+            request['approved_by_member2'] = True
+            request['status'] = 'approved_member1' if request['approved_by_member1'] else 'approved_member2'
+        else:
+            return False, "You are not part of this swap request"
+        
+        # If both approved, execute the swap
+        if request['approved_by_member1'] and request['approved_by_member2']:
+            request['status'] = 'completed'
+            self.execute_position_swap(request['member1_id'], request['member2_id'], request['cycle_number'])
+        
+        # Update the stored requests
+        for i, r in enumerate(self.position_swap_requests or []):
+            if r['id'] == request_id:
+                self.position_swap_requests[i] = request
+        self.save()
+        
+        return True, "Approved successfully"
+    
+    def execute_position_swap(self, member1_id, member2_id, cycle_number):
+        """Execute the actual position swap"""
+        try:
+            pos1 = RoundPosition.objects.get(round=self, member_id=member1_id)
+            pos2 = RoundPosition.objects.get(round=self, member_id=member2_id)
+            
+            # Swap position numbers
+            temp = pos1.position_number
+            pos1.position_number = pos2.position_number
+            pos2.position_number = temp
+            
+            pos1.save()
+            pos2.save()
+            
+            return True, "Positions swapped successfully"
+        except RoundPosition.DoesNotExist:
+            return False, "One or more positions not found"
 
     def record_contribution(self, member, amount, on_behalf_of=None, notes=''):
         if self.member_contributions.filter(member=member, cycle_number=self.current_cycle).exists():
@@ -2546,35 +2757,69 @@ class RoundContribution(models.Model):
         from Notifications.models import create_notification
         member_count = self.get_member_count()
         cycle_contributions = self.member_contributions.filter(cycle_number=self.current_cycle).count()
+        
         if cycle_contributions >= member_count:
+            # Determine who gets this cycle's pot
+            current_awarded_to = self.awarded_to
+            if not current_awarded_to:
+                try:
+                    first_position = RoundPosition.objects.get(
+                        payment_group=self.payment_group, 
+                        round=self, 
+                        position_number=self.current_cycle
+                    )
+                    current_awarded_to = first_position.member
+                    self.awarded_to = current_awarded_to
+                except RoundPosition.DoesNotExist:
+                    pass
+            
+            # CRITICAL: Store the pending claim amount for this cycle
+            # This amount should NOT be reset until the member claims it
+            pending_amount = self.total_collected
+            
             self.claim_status = 'unclaimed'
+            
+            # Record in award history - mark as pending claim
+            member_name = 'Unknown'
+            if current_awarded_to and current_awarded_to.payment_profile and current_awarded_to.payment_profile.user:
+                member_name = current_awarded_to.payment_profile.user.user.get_full_name() or current_awarded_to.payment_profile.user.user.email
+            
             history_entry = {
                 'cycle': self.current_cycle,
-                'member_id': str(self.awarded_to.id) if self.awarded_to else None,
-                'member_name': self.awarded_to.payment_profile.user.user.get_full_name() if self.awarded_to else 'Unknown',
-                'amount': float(self.total_collected),
-                'claimed': False, 'claimed_at': None
+                'member_id': str(current_awarded_to.id) if current_awarded_to else None,
+                'member_name': member_name,
+                'amount': float(pending_amount),
+                'claimed': False, 
+                'claimed_at': None,
+                'claim_status': 'unclaimed',
+                'pending_claim': True  # Flag to indicate this cycle is awaiting claim
             }
             self.award_history.append(history_entry)
-            if self.awarded_to:
-                create_notification(
-                    recipient=self.awarded_to.payment_profile.user.user,
-                    notification_type='group_claim',
-                    message=f"Funds ready to claim from round '{self.round_name or self.round_number}'.",
-                    action_url=f"/payments/groups/{self.payment_group.id}?tab=rounds"
-                )
-            self.total_generated += self.total_collected
-            self.total_cycles_completed += 1
-            self.total_collected = 0
-            if self.current_cycle >= member_count:
-                self.status = 'completed'
-            else:
-                self.current_cycle += 1
-                self.next_contribution_date = self.get_next_contribution_date()
+            
+            # Notify the member whose turn it is to claim
+            if current_awarded_to and current_awarded_to.payment_profile and current_awarded_to.payment_profile.user:
                 try:
-                    pos = RoundPosition.objects.get(payment_group=self.payment_group, round=self, position_number=self.current_cycle)
-                    self.awarded_to = pos.member
-                except Exception: pass
+                    create_notification(
+                        recipient=current_awarded_to.payment_profile.user.user,
+                        notification_type='group_claim',
+                        message=f"Funds ready to claim from round '{self.round_name or self.round_number}' Cycle {self.current_cycle}. Total: KES {pending_amount}",
+                        action_url=f"/payments/groups/{self.payment_group.id}?tab=rounds"
+                    )
+                except Exception:
+                    pass
+            
+            # DO NOT increment total_generated or total_cycles_completed here!
+            # These should only be updated AFTER the member actually claims
+            # The cycle is NOT complete until the member claims their payout
+            
+            # IMPORTANT: Do NOT increment current_cycle or update awarded_to yet!
+            # The current awarded_to must remain to allow them to claim
+            # Only AFTER they claim do we move to the next cycle
+            
+            # Set next contribution date for the next cycle
+            self.next_contribution_date = self.get_next_contribution_date()
+            
+            # Save now - cycle is pending claim, not complete
             self.save()
 
 class RoundMemberContribution(models.Model):

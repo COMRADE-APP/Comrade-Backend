@@ -37,6 +37,8 @@ class VerifyAccountView(APIView):
 
 class DepositView(APIView):
     permission_classes = [permissions.IsAuthenticated]
+    from comrade.throttles import PaymentWriteThrottle
+    throttle_classes = [PaymentWriteThrottle]
 
     @transaction.atomic
     def post(self, request):
@@ -174,6 +176,8 @@ class DepositView(APIView):
 
 class WithdrawView(APIView):
     permission_classes = [permissions.IsAuthenticated]
+    from comrade.throttles import WithdrawalThrottle
+    throttle_classes = [WithdrawalThrottle]
 
     @transaction.atomic
     def post(self, request):
@@ -184,6 +188,19 @@ class WithdrawView(APIView):
         amount = request.data.get('amount')
         payment_method = request.data.get('payment_method', 'mpesa')
         save_details = request.data.get('save_details', False)
+        
+        # Enforce 2FA for all withdrawals
+        user = request.user
+        if not user.totp_enabled:
+            return Response({"detail": "Two-Factor Authentication must be enabled to withdraw funds."}, status=status.HTTP_403_FORBIDDEN)
+            
+        otp = request.data.get('otp')
+        if not otp:
+            return Response({"detail": "2FA OTP is required for withdrawals."}, status=status.HTTP_400_BAD_REQUEST)
+            
+        from Authentication.totp import verify_totp_otp
+        if not verify_totp_otp(user.totp_secret, otp):
+            return Response({"detail": "Invalid 2FA OTP."}, status=status.HTTP_400_BAD_REQUEST)
 
         # Per-method fields
         phone_number = request.data.get('phone_number')
@@ -308,6 +325,8 @@ class WithdrawView(APIView):
 
 class TransferView(APIView):
     permission_classes = [permissions.IsAuthenticated]
+    from comrade.throttles import TransferThrottle
+    throttle_classes = [TransferThrottle]
 
     @transaction.atomic
     def post(self, request):

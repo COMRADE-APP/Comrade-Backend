@@ -1,4 +1,5 @@
 from rest_framework import serializers
+from comrade.mixins import SanitizeHtmlMixin
 from Rooms.models import Room, DefaultRoom, DirectMessage, DirectMessageRoom, ForwadingLog
 from Authentication.models import CustomUser
 
@@ -43,7 +44,7 @@ class UserMinimalSerializer(serializers.ModelSerializer):
         return obj.last_seen
 
 
-class RoomSerializer(serializers.ModelSerializer):
+class RoomSerializer(SanitizeHtmlMixin, serializers.ModelSerializer):
     created_by_name = serializers.SerializerMethodField()
     member_count = serializers.SerializerMethodField()
     
@@ -130,7 +131,7 @@ class DirectMessageSerializer(serializers.ModelSerializer):
         return False
 
 
-class DirectMessageCreateSerializer(serializers.ModelSerializer):
+class DirectMessageCreateSerializer(SanitizeHtmlMixin, serializers.ModelSerializer):
     """Serializer for creating direct messages"""
     receiver = serializers.PrimaryKeyRelatedField(
         queryset=CustomUser.objects.all(), 
@@ -317,7 +318,7 @@ class RoomChatSerializer(serializers.ModelSerializer):
         return None
 
 
-class RoomChatCreateSerializer(serializers.ModelSerializer):
+class RoomChatCreateSerializer(SanitizeHtmlMixin, serializers.ModelSerializer):
     """Serializer for creating room chat messages"""
     class Meta:
         model = RoomChat

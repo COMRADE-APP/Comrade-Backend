@@ -1,4 +1,5 @@
 from rest_framework import serializers
+from comrade.mixins import SanitizeHtmlMixin
 from django.utils import timezone
 from datetime import timedelta
 from .models import Conversation, ConversationParticipant, Message, MessageRead, UserMessagingSettings
@@ -193,8 +194,8 @@ class UserMessagingSettingsSerializer(serializers.ModelSerializer):
         ]
 
 
-class StartConversationSerializer(serializers.Serializer):
-    """Serializer for starting a new conversation"""
+class StartConversationSerializer(SanitizeHtmlMixin, serializers.Serializer):
+    """Serializer for starting a new conversation — HTML-sanitized"""
     user_id = serializers.IntegerField()
     message = serializers.CharField(required=False, allow_blank=True)
     
@@ -206,8 +207,8 @@ class StartConversationSerializer(serializers.Serializer):
         return value
 
 
-class SendMessageSerializer(serializers.Serializer):
-    """Serializer for sending a message"""
+class SendMessageSerializer(SanitizeHtmlMixin, serializers.Serializer):
+    """Serializer for sending a message — HTML-sanitized"""
     content = serializers.CharField(required=False, allow_blank=True)
     message_type = serializers.ChoiceField(
         choices=['text', 'image', 'video', 'audio', 'file'],

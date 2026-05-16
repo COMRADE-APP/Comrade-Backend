@@ -91,6 +91,8 @@ MIDDLEWARE = [
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
     "allauth.account.middleware.AccountMiddleware",
     'ActivityLog.tracking_middleware.ActivityTrackingMiddleware',
+    'comrade.security_middleware.SecurityHeadersMiddleware',
+    'comrade.security_middleware.FileUploadValidationMiddleware',
 ]
 
 # ALLOWED_HOSTS: read from env, with sensible defaults
@@ -221,7 +223,7 @@ WSGI_APPLICATION = 'comrade.wsgi.application'
 # Production: set DATABASE_URL env var (PostgreSQL on Render)
 # Local dev:  leave DATABASE_URL unset → falls back to SQLite
 _database_url = os.environ.get('DATABASE_URL')
-if False:
+if _database_url:
     DATABASES = {
         'default': dj_database_url.parse(
             _database_url,
@@ -532,4 +534,55 @@ CELERY_BEAT_SCHEDULER = 'django_celery_beat.schedulers:DatabaseScheduler'
 CELERY_TASK_TRACK_STARTED = True
 CELERY_TASK_TIME_LIMIT = 300  # 5 minutes max per task
 CELERY_BROKER_CONNECTION_RETRY_ON_STARTUP = True
+
+# ============================================================================
+# REDIS SENTINEL & CHANNELS CONFIGURATION
+# ============================================================================
+if os.getenv('REDIS_SENTINEL_HOST'):
+    CHANNEL_LAYERS = {
+        "default": {
+            "BACKEND": "channels_redis.core.RedisChannelLayer",
+            "CONFIG": {
+                "hosts": [{"sentinels": [(os.getenv('REDIS_SENTINEL_HOST'), int(os.getenv('REDIS_SENTINEL_PORT', 26379)))], "master_name": os.getenv('REDIS_MASTER_NAME', 'mymaster')}],
+            },
+        },
+    }
+    CELERY_BROKER_URL = f"sentinel://{os.getenv('REDIS_SENTINEL_HOST')}:{os.getenv('REDIS_SENTINEL_PORT', 26379)}/"
+    CELERY_BROKER_TRANSPORT_OPTIONS = {'master_name': os.getenv('REDIS_MASTER_NAME', 'mymaster')}
+else:
+    ASGI_APPLICATION = 'comrade.asgi.application'
+    CHANNEL_LAYERS = {
+        "default": {
+            "BACKEND": "channels_redis.core.RedisChannelLayer",
+            "CONFIG": {
+                "hosts": [(os.getenv('REDIS_HOST', '127.0.0.1'), 6379)],
+            },
+        },
+    }
+
+# ============================================================================
+# SENTRY ERROR TRACKING
+# ============================================================================
+sentry_dsn = os.getenv('SENTRY_DSN')
+if sentry_dsn:
+    try:
+        import sentry_sdk
+        from sentry_sdk.integrations.django import DjangoIntegration
+        from sentry_sdk.integrations.celery import CeleryIntegration
+        from sentry_sdk.integrations.redis import RedisIntegration
+        
+        sentry_sdk.init(
+            dsn=sentry_dsn,
+            integrations=[
+                DjangoIntegration(),
+                CeleryIntegration(),
+                RedisIntegration(),
+            ],
+            traces_sample_rate=1.0,
+            send_default_pii=True,
+            environment=os.getenv('ENVIRONMENT', 'development')
+        )
+    except ImportError:
+        import warnings
+        warnings.warn('sentry-sdk not installed. Error tracking disabled.', stacklevel=1)
 

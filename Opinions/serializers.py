@@ -1,4 +1,5 @@
 from rest_framework import serializers
+from comrade.mixins import SanitizeHtmlMixin
 from .models import Opinion, OpinionLike, OpinionComment, OpinionRepost, Follow, Bookmark, OpinionMedia, Story, StoryView
 from Authentication.models import CustomUser
 
@@ -277,8 +278,8 @@ class OpinionSerializer(serializers.ModelSerializer):
         return reposters
 
 
-class OpinionCreateSerializer(serializers.ModelSerializer):
-    """Serializer for creating opinions"""
+class OpinionCreateSerializer(SanitizeHtmlMixin, serializers.ModelSerializer):
+    """Serializer for creating opinions — HTML-sanitized to prevent XSS"""
     class Meta:
         model = Opinion
         fields = ['content', 'visibility', 'media_url', 'media_type', 'quoted_opinion', 'is_anonymous', 'room', 'tagged_rooms',
@@ -575,8 +576,8 @@ class StorySerializer(serializers.ModelSerializer):
         return None
 
 
-class StoryCreateSerializer(serializers.ModelSerializer):
-    """Serializer for creating stories"""
+class StoryCreateSerializer(SanitizeHtmlMixin, serializers.ModelSerializer):
+    """Serializer for creating stories — HTML-sanitized to prevent XSS"""
     class Meta:
         model = Story
         fields = [

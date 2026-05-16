@@ -1,4 +1,5 @@
 from rest_framework import serializers
+from comrade.mixins import SanitizeHtmlMixin, RichTextSanitizeMixin
 from .models import Article, ArticleAttachment, Comment, ArticleLike, ArticleBookmark, ArticleRead
 from Authentication.serializers import CustomUserSerializer as UserSerializer
 
@@ -7,7 +8,7 @@ class ArticleAttachmentSerializer(serializers.ModelSerializer):
         model = ArticleAttachment
         fields = ['id', 'file', 'uploaded_at']
 
-class CommentSerializer(serializers.ModelSerializer):
+class CommentSerializer(SanitizeHtmlMixin, serializers.ModelSerializer):
     user = UserSerializer(read_only=True)
     replies = serializers.SerializerMethodField()
     
@@ -21,7 +22,7 @@ class CommentSerializer(serializers.ModelSerializer):
             return CommentSerializer(obj.replies.all(), many=True).data
         return []
 
-class ArticleSerializer(serializers.ModelSerializer):
+class ArticleSerializer(RichTextSanitizeMixin, serializers.ModelSerializer):
     author = serializers.SerializerMethodField() # Custom user logic if needed, or just nested
     attachments = ArticleAttachmentSerializer(many=True, read_only=True)
     is_liked = serializers.SerializerMethodField()

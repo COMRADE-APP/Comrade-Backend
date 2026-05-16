@@ -156,3 +156,37 @@ def create_notification(
     )
     
     return notification
+
+
+from django.db.models.signals import post_save
+from django.dispatch import receiver
+
+@receiver(post_save, sender=Notification)
+def send_push_notification(sender, instance, created, **kwargs):
+    """
+    Automatically send push notification when a new Notification is created
+    """
+    if created:
+        from .services.push import PushNotificationService
+        
+        # Check preferences (example: push_likes, push_comments)
+        prefs = getattr(instance.recipient, 'notification_preferences', None)
+        if prefs:
+            pref_field = f"push_{instance.notification_type}s"
+            if hasattr(prefs, pref_field) and not getattr(prefs, pref_field):
+                return
+                
+        title = instance.title or "New Notification"
+        
+        # Optionally dispatch to Celery for async delivery
+        # For now, inline
+        PushNotificationService.send_to_user(
+            user=instance.recipient,
+            title=title,
+            body=instance.message,
+            data={
+                "notification_id": str(instance.id),
+                "type": instance.notification_type,
+                "action_url": instance.action_url
+            }
+        )

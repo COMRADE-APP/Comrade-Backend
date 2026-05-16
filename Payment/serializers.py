@@ -1447,6 +1447,23 @@ class LoanApplicationSerializer(serializers.ModelSerializer):
     
     def get_guarantor_count(self, obj):
         return obj.guarantors.count()
+    
+    def validate(self, data):
+        # If loan_product is passed as an ID string, convert to object
+        if 'loan_product' in data and isinstance(data['loan_product'], str):
+            try:
+                from Payment.models import LoanProduct
+                data['loan_product'] = LoanProduct.objects.get(id=data['loan_product'])
+            except:
+                pass
+        # If group is passed as ID string, convert to object
+        if 'group' in data and isinstance(data['group'], str):
+            try:
+                from Payment.models import PaymentGroups
+                data['group'] = PaymentGroups.objects.get(id=data['group'])
+            except:
+                pass
+        return data
 
 
 # ==================== ESCROW SERIALIZERS ====================
@@ -1896,11 +1913,33 @@ class GroupInvestmentSerializer(serializers.ModelSerializer):
     opportunity_category = serializers.SerializerMethodField()
     approval_vote = serializers.SerializerMethodField()
     is_group_member = serializers.SerializerMethodField()
+    # Frontend alias fields
+    investment_name = serializers.SerializerMethodField()
+    amount_invested = serializers.SerializerMethodField()
+    current_value = serializers.SerializerMethodField()
+    type = serializers.SerializerMethodField()
 
     class Meta:
         model = GroupInvestment
         fields = '__all__'
         read_only_fields = ['id', 'amount_collected', 'total_returns', 'net_profit_loss', 'created_at', 'updated_at']
+
+    def validate(self, data):
+        if not data.get('name') and data.get('investment_name'):
+            data['name'] = data['investment_name']
+        return data
+    
+    def get_investment_name(self, obj):
+        return obj.name
+    
+    def get_amount_invested(self, obj):
+        return float(obj.total_amount) if obj.total_amount else 0
+    
+    def get_current_value(self, obj):
+        return float(obj.total_amount) if obj.total_amount else 0
+    
+    def get_type(self, obj):
+        return 'Commercial Venture'
 
     def get_group_name(self, obj):
         return obj.payment_group.name if obj.payment_group else None
@@ -2018,6 +2057,8 @@ class RoundContributionSerializer(serializers.ModelSerializer):
     awarded_to_name = serializers.SerializerMethodField()
     is_recipient = serializers.SerializerMethodField()
     has_unclaimed_payout = serializers.SerializerMethodField()
+    can_claim = serializers.SerializerMethodField()
+    pending_claim_amount = serializers.SerializerMethodField()
     progress_percentage = serializers.SerializerMethodField()
     
     class Meta:
@@ -2139,16 +2180,73 @@ class RoundContributionSerializer(serializers.ModelSerializer):
                 payment_group=obj.payment_group,
                 payment_profile__user__user=request.user
             )
-            # Check if user is the awarded recipient with unclaimed funds
+            
+            # Check if user is the awarded recipient with unclaimed funds (for current cycle)
             if obj.claim_status == 'unclaimed' and obj.awarded_to_id == member.id:
                 return True
-            # Also check award_history for backwards compatibility
-            has_payout = any(str(h.get('member_id')) == str(member.id) and not h.get('claimed') for h in obj.award_history)
-            print(f"DEBUG: Round {obj.round_number}, User {request.user.id}, Member {member.id}, Has Payout: {has_payout}, claim_status: {obj.claim_status}, awarded_to: {obj.awarded_to_id}")
-            return has_payout
-        except Exception as e:
-            print(f"DEBUG: Error in get_has_unclaimed_payout: {e}")
+                
+            # Also check award_history for any unclaimed cycle payouts for this member
+            for h in obj.award_history:
+                member_id = h.get('member_id')
+                claimed = h.get('claimed', False)
+                if member_id and str(member_id) == str(member.id) and not claimed:
+                    return True
+            
             return False
+        except Exception as e:
+            return False
+    
+    def get_can_claim(self, obj):
+        """Check if the current user can claim their payout"""
+        request = self.context.get('request')
+        if not request or not request.user or request.user.is_anonymous:
+            return False
+        
+        from Payment.models import PaymentGroupMember
+        try:
+            member = PaymentGroupMember.objects.get(
+                payment_group=obj.payment_group,
+                payment_profile__user__user=request.user
+            )
+            
+            # Check if current user is the awarded recipient with unclaimed funds
+            if obj.claim_status == 'unclaimed' and obj.awarded_to_id == member.id:
+                return True
+                
+            # Also check award_history for unclaimed payouts for this user
+            for h in obj.award_history:
+                if str(h.get('member_id')) == str(member.id) and not h.get('claimed', False):
+                    return True
+            
+            return False
+        except:
+            return False
+    
+    def get_pending_claim_amount(self, obj):
+        """Get the amount pending for current user to claim"""
+        request = self.context.get('request')
+        if not request or not request.user or request.user.is_anonymous:
+            return 0
+        
+        from Payment.models import PaymentGroupMember
+        try:
+            member = PaymentGroupMember.objects.get(
+                payment_group=obj.payment_group,
+                payment_profile__user__user=request.user
+            )
+            
+            # Check current cycle
+            if obj.claim_status == 'unclaimed' and obj.awarded_to_id == member.id:
+                return float(obj.total_collected) if obj.total_collected else 0
+                
+            # Check award_history
+            for h in obj.award_history:
+                if str(h.get('member_id')) == str(member.id) and not h.get('claimed', False):
+                    return h.get('amount', 0)
+            
+            return 0
+        except:
+            return 0
 
     def get_progress_percentage(self, obj):
         return obj.get_progress_percentage()
@@ -2176,12 +2274,43 @@ class WithdrawalRequestSerializer(serializers.ModelSerializer):
 
 class PiggyBankConversionRequestSerializer(serializers.ModelSerializer):
     proposed_by_name = serializers.CharField(source='proposed_by.payment_profile.user.user.username', read_only=True)
+    proposed_by_display = serializers.CharField(source='proposed_by.payment_profile.user.user.get_full_name', read_only=True)
     piggy_bank_name = serializers.CharField(source='piggy_bank.name', read_only=True)
+    group_name = serializers.CharField(source='piggy_bank.payment_group.name', read_only=True)
+    
+    approving_members_details = serializers.SerializerMethodField()
+    rejecting_members_details = serializers.SerializerMethodField()
+    total_members = serializers.SerializerMethodField()
     
     class Meta:
         model = PiggyBankConversionRequest
         fields = '__all__'
         read_only_fields = ['id', 'created_at', 'updated_at', 'status', 'approval_vote']
+    
+    def get_approving_members_details(self, obj):
+        members = []
+        for m in obj.approving_members.all():
+            members.append({
+                'id': str(m.id),
+                'name': m.anonymous_alias if m.is_anonymous else m.payment_profile.user.user.get_full_name(),
+                'is_anonymous': m.is_anonymous
+            })
+        return members
+    
+    def get_rejecting_members_details(self, obj):
+        members = []
+        for m in obj.rejecting_members.all():
+            members.append({
+                'id': str(m.id),
+                'name': m.anonymous_alias if m.is_anonymous else m.payment_profile.user.user.get_full_name(),
+                'is_anonymous': m.is_anonymous
+            })
+        return members
+    
+    def get_total_members(self, obj):
+        if obj.piggy_bank and obj.piggy_bank.payment_group:
+            return obj.piggy_bank.payment_group.members.count()
+        return 0
 
 
 class GroupSettingsChangeRequestSerializer(serializers.ModelSerializer):

@@ -18,7 +18,6 @@ from django.conf import settings
 from django.urls import reverse
 from django.utils import timezone
 from django.shortcuts import redirect
-from django.views.decorators.csrf import csrf_exempt
 from django.utils.decorators import method_decorator
 import logging
 import secrets
@@ -74,7 +73,6 @@ def _set_token_cookies(response, access_token, refresh_token, remember_me=False)
     return response
 
 
-@method_decorator(csrf_exempt, name='dispatch')
 class RegisterView(APIView):
     permission_classes = [AllowAny]
     authentication_classes = []  # Disable authentication (prevents SessionAuth CSRF check)
@@ -153,7 +151,6 @@ class RegisterView(APIView):
 
 
 
-@method_decorator(csrf_exempt, name='dispatch')
 class RegisterVerifyView(APIView):
     """Verify registration OTP and activate user account"""
     permission_classes = [AllowAny]
@@ -288,7 +285,6 @@ class HeartbeatView(APIView):
         return Response({"status": "alive"}, status=status.HTTP_200_OK)
 
 
-@method_decorator(csrf_exempt, name='dispatch')
 class LoginView(APIView):
     permission_classes = [AllowAny]
     authentication_classes = []  # Disable authentication (prevents SessionAuth CSRF check)
@@ -390,7 +386,6 @@ class LoginView(APIView):
             }, status=status.HTTP_200_OK)
 
 
-@method_decorator(csrf_exempt, name='dispatch')
 class LoginVerifyView(APIView):
     permission_classes = [AllowAny]
     authentication_classes = []  # Disable authentication (prevents SessionAuth CSRF check)
@@ -421,16 +416,29 @@ class LoginVerifyView(APIView):
         user.login_otp_expires = None
         user.save()
         
-        # Check if 2FA is enabled
+        from Authentication.device_utils import require_device_verification
+        is_new_device = require_device_verification(user, request)
+        
+        # Check if 2FA (TOTP) is required
         if user.totp_enabled:
             return Response({
-                "message": "2FA verification required.",
+                "message": "Authenticator App verification required.",
                 "verification_required": True,
                 "next_step": "verify_2fa_totp",
                 "email": user.email
             })
+        elif is_new_device:
+            # Mandatory MFA for new devices — force setup
+            return Response({
+                "message": "For your security, Two-Factor Authentication must be set up on this new device.",
+                "verification_required": True,
+                "next_step": "setup_2fa_totp",
+                "email": user.email,
+                # Give a short-lived token just for setup
+                "setup_token": str(RefreshToken.for_user(user).access_token)
+            })
         
-        # Complete login (no 2FA required)
+        # Complete login (no 2FA required for trusted devices if not enabled)
         return self._complete_login(user, request)
     
     def _complete_login(self, user, request):
@@ -458,7 +466,6 @@ class LoginVerifyView(APIView):
         return _set_token_cookies(resp, str(refresh.access_token), str(refresh), remember_me=remember_me)
 
 
-@method_decorator(csrf_exempt, name='dispatch')
 class ResendOTPView(APIView):
     permission_classes = [AllowAny]
     authentication_classes = []  # Disable authentication (prevents SessionAuth CSRF check)
@@ -531,7 +538,15 @@ class Verify2FAView(APIView):
         
         if verify_totp_otp(user.totp_secret, otp):
             log_2fa_activity(user, request, 'verify')
-            register_device(user, request)
+            
+            # Mark device as verified and trusted
+            from Authentication.device_utils import register_device
+            device = register_device(user, request)
+            device.is_verified = True
+            device.trust_level = 'trusted'
+            device.verified_at = timezone.now()
+            device.save()
+
             
             remember_me = request.data.get('remember_me', False)
             if str(remember_me).lower() == 'true': remember_me = True
@@ -715,6 +730,14 @@ class Confirm2FASetupView(APIView):
             user.totp_enabled = True
             user.totp_verified = True
             user.save()
+            
+            # Mark the device used for setup as verified
+            from Authentication.device_utils import register_device
+            device = register_device(user, request)
+            device.is_verified = True
+            device.trust_level = 'trusted'
+            device.verified_at = timezone.now()
+            device.save()
             
             log_2fa_activity(user, request, 'setup_complete')
             return Response({"message": "2FA enabled successfully."})

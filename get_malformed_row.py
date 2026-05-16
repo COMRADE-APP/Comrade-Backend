@@ -9,7 +9,12 @@ def get_row_details():
     table = 'Payment_groupcertificate'
     column = 'id'
     val = '1'
-    
+
+    # Ensure table and column names are safe identifiers (basic check)
+    if not table.isidentifier() or not column.isidentifier():
+        print("Invalid table or column name. Must be valid identifiers.")
+        return
+
     print(f"Fetching details for {table}.{column} = '{val}'")
     cursor.execute(f"SELECT * FROM {table} WHERE {column} = ?", (val,))
     row = cursor.fetchone()

@@ -1301,6 +1301,145 @@ class EventSponsorshipApplicationViewSet(ModelViewSet):
     queryset = EventSponsorshipApplication.objects.all()
     permission_classes = [IsAuthenticatedOrReadOnly]
 
+    def get_queryset(self):
+        qs = super().get_queryset()
+        event_id = self.request.query_params.get('event')
+        if event_id:
+            qs = qs.filter(event_id=event_id)
+        return qs.order_by('-application_date')
+
+    def perform_create(self, serializer):
+        serializer.save(user=self.request.user)
+
+    @action(detail=False, methods=['get'])
+    def by_event(self, request):
+        """Get all sponsorship applications for an event."""
+        event_id = request.query_params.get('event_id')
+        if not event_id:
+            return Response({'error': 'event_id is required'}, status=status.HTTP_400_BAD_REQUEST)
+        
+        applications = EventSponsorshipApplication.objects.filter(event_id=event_id).order_by('-application_date')
+        serializer = self.get_serializer(applications, many=True)
+        return Response(serializer.data)
+
+    @action(detail=False, methods=['get'])
+    def my_applications(self, request):
+        """Get the current user's sponsorship applications."""
+        applications = EventSponsorshipApplication.objects.filter(user=request.user).order_by('-application_date')
+        serializer = self.get_serializer(applications, many=True)
+        return Response(serializer.data)
+
+    @action(detail=True, methods=['post'])
+    def approve(self, request, pk=None):
+        """Approve a sponsorship application. Only event organizer or staff can approve."""
+        application = self.get_object()
+        event = application.event
+
+        if event.created_by != request.user and not request.user.is_staff:
+            return Response({'error': 'Only the event organizer can approve sponsorship applications'}, status=status.HTTP_403_FORBIDDEN)
+
+        approval_reason = request.data.get('reason', 'Application meets sponsorship criteria.')
+        
+        # Prevent duplicate approvals
+        if EventSponsorshipApproval.objects.filter(application=application, approval_status='approved').exists():
+            return Response({'error': 'This application has already been approved'}, status=status.HTTP_400_BAD_REQUEST)
+
+        EventSponsorshipApproval.objects.create(
+            application=application,
+            approval_status='approved',
+            approval_reason=approval_reason
+        )
+
+        # Auto-create a sponsor entry if level is specified
+        level_id = request.data.get('sponsorship_level_id')
+        if level_id:
+            try:
+                level = EventSponsorshipLevel.objects.get(id=level_id, event=event)
+                EventSponsor.objects.get_or_create(
+                    event=event,
+                    sponsor_name=application.applicant_name,
+                    defaults={
+                        'sponsorship_level': level.level_name,
+                        'contribution_amount': level.level_price,
+                    }
+                )
+            except EventSponsorshipLevel.DoesNotExist:
+                pass
+
+        return Response({
+            'message': f'Sponsorship application from {application.applicant_name} approved.',
+            'application_id': str(application.id),
+        })
+
+    @action(detail=True, methods=['post'])
+    def reject(self, request, pk=None):
+        """Reject a sponsorship application."""
+        application = self.get_object()
+        event = application.event
+
+        if event.created_by != request.user and not request.user.is_staff:
+            return Response({'error': 'Only the event organizer can reject sponsorship applications'}, status=status.HTTP_403_FORBIDDEN)
+
+        rejection_reason = request.data.get('reason', 'Application did not meet sponsorship requirements.')
+
+        EventSponsorshipRejection.objects.create(
+            application=application,
+            rejection_status='rejected',
+            rejection_reason=rejection_reason
+        )
+
+        return Response({
+            'message': f'Sponsorship application from {application.applicant_name} rejected.',
+            'application_id': str(application.id),
+        })
+
+    @action(detail=False, methods=['get'])
+    def sponsorship_dashboard(self, request):
+        """Aggregate sponsorship stats for an event."""
+        event_id = request.query_params.get('event_id')
+        if not event_id:
+            return Response({'error': 'event_id is required'}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            event = Event.objects.get(pk=event_id)
+        except Event.DoesNotExist:
+            return Response({'error': 'Event not found'}, status=status.HTTP_404_NOT_FOUND)
+
+        applications = EventSponsorshipApplication.objects.filter(event=event)
+        approved_ids = EventSponsorshipApproval.objects.filter(
+            application__event=event, approval_status='approved'
+        ).values_list('application_id', flat=True)
+        rejected_ids = EventSponsorshipRejection.objects.filter(
+            application__event=event, rejection_status='rejected'
+        ).values_list('application_id', flat=True)
+
+        levels = EventSponsorshipLevel.objects.filter(event=event)
+        sponsors = EventSponsor.objects.filter(event=event)
+
+        total_sponsorship = sum(float(s.contribution_amount or 0) for s in sponsors)
+
+        return Response({
+            'event_id': str(event.id),
+            'event_name': event.name,
+            'total_applications': applications.count(),
+            'approved': applications.filter(id__in=approved_ids).count(),
+            'rejected': applications.filter(id__in=rejected_ids).count(),
+            'pending': applications.exclude(id__in=approved_ids).exclude(id__in=rejected_ids).count(),
+            'total_sponsors': sponsors.count(),
+            'total_sponsorship_value': total_sponsorship,
+            'levels': [{
+                'id': str(l.id),
+                'name': l.level_name,
+                'benefits': l.level_benefits,
+                'price': float(l.level_price),
+            } for l in levels],
+            'sponsors': [{
+                'name': s.sponsor_name,
+                'level': s.sponsorship_level if hasattr(s, 'sponsorship_level') else '',
+                'amount': float(s.contribution_amount or 0),
+            } for s in sponsors],
+        })
+
 class EventSponsorshipCertificateViewSet(ModelViewSet):
     serializer_class = EventSponsorshipCertificateSerializer
     queryset = EventSponsorshipCertificate.objects.all()
