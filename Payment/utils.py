@@ -342,15 +342,19 @@ def get_or_create_payment_profile(user):
                 profile = Profile.objects.create(user=user)
         
         # Ensure PaymentProfile exists
-        payment_profile, created = PaymentProfile.objects.get_or_create(
-            user=profile,
-            defaults={
-                'tier': 'free',
-                'comrade_balance': 0.00,
-                'profile_token': f"PAY-{uuid.uuid4().hex[:12].upper()}",
-                'payment_option': 'comrade_balance'
-            }
-        )
+        try:
+            payment_profile, created = PaymentProfile.objects.get_or_create(
+                user=profile,
+                defaults={
+                    'tier': 'free',
+                    'comrade_balance': 0.00,
+                    'profile_token': f"PAY-{uuid.uuid4().hex[:12].upper()}",
+                    'payment_option': 'comrade_balance'
+                }
+            )
+        except PaymentProfile.MultipleObjectsReturned:
+            payment_profile = PaymentProfile.objects.filter(user=profile).first()
+            
         return payment_profile
     except Exception as e:
         print(f"Error getting/creating payment profile: {e}")

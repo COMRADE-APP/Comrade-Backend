@@ -37,6 +37,7 @@ urlpatterns = [
     path(f'{API_V1}careers/', include('Careers.urls')),
     path(f'{API_V1}research/', include('Research.urls')),
     path(f'{API_V1}verification/', include('Verification.urls')),
+    path(f'{API_V1}trading/', include('Trading.urls')),
     path(f'{API_V1}auth/', include(rest_framework.urls)),
 
     # API documentation (Swagger / ReDoc)
@@ -65,6 +66,7 @@ urlpatterns = [
     path('api/careers/', include('Careers.urls')),
     path('api/research/', include('Research.urls')),
     path('api/verification/', include('Verification.urls')),
+    path('api/trading/', include('Trading.urls')),
 ]
 
 if settings.DEBUG:

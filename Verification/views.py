@@ -96,13 +96,14 @@ class EntityVerificationViewSet(viewsets.ModelViewSet):
             social_media=serializer.validated_data.get('social_media', {})
         )
         
-        EntityRegistration.objects.create(
-            verification_request=verification_request,
-            registration_number=serializer.validated_data['registration_number'],
-            year_established=serializer.validated_data.get('year_established'),
-            legal_name=serializer.validated_data.get('legal_name', ''),
-            jurisdiction=serializer.validated_data.get('jurisdiction', '')
-        )
+        if 'registration_number' in serializer.validated_data or serializer.validated_data.get('entity_type') != 'personal':
+            EntityRegistration.objects.create(
+                verification_request=verification_request,
+                registration_number=serializer.validated_data.get('registration_number', 'N/A'),
+                year_established=serializer.validated_data.get('year_established'),
+                legal_name=serializer.validated_data.get('legal_name', ''),
+                jurisdiction=serializer.validated_data.get('jurisdiction', '')
+            )
         
         tax_data = serializer.validated_data
         if tax_data.get('has_tax_id') or tax_data.get('tax_id'):

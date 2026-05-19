@@ -106,7 +106,7 @@ class GigApplicationViewSet(viewsets.ModelViewSet):
 
 
 class CareerOpportunityViewSet(viewsets.ModelViewSet):
-    queryset = CareerOpportunity.objects.filter(is_active=True)
+    queryset = CareerOpportunity.objects.filter(status='active')
     permission_classes = [permissions.IsAuthenticatedOrReadOnly, IsOwnerOrReadOnly]
     filter_backends = [filters.SearchFilter, filters.OrderingFilter]
     search_fields = ['title', 'company_name', 'description', 'industry']
@@ -119,6 +119,11 @@ class CareerOpportunityViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         qs = super().get_queryset()
+        
+        # Filter by status
+        status_filter = self.request.query_params.get('status')
+        if status_filter:
+            qs = qs.filter(status=status_filter)
         
         # Filter by job type
         job_type = self.request.query_params.get('job_type')
@@ -159,6 +164,11 @@ class CareerOpportunityViewSet(viewsets.ModelViewSet):
     def my_postings(self, request):
         """Get career opportunities posted by current user"""
         careers = CareerOpportunity.objects.filter(posted_by=request.user)
+        
+        status_filter = request.query_params.get('status')
+        if status_filter:
+            careers = careers.filter(status=status_filter)
+        
         serializer = CareerOpportunitySerializer(careers, many=True)
         return Response(serializer.data)
 

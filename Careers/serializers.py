@@ -58,7 +58,7 @@ class CareerOpportunitySerializer(serializers.ModelSerializer):
             'title', 'description', 'requirements', 'responsibilities',
             'salary_min', 'salary_max', 'salary_currency', 'salary_range',
             'location', 'is_remote', 'job_type', 'experience_level', 'industry',
-            'application_deadline', 'is_active', 'applications_count',
+            'application_deadline', 'status', 'is_active', 'applications_count',
             'created_at', 'updated_at'
         ]
         read_only_fields = ['id', 'posted_by', 'created_at', 'updated_at']
@@ -75,7 +75,7 @@ class CareerOpportunityCreateSerializer(serializers.ModelSerializer):
             'title', 'description', 'requirements', 'responsibilities',
             'salary_min', 'salary_max', 'salary_currency',
             'location', 'is_remote', 'job_type', 'experience_level', 'industry',
-            'application_deadline'
+            'application_deadline', 'status'
         ]
         read_only_fields = ['id']
 

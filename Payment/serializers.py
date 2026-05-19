@@ -326,9 +326,19 @@ class ContributionSerializer(serializers.ModelSerializer):
         return f"{obj.member.payment_profile.user.user.first_name} {obj.member.payment_profile.user.user.last_name}"
 
 class StandingOrderSerializer(serializers.ModelSerializer):
+    group_name = serializers.CharField(source='member.payment_group.name', read_only=True)
+    group_id = serializers.IntegerField(source='member.payment_group.id', read_only=True)
+    member_name = serializers.SerializerMethodField()
+
     class Meta:
         model = StandingOrder
         fields = '__all__'
+
+    def get_member_name(self, obj):
+        if obj.member.is_anonymous:
+            return obj.member.anonymous_alias or 'Anonymous Member'
+        return f"{obj.member.payment_profile.user.user.first_name} {obj.member.payment_profile.user.user.last_name}"
+
 
 class GroupTargetSerializer(serializers.ModelSerializer):
     item_details = PaymentItemSerializer(source='target_item', read_only=True)
@@ -336,6 +346,8 @@ class GroupTargetSerializer(serializers.ModelSerializer):
     owner_email = serializers.EmailField(source='owner.user.user.email', read_only=True)
     owner_name = serializers.SerializerMethodField()
     group_name = serializers.CharField(source='payment_group.name', read_only=True)
+    group_is_public = serializers.BooleanField(source='payment_group.is_public', read_only=True)
+    is_group_member = serializers.SerializerMethodField()
     type = serializers.SerializerMethodField()
     can_withdraw = serializers.SerializerMethodField()
     withdrawal_message = serializers.SerializerMethodField()
@@ -369,6 +381,19 @@ class GroupTargetSerializer(serializers.ModelSerializer):
     def get_withdrawal_message(self, obj):
         _, message = obj.can_withdraw()
         return message
+
+    def get_is_group_member(self, obj):
+        request = self.context.get('request')
+        if not request or not request.user.is_authenticated:
+            return False
+        if obj.payment_group:
+            from Payment.models import PaymentGroupMember
+            return PaymentGroupMember.objects.filter(
+                payment_group=obj.payment_group,
+                payment_profile__user__user=request.user,
+                is_active=True
+            ).exists()
+        return False
 
 class GroupInvitationSerializer(serializers.ModelSerializer):
     invited_user_email = serializers.EmailField(source='invited_profile.user.user.email', read_only=True)
@@ -419,13 +444,25 @@ class GroupPostReplySerializer(serializers.ModelSerializer):
 
     def get_author_avatar(self, obj):
         try:
-            if obj.author.user.profile_picture:
-                request = self.context.get('request')
-                if request:
-                    return request.build_absolute_uri(obj.author.user.profile_picture.url)
-                return obj.author.user.profile_picture.url
-        except Exception:
-            pass
+            profile = obj.author.user
+            auth_user = profile.user
+            request = self.context.get('request')
+            if profile.profile_picture:
+                try:
+                    if request:
+                        return request.build_absolute_uri(profile.profile_picture.url)
+                    return profile.profile_picture.url
+                except ValueError:
+                    return profile.profile_picture.url
+            elif hasattr(auth_user, 'user_profile') and auth_user.user_profile.avatar:
+                try:
+                    if request:
+                        return request.build_absolute_uri(auth_user.user_profile.avatar.url)
+                    return auth_user.user_profile.avatar.url
+                except ValueError:
+                    return auth_user.user_profile.avatar.url
+        except Exception as e:
+            print(f"Error fetching avatar for reply: {e}")
         return None
 
     def get_upvote_count(self, obj):
@@ -487,13 +524,25 @@ class GroupPostSerializer(serializers.ModelSerializer):
 
     def get_author_avatar(self, obj):
         try:
-            if obj.author.user.profile_picture:
-                request = self.context.get('request')
-                if request:
-                    return request.build_absolute_uri(obj.author.user.profile_picture.url)
-                return obj.author.user.profile_picture.url
-        except Exception:
-            pass
+            profile = obj.author.user
+            auth_user = profile.user
+            request = self.context.get('request')
+            if profile.profile_picture:
+                try:
+                    if request:
+                        return request.build_absolute_uri(profile.profile_picture.url)
+                    return profile.profile_picture.url
+                except ValueError:
+                    return profile.profile_picture.url
+            elif hasattr(auth_user, 'user_profile') and auth_user.user_profile.avatar:
+                try:
+                    if request:
+                        return request.build_absolute_uri(auth_user.user_profile.avatar.url)
+                    return auth_user.user_profile.avatar.url
+                except ValueError:
+                    return auth_user.user_profile.avatar.url
+        except Exception as e:
+            print(f"Error fetching avatar for post: {e}")
         return None
 
     def get_reply_count(self, obj):
@@ -2116,11 +2165,34 @@ class RoundContributionSerializer(serializers.ModelSerializer):
             if obj.status in ['pending_approval', 'pending']:
                 status = 'pending'
                 
+            profile = pos.member.payment_profile.user
+            auth_user = profile.user
+            pic = None
+            request = self.context.get('request')
+            if profile.profile_picture:
+                try:
+                    if request:
+                        pic = request.build_absolute_uri(profile.profile_picture.url)
+                    else:
+                        pic = profile.profile_picture.url
+                except ValueError:
+                    pic = profile.profile_picture.url
+            elif hasattr(auth_user, 'user_profile') and auth_user.user_profile.avatar:
+                try:
+                    if request:
+                        pic = request.build_absolute_uri(auth_user.user_profile.avatar.url)
+                    else:
+                        pic = auth_user.user_profile.avatar.url
+                except ValueError:
+                    pic = auth_user.user_profile.avatar.url
+                
             rotation.append({
                 'member_id': pos.member.id,
-                'name': pos.member.payment_profile.user.user.get_full_name() or pos.member.payment_profile.user.user.email,
+                'user_id': auth_user.id,
+                'name': auth_user.get_full_name() or auth_user.email,
                 'position': pos.position_number,
-                'status': status
+                'status': status,
+                'profile_picture': pic
             })
         return rotation
 

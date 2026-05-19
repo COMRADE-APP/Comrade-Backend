@@ -162,7 +162,7 @@ class EntityVerificationRequestCreateSerializer(serializers.Serializer):
     website = serializers.URLField(required=False, allow_blank=True)
     social_media = serializers.DictField(required=False)
     
-    registration_number = serializers.CharField(max_length=100)
+    registration_number = serializers.CharField(max_length=100, required=False, allow_blank=True)
     year_established = serializers.IntegerField(required=False, allow_null=True)
     legal_name = serializers.CharField(max_length=300, required=False, allow_blank=True)
     jurisdiction = serializers.CharField(max_length=100, required=False, allow_blank=True)

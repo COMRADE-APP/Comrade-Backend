@@ -156,6 +156,59 @@ def create_notification(
         extra_data=extra_data or {}
     )
     
+    # ── Auto-dispatch email for critical financial notifications ──
+    CRITICAL_EMAIL_TYPES = {
+        'payment', 'payment_failed', 'loan_overdue', 'loan_approved',
+        'escrow_resolved', 'insurance_lapsed', 'insurance_premium_due',
+        'provider_submitted', 'provider_approved', 'kyc_approved', 'kyc_rejected',
+    }
+    if notification_type in CRITICAL_EMAIL_TYPES:
+        try:
+            from Notifications.services.email_service import EmailService
+            user_email = recipient.email
+            user_name = getattr(recipient, 'first_name', '') or recipient.email.split('@')[0]
+            
+            # Map notification type to email template
+            template_map = {
+                'kyc_approved': 'kyc_approved',
+                'kyc_rejected': 'kyc_rejected',
+                'payment': 'payout_processed',
+                'payment_failed': 'standing_order_failed',
+                'loan_overdue': 'loan_overdue',
+                'loan_approved': 'loan_approved',
+                'escrow_resolved': 'dispute_resolved',
+                'insurance_lapsed': None,  # No template yet
+                'insurance_premium_due': None,
+            }
+            
+            template_key = template_map.get(notification_type)
+            if template_key:
+                EmailService.send(
+                    template_key=template_key,
+                    recipient_email=user_email,
+                    context={
+                        'name': user_name,
+                        'amount': extra_data.get('amount', '') if extra_data else '',
+                        'reason': extra_data.get('reason', '') if extra_data else '',
+                        'reference': extra_data.get('reference', '') if extra_data else '',
+                        'method': extra_data.get('method', '') if extra_data else '',
+                        'due_date': extra_data.get('due_date', '') if extra_data else '',
+                        'title': title or '',
+                        'resolution': extra_data.get('resolution', '') if extra_data else '',
+                        'provider': extra_data.get('provider', '') if extra_data else '',
+                    }
+                )
+            else:
+                # Fallback: send the raw notification message as email
+                EmailService.send_raw(
+                    subject=title or f'Qomrade Alert: {notification_type}',
+                    body=message,
+                    recipient_email=user_email
+                )
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).error(f"Failed to send email for notification {notification.id}: {e}")
+    
     return notification
 
 

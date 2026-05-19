@@ -58,6 +58,7 @@ INSTALLED_APPS = [
     'QomAI',  # AI Assistant
     'Funding',  # Business Funding Hub
     'Careers',  # Gigs & Career Opportunities
+    'Trading',  # Crypto Trading Bot
     'django_celery_beat',  # Periodic task scheduler
     
     # Authentication Support Apps
@@ -298,6 +299,7 @@ SPECTACULAR_SETTINGS = {
         {'name': 'entities', 'description': 'Institutions & organizations'},
         {'name': 'admin', 'description': 'Admin & moderation'},
         {'name': 'ai', 'description': 'QomAI assistant'},
+        {'name': 'trading', 'description': 'Crypto trading bot'},
     ],
 }
 
@@ -546,6 +548,21 @@ if os.getenv('REDIS_SENTINEL_HOST'):
                 "hosts": [{"sentinels": [(os.getenv('REDIS_SENTINEL_HOST'), int(os.getenv('REDIS_SENTINEL_PORT', 26379)))], "master_name": os.getenv('REDIS_MASTER_NAME', 'mymaster')}],
             },
         },
+    }
+
+    # ============================================================================
+    # CACHING CONFIGURATION
+    # ============================================================================
+    redis_host = os.getenv('REDIS_HOST', '127.0.0.1')
+    redis_port = os.getenv('REDIS_PORT', '6379')
+    CACHES = {
+        "default": {
+            "BACKEND": "django_redis.cache.RedisCache",
+            "LOCATION": f"redis://{redis_host}:{redis_port}/1",
+            "OPTIONS": {
+                "CLIENT_CLASS": "django_redis.client.DefaultClient",
+            }
+        }
     }
     CELERY_BROKER_URL = f"sentinel://{os.getenv('REDIS_SENTINEL_HOST')}:{os.getenv('REDIS_SENTINEL_PORT', 26379)}/"
     CELERY_BROKER_TRANSPORT_OPTIONS = {'master_name': os.getenv('REDIS_MASTER_NAME', 'mymaster')}

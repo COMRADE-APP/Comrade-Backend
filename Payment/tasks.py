@@ -516,3 +516,383 @@ def recompute_credit_scores():
 
     logger.info(f"Credit scores updated: {updated}, errors: {errors}")
     return f"Updated: {updated}, Errors: {errors}"
+
+
+# ============================================================================
+# GROUP INVITATION EXPIRATION
+# ============================================================================
+
+@shared_task
+def expire_group_invitations():
+    """
+    Auto-expire pending group invitations that have passed their expiry date.
+    Runs daily at 00:30.
+    """
+    from Payment.models import GroupInvitation
+    from Notifications.models import create_notification
+
+    logger.info("Running expire_group_invitations task")
+    now = timezone.now()
+    
+    expired_invites = GroupInvitation.objects.filter(
+        status='pending',
+        expires_at__lt=now
+    ).select_related('payment_group', 'invited_user')
+
+    count = 0
+    for invite in expired_invites:
+        invite.status = 'expired'
+        invite.save()
+        count += 1
+        
+        # Notify the inviter
+        try:
+            if invite.invited_by and invite.invited_by.user:
+                create_notification(
+                    recipient=invite.invited_by.user,
+                    notification_type='invitation_expired',
+                    message=f"Your invitation to {invite.invited_user or invite.invited_email} for group '{invite.payment_group.name}' has expired.",
+                    action_url=f"/payments/groups/{invite.payment_group.id}",
+                )
+        except Exception as e:
+            logger.error(f"Failed to notify about expired invitation {invite.id}: {e}")
+
+    logger.info(f"Expired invitations: {count}")
+    return f"Expired: {count}"
+
+
+# ============================================================================
+# PIGGY BANK INTEREST ACCRUAL
+# ============================================================================
+
+@shared_task
+def accrue_piggy_bank_interest():
+    """
+    Accrue daily interest on fixed_deposit type piggy banks.
+    Runs daily at 01:00.
+    """
+    from Payment.models import GroupTarget
+
+    logger.info("Running accrue_piggy_bank_interest task")
+    accrued = 0
+
+    fixed_deposits = GroupTarget.objects.filter(
+        savings_type='fixed_deposit',
+        status='active',
+        interest_rate__gt=0,
+        current_amount__gt=0
+    )
+
+    for piggy in fixed_deposits:
+        try:
+            # Daily interest = (annual_rate / 365) * current_balance
+            daily_rate = piggy.interest_rate / Decimal('365')
+            daily_interest = (daily_rate / Decimal('100')) * piggy.current_amount
+            
+            piggy.accrued_interest = (piggy.accrued_interest or Decimal('0.00')) + daily_interest
+            piggy.save()
+            accrued += 1
+        except Exception as e:
+            logger.error(f"Failed to accrue interest for piggy {piggy.id}: {e}")
+
+    logger.info(f"Piggy banks interest accrued: {accrued}")
+    return f"Accrued: {accrued}"
+
+
+# ============================================================================
+# GROUP AUTOMATION PROCESSING (STANDING ORDERS)
+# ============================================================================
+
+@shared_task
+def process_group_automations():
+    """
+    Process active group automations (StandingOrders) that are due.
+    Handles contributions, withdrawals, savings, purchases, etc.
+    Runs periodically (e.g. daily at 06:15).
+    """
+    from Payment.models import StandingOrder
+    from django.db import transaction as db_transaction
+    
+    logger.info("Running process_group_automations task")
+    now = timezone.now()
+    processed = 0
+    failed = 0
+    
+    active_orders = StandingOrder.objects.filter(
+        is_active=True,
+        next_contribution_date__lte=now
+    ).select_related('member__payment_profile', 'member__payment_group')
+    
+    for order in active_orders:
+        try:
+            with db_transaction.atomic():
+                amount = order.amount
+                group = order.member.payment_group
+                payment_profile = order.member.payment_profile
+                
+                if order.automation_type == 'withdraw':
+                    _process_automation_withdraw(order, group, amount, payment_profile)
+                elif order.automation_type == 'contribute':
+                    _process_automation_contribute(order, group, amount, payment_profile)
+                elif order.automation_type == 'save':
+                    _process_automation_save(order, group, amount, payment_profile)
+                elif order.automation_type == 'purchase':
+                    _process_automation_purchase(order, group, amount, payment_profile)
+                elif order.automation_type == 'loan_repayment':
+                    _process_automation_loan_repayment(order, group, amount, payment_profile)
+                else:
+                    logger.warning(f"Unhandled automation type {order.automation_type} for order {order.id}")
+                    
+                _update_next_run_date(order)
+                processed += 1
+                
+        except Exception as e:
+            logger.error(f"Failed to process group automation {order.id}: {e}")
+            failed += 1
+            try:
+                import random
+                from datetime import timedelta
+                random_delay = random.randint(15, 120)
+                order.next_contribution_date = timezone.now() + timedelta(minutes=random_delay)
+                order.save()
+                logger.info(f"Rescheduled failed automation {order.id} to retry in {random_delay} minutes")
+            except Exception as reschedule_err:
+                logger.error(f"Failed to reschedule automation {order.id}: {reschedule_err}")
+
+    logger.info(f"Group automations processed: {processed}, failed: {failed}")
+    return f"Processed: {processed}, Failed: {failed}"
+
+
+def _update_next_run_date(order):
+    from datetime import timedelta
+    from dateutil.relativedelta import relativedelta
+    now = timezone.now()
+    
+    if order.frequency == 'daily':
+        order.next_contribution_date = order.next_contribution_date + timedelta(days=1)
+    elif order.frequency == 'weekly':
+        order.next_contribution_date = order.next_contribution_date + timedelta(weeks=1)
+    elif order.frequency == 'fortnight':
+        order.next_contribution_date = order.next_contribution_date + timedelta(days=14)
+    elif order.frequency == 'monthly':
+        order.next_contribution_date = order.next_contribution_date + relativedelta(months=1)
+    
+    # Catch up if it's still in the past
+    while order.next_contribution_date <= now:
+        if order.frequency == 'daily':
+            order.next_contribution_date += timedelta(days=1)
+        elif order.frequency == 'weekly':
+            order.next_contribution_date += timedelta(weeks=1)
+        elif order.frequency == 'fortnight':
+            order.next_contribution_date += timedelta(days=14)
+        elif order.frequency == 'monthly':
+            order.next_contribution_date += relativedelta(months=1)
+            
+    order.save()
+
+
+def _process_automation_withdraw(order, group, amount, payment_profile):
+    from Payment.models import PaymentGroupMember, TransactionToken
+    import uuid
+    
+    if group.current_amount < amount:
+        raise ValueError(f"Insufficient group funds {group.current_amount} for withdrawal of {amount}")
+        
+    mode = order.withdrawal_mode
+    if mode == 'all':
+        active_members = group.members.filter(is_active=True)
+        count = active_members.count()
+        if count == 0:
+            raise ValueError("No active members to withdraw to")
+            
+        split_amount = amount / Decimal(str(count))
+        group.current_amount -= amount
+        group.save()
+        
+        for m in active_members:
+            m.payment_profile.comrade_balance += split_amount
+            m.payment_profile.save()
+            TransactionToken.objects.create(
+                payment_profile=m.payment_profile,
+                transaction_code=uuid.uuid4(),
+                amount=split_amount,
+                transaction_type='transfer',
+                description=f"Group automation: Equal withdrawal split from {group.name}",
+                payment_group=group
+            )
+            
+    elif mode == 'sequential':
+        seq = order.withdrawal_sequence
+        if not seq:
+            raise ValueError("Withdrawal sequence is empty")
+            
+        index = order.withdrawal_current_index % len(seq)
+        target_member_id = seq[index]
+        
+        try:
+            target_member = PaymentGroupMember.objects.get(id=target_member_id)
+        except PaymentGroupMember.DoesNotExist:
+            raise ValueError(f"Member {target_member_id} in sequence not found")
+            
+        group.current_amount -= amount
+        group.save()
+        
+        target_member.payment_profile.comrade_balance += amount
+        target_member.payment_profile.save()
+        
+        TransactionToken.objects.create(
+            payment_profile=target_member.payment_profile,
+            transaction_code=uuid.uuid4(),
+            amount=amount,
+            transaction_type='transfer',
+            description=f"Group automation: Sequential withdrawal from {group.name}",
+            payment_group=group
+        )
+        
+        order.withdrawal_current_index = (index + 1) % len(seq)
+        order.save()
+        
+    elif mode == 'selected':
+        recipients = order.withdrawal_recipients
+        if not recipients:
+            raise ValueError("No withdrawal recipients selected")
+            
+        members = PaymentGroupMember.objects.filter(id__in=recipients)
+        count = members.count()
+        if count == 0:
+            raise ValueError("Selected members not found")
+            
+        split_amount = amount / Decimal(str(count))
+        group.current_amount -= amount
+        group.save()
+        
+        for m in members:
+            m.payment_profile.comrade_balance += split_amount
+            m.payment_profile.save()
+            TransactionToken.objects.create(
+                payment_profile=m.payment_profile,
+                transaction_code=uuid.uuid4(),
+                amount=split_amount,
+                transaction_type='transfer',
+                description=f"Group automation: Selected withdrawal from {group.name}",
+                payment_group=group
+            )
+
+def _process_automation_contribute(order, group, amount, payment_profile):
+    from Payment.models import Contribution, TransactionToken, PaymentGroups
+    import uuid
+    
+    if payment_profile.wallet_balance < amount:
+        if payment_profile.comrade_balance < amount:
+            raise ValueError("Insufficient funds for contribution automation")
+        else:
+            payment_profile.comrade_balance -= amount
+    else:
+        payment_profile.wallet_balance -= amount
+        
+    payment_profile.save()
+    
+    if order.target_type == 'kitty' and order.target_id:
+        try:
+            kitty = PaymentGroups.objects.get(id=order.target_id)
+            kitty.current_amount += amount
+            kitty.save()
+            desc = f"Group automation: Contribution to {kitty.name}"
+        except PaymentGroups.DoesNotExist:
+            raise ValueError("Target kitty not found")
+    else:
+        group.current_amount += amount
+        group.save()
+        desc = f"Group automation: Contribution to {group.name}"
+        
+    order.member.total_contributed += amount
+    order.member.save()
+    
+    txn = TransactionToken.objects.create(
+        payment_profile=payment_profile,
+        transaction_code=uuid.uuid4(),
+        amount=amount,
+        transaction_type='transfer',
+        description=desc,
+        payment_group=group
+    )
+    
+    Contribution.objects.create(
+        payment_group=group,
+        member=order.member,
+        amount=amount,
+        transaction=txn
+    )
+
+def _process_automation_save(order, group, amount, payment_profile):
+    from Payment.models import GroupTarget, TransactionToken, Contribution
+    import uuid
+    
+    if payment_profile.wallet_balance < amount:
+        raise ValueError("Insufficient funds for save automation")
+        
+    try:
+        target = GroupTarget.objects.get(id=order.target_id)
+    except GroupTarget.DoesNotExist:
+        raise ValueError("Target piggy bank not found")
+        
+    payment_profile.wallet_balance -= amount
+    payment_profile.save()
+    
+    target.current_amount += amount
+    target.save()
+    
+    txn = TransactionToken.objects.create(
+        payment_profile=payment_profile,
+        transaction_code=uuid.uuid4(),
+        amount=amount,
+        transaction_type='transfer',
+        description=f"Group automation: Savings to {target.name}",
+        payment_group=group
+    )
+    
+    Contribution.objects.create(
+        payment_group=group,
+        target=target,
+        member=order.member,
+        amount=amount,
+        transaction=txn
+    )
+
+def _process_automation_purchase(order, group, amount, payment_profile):
+    from Payment.models import TransactionToken
+    import uuid
+    
+    if payment_profile.wallet_balance < amount:
+        raise ValueError("Insufficient funds for purchase automation")
+        
+    payment_profile.wallet_balance -= amount
+    payment_profile.save()
+    
+    TransactionToken.objects.create(
+        payment_profile=payment_profile,
+        transaction_code=uuid.uuid4(),
+        amount=amount,
+        transaction_type='payment',
+        description=f"Group automation: Auto-purchase {order.target_name}",
+        payment_group=group
+    )
+
+def _process_automation_loan_repayment(order, group, amount, payment_profile):
+    from Payment.models import TransactionToken
+    import uuid
+    
+    if payment_profile.wallet_balance < amount:
+        raise ValueError("Insufficient funds for loan repayment automation")
+        
+    payment_profile.wallet_balance -= amount
+    payment_profile.save()
+    
+    TransactionToken.objects.create(
+        payment_profile=payment_profile,
+        transaction_code=uuid.uuid4(),
+        amount=amount,
+        transaction_type='loan_repayment',
+        description=f"Group automation: Loan Repayment for {order.target_name}",
+        payment_group=group
+    )

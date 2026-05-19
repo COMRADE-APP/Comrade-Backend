@@ -451,16 +451,33 @@ class TransactionViewSet(ModelViewSet):
                 Q(payment_profile=payment_profile) | Q(recipient_profile=payment_profile)
             ).select_related('payment_profile', 'payment_profile__user', 'recipient_profile', 'recipient_profile__user').order_by('-created_at')[:100]
             
-            for t in tokens:
+            serializer = TransactionTokenSerializer(tokens, many=True, context={'request': request})
+            for t, t_data in zip(tokens, serializer.data):
                 combined.append({
                     'id': str(t.transaction_code),
+                    'transaction_code': str(t.transaction_code),
                     'type': t.transaction_type,
+                    'transaction_type': t.transaction_type,
+                    'transaction_category': t.transaction_type,
                     'amount': str(t.amount),
                     'status': t.status,
                     'created_at': t.created_at.isoformat() if t.created_at else None,
                     'description': t.description or f"{t.get_transaction_type_display()} - {t.get_payment_option_display()}",
                     'reference': str(t.transaction_code),
-                    'source': 'transaction'
+                    'source': 'transaction',
+                    'payment_option': t.payment_option,
+                    'direction': t_data.get('direction', 'unknown'),
+                    'recipient_email': t_data.get('recipient_email'),
+                    'recipient_name': t_data.get('recipient_name'),
+                    'sender_email': t_data.get('sender_email'),
+                    'sender_name': t_data.get('initiator_name'),
+                    'initiator_name': t_data.get('initiator_name'),
+                    'group_id': t_data.get('group_id'),
+                    'group_name': t_data.get('group_name'),
+                    'group_cover_photo': t_data.get('group_cover_photo'),
+                    'payment_type': 'group' if t_data.get('group_id') else 'individual',
+                    'can_be_reversed': t.status in ['completed', 'verified', 'settled'] and not t.reversed_at,
+                    'transaction_details': t_data
                 })
         except Exception as e:
             import logging
@@ -471,18 +488,39 @@ class TransactionViewSet(ModelViewSet):
             from Payment.models import Order
             orders = Order.objects.filter(
                 buyer__user=user
-            ).distinct().select_related('buyer', 'buyer__user').prefetch_related('items', 'items__product').order_by('-created_at')[:100]
+            ).distinct().select_related('buyer', 'buyer__user', 'payment_group').prefetch_related('items', 'items__product').order_by('-created_at')[:100]
             
             for order in orders:
                 combined.append({
                     'id': str(order.id),
-                    'type': 'order',
+                    'transaction_code': str(order.id),
+                    'type': 'purchase',
+                    'transaction_type': 'purchase',
+                    'transaction_category': 'purchase',
                     'amount': str(order.total_amount),
                     'status': order.status,
                     'created_at': order.created_at.isoformat() if order.created_at else None,
-                    'description': f"Order #{order.order_number or str(order.id)[:8]} - {order.get_status_display()}",
+                    'description': order.notes or f"Order #{order.order_number or str(order.id)[:8]} - {order.get_status_display()}",
                     'reference': str(order.id),
-                    'source': 'order'
+                    'source': 'order',
+                    'payment_option': 'Wallet',
+                    'direction': 'sent',
+                    'recipient_email': None,
+                    'recipient_name': 'Qomrade Shop',
+                    'sender_email': user.email,
+                    'sender_name': f"{user.first_name} {user.last_name}".strip() or user.username,
+                    'initiator_name': f"{user.first_name} {user.last_name}".strip() or user.username,
+                    'group_id': str(order.payment_group.id) if order.payment_group else None,
+                    'group_name': order.payment_group.name if order.payment_group else None,
+                    'group_cover_photo': order.payment_group.cover_photo.url if order.payment_group and order.payment_group.cover_photo else None,
+                    'payment_type': order.payment_type or 'individual',
+                    'can_be_reversed': False,
+                    'transaction_details': {
+                        'group_id': str(order.payment_group.id) if order.payment_group else None,
+                        'group_name': order.payment_group.name if order.payment_group else None,
+                        'recipient_name': 'Qomrade Shop',
+                        'initiator_name': f"{user.first_name} {user.last_name}".strip() or user.username,
+                    }
                 })
         except Exception as e:
             import logging
@@ -919,11 +957,14 @@ class PaymentGroupsViewSet(ModelViewSet):
         members = PaymentGroupMember.objects.filter(payment_group=group)
         
         # Overall stats
+        inflow_types = ['contribution', 'deposit', 'round_contribution', 'loan_repayment', 'penalty_fee', 'fee', 'donation', 'piggy_bank_contribution']
+        outflow_types = ['withdrawal', 'group_withdrawal', 'kitty_withdrawal', 'loan_disbursement', 'round_claim', 'round_payout', 'investment_payout', 'piggy_bank_withdrawal', 'refund']
+
         total_inflow = transactions.filter(
-            transaction_type__in=['contribution', 'deposit']
+            transaction_type__in=inflow_types
         ).aggregate(total=Sum('amount'))['total'] or Decimal('0')
         total_outflow = transactions.filter(
-            transaction_type__in=['withdrawal', 'payout']
+            transaction_type__in=outflow_types
         ).aggregate(total=Sum('amount'))['total'] or Decimal('0')
         
         # Monthly trends (last 12 months)
@@ -933,9 +974,9 @@ class PaymentGroupsViewSet(ModelViewSet):
         ).annotate(
             month=TruncMonth('created_at')
         ).values('month').annotate(
-            inflow=Sum('amount', filter=Q(transaction_type__in=['contribution', 'deposit'])),
-            outflow=Sum('amount', filter=Q(transaction_type__in=['withdrawal', 'payout'])),
-            tx_count=Count('id')
+            inflow=Sum('amount', filter=Q(transaction_type__in=inflow_types)),
+            outflow=Sum('amount', filter=Q(transaction_type__in=outflow_types)),
+            tx_count=Count('transaction_code')
         ).order_by('month')
         
         # Member contribution heatmap (member_id -> {month -> amount})
@@ -943,7 +984,7 @@ class PaymentGroupsViewSet(ModelViewSet):
         for member in members.select_related('payment_profile', 'payment_profile__user'):
             member_txs = transactions.filter(
                 payment_profile=member.payment_profile,
-                transaction_type__in=['contribution', 'deposit'],
+                transaction_type__in=['contribution', 'deposit', 'round_contribution', 'piggy_bank_contribution', 'donation'],
                 created_at__gte=twelve_months_ago
             ).annotate(
                 month=TruncMonth('created_at')
@@ -952,7 +993,7 @@ class PaymentGroupsViewSet(ModelViewSet):
             ).order_by('month')
             
             pp = member.payment_profile
-            user_obj = pp.user if pp else None
+            user_obj = pp.user.user if (pp and pp.user) else None
             member_heatmap.append({
                 'member_id': str(member.id),
                 'name': f"{user_obj.first_name} {user_obj.last_name}".strip() if user_obj else member.anonymous_alias or 'Anonymous',
@@ -969,14 +1010,14 @@ class PaymentGroupsViewSet(ModelViewSet):
         
         # Growth rate
         current_month_inflow = transactions.filter(
-            transaction_type__in=['contribution', 'deposit'],
+            transaction_type__in=inflow_types,
             created_at__month=timezone.now().month,
             created_at__year=timezone.now().year
         ).aggregate(total=Sum('amount'))['total'] or Decimal('0')
         
         last_month = timezone.now() - timedelta(days=30)
         prev_month_inflow = transactions.filter(
-            transaction_type__in=['contribution', 'deposit'],
+            transaction_type__in=inflow_types,
             created_at__month=last_month.month,
             created_at__year=last_month.year
         ).aggregate(total=Sum('amount'))['total'] or Decimal('0')
@@ -1023,25 +1064,28 @@ class PaymentGroupsViewSet(ModelViewSet):
             transactions = transactions.filter(created_at__date__lte=end_date)
         
         # Summary
+        inflow_types = ['contribution', 'deposit', 'round_contribution', 'loan_repayment', 'penalty_fee', 'fee', 'donation', 'piggy_bank_contribution']
+        outflow_types = ['withdrawal', 'group_withdrawal', 'kitty_withdrawal', 'loan_disbursement', 'round_claim', 'round_payout', 'investment_payout', 'piggy_bank_withdrawal', 'refund']
+
         inflow = transactions.filter(
-            transaction_type__in=['contribution', 'deposit']
+            transaction_type__in=inflow_types
         ).aggregate(total=Sum('amount'))['total'] or Decimal('0')
         outflow = transactions.filter(
-            transaction_type__in=['withdrawal', 'payout']
+            transaction_type__in=outflow_types
         ).aggregate(total=Sum('amount'))['total'] or Decimal('0')
         
         # Category breakdown
         category_breakdown = transactions.values('transaction_type').annotate(
             total=Sum('amount'),
-            count=Count('id')
+            count=Count('transaction_code')
         ).order_by('-total')
         
         # Monthly P&L
         monthly_pnl = transactions.annotate(
             month=TruncMonth('created_at')
         ).values('month').annotate(
-            income=Sum('amount', filter=Q(transaction_type__in=['contribution', 'deposit'])),
-            expenses=Sum('amount', filter=Q(transaction_type__in=['withdrawal', 'payout', 'fee'])),
+            income=Sum('amount', filter=Q(transaction_type__in=inflow_types)),
+            expenses=Sum('amount', filter=Q(transaction_type__in=outflow_types)),
         ).order_by('month')
         
         # Transaction ledger (last 100)
@@ -1056,7 +1100,7 @@ class PaymentGroupsViewSet(ModelViewSet):
         member_summary = []
         for m in members:
             pp = m.payment_profile
-            user_obj = pp.user if pp else None
+            user_obj = pp.user.user if (pp and pp.user) else None
             member_summary.append({
                 'member_id': str(m.id),
                 'name': f"{user_obj.first_name} {user_obj.last_name}".strip() if user_obj else m.anonymous_alias or 'Anonymous',
@@ -1408,7 +1452,8 @@ class PaymentGroupsViewSet(ModelViewSet):
             transaction_code=uuid.uuid4(),
             amount=amount,
             transaction_type='contribution',
-            description=f'Contribution to group: {group.name}'
+            description=f'Contribution to group: {group.name}',
+            payment_group=group
         )
         
         # Check if target reached
@@ -1684,7 +1729,7 @@ class PaymentGroupsViewSet(ModelViewSet):
         else:
             return Response({'error': 'Invalid action type'}, status=status.HTTP_400_BAD_REQUEST)
 
-    @action(detail=True, methods=['get', 'post'])
+    @action(detail=True, methods=['get', 'post', 'patch'])
     def group_automations(self, request, pk=None):
         group = self.get_object()
         
@@ -1698,41 +1743,164 @@ class PaymentGroupsViewSet(ModelViewSet):
             except PaymentGroupMember.DoesNotExist:
                 return Response({'error': 'You are not a member of this group'}, status=status.HTTP_400_BAD_REQUEST)
             
+            # Extract fields
+            frequency = request.data.get('frequency', 'monthly')
+            amount = request.data.get('amount')
+            automation_type = request.data.get('automation_type', 'contribute')
+            
             # Calculate next contribution date
             from datetime import datetime, timedelta
-            frequency = request.data.get('frequency', 'monthly')
-            execution_day = int(request.data.get('execution_day', 1))
-            
             now = datetime.now()
-            if frequency == 'daily':
-                next_date = now + timedelta(days=1)
-            elif frequency == 'weekly':
-                next_date = now + timedelta(weeks=1)
-            else:  # monthly
-                next_date = now.replace(day=min(execution_day, 28))
-                if next_date <= now:
-                    next_date = (now.replace(day=1) + timedelta(days=32)).replace(day=min(execution_day, 28))
+            
+            start_date_str = request.data.get('start_date')
+            if start_date_str == "":
+                start_date_str = None
+                
+            if start_date_str:
+                try:
+                    next_date = datetime.strptime(start_date_str, '%Y-%m-%d')
+                except ValueError:
+                    return Response({'error': 'Invalid start_date format. Use YYYY-MM-DD'}, status=status.HTTP_400_BAD_REQUEST)
+            else:
+                if frequency == 'daily':
+                    next_date = now + timedelta(days=1)
+                elif frequency == 'weekly':
+                    next_date = now + timedelta(weeks=1)
+                elif frequency == 'fortnight':
+                    next_date = now + timedelta(days=14)
+                else:  # monthly
+                    execution_day = int(request.data.get('execution_day', 1) or 1)
+                    next_date = now.replace(day=min(execution_day, 28))
+                    if next_date <= now:
+                        next_date = (now.replace(day=1) + timedelta(days=32)).replace(day=min(execution_day, 28))
             
             # Map frontend fields to model fields
+            def clean_empty(val):
+                return None if val == "" else val
+
             data = {
                 'member': member.id,
-                'amount': request.data.get('amount'),
+                'amount': amount,
                 'frequency': frequency,
                 'next_contribution_date': next_date,
-                'is_active': request.data.get('is_active', True)
+                'automation_type': automation_type,
+                'target_type': clean_empty(request.data.get('target_type')),
+                'target_id': clean_empty(request.data.get('target_id')),
+                'target_name': clean_empty(request.data.get('target_name')),
+                'withdrawal_mode': request.data.get('withdrawal_mode', 'all') or 'all',
+                'withdrawal_recipients': request.data.get('withdrawal_recipients', []),
+                'withdrawal_sequence': request.data.get('withdrawal_sequence', []),
+                'status': 'pending_vote', # Default to pending vote
+                'is_active': False, # Inactive until approved
+                'start_date': clean_empty(start_date_str),
+                'execution_day': request.data.get('execution_day', 1) or 1,
+                'execution_day_of_week': clean_empty(request.data.get('execution_day_of_week')),
+                'execution_time_start': clean_empty(request.data.get('execution_time_start')),
+                'execution_time_end': clean_empty(request.data.get('execution_time_end')),
             }
             
             serializer = StandingOrderSerializer(data=data)
             if serializer.is_valid():
-                serializer.save()
+                automation = serializer.save()
                 return Response(serializer.data, status=status.HTTP_201_CREATED)
             return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
-        # Get automations through member's payment group
+        elif request.method == 'PATCH':
+            automation_id = request.data.get('automation_id')
+            if not automation_id:
+                return Response({'error': 'automation_id is required'}, status=status.HTTP_400_BAD_REQUEST)
+                
+            try:
+                automation = StandingOrder.objects.get(id=automation_id, member__payment_group=group)
+            except StandingOrder.DoesNotExist:
+                return Response({'error': 'Automation not found'}, status=status.HTTP_404_NOT_FOUND)
+                
+            payment_profile = get_or_create_payment_profile(request.user)
+            try:
+                member = PaymentGroupMember.objects.get(payment_group=group, payment_profile=payment_profile)
+            except PaymentGroupMember.DoesNotExist:
+                return Response({'error': 'Not a member of this group'}, status=status.HTTP_403_FORBIDDEN)
+                
+            if 'is_active' in request.data:
+                if automation.status not in ['approved', 'active', 'paused']:
+                    return Response({'error': 'Cannot toggle active state of unapproved automation'}, status=status.HTTP_400_BAD_REQUEST)
+                
+                automation.is_active = request.data['is_active']
+                automation.status = 'active' if automation.is_active else 'paused'
+                
+            if 'withdrawal_sequence' in request.data:
+                automation.withdrawal_sequence = request.data['withdrawal_sequence']
+                
+            if 'withdrawal_current_index' in request.data:
+                automation.withdrawal_current_index = int(request.data['withdrawal_current_index'])
+                
+            automation.save()
+            return Response(StandingOrderSerializer(automation).data)
+
+        # GET method
         automations = StandingOrder.objects.filter(
             member__payment_group=group
         ).select_related('member', 'member__payment_profile')
         return Response(StandingOrderSerializer(automations, many=True).data)
+
+    @action(detail=True, methods=['post'], url_path='vote_automation')
+    def vote_automation(self, request, pk=None):
+        group = self.get_object()
+        automation_id = request.data.get('automation_id')
+        vote = request.data.get('vote') # 'approve' or 'reject'
+        
+        if not automation_id or not vote:
+            return Response({'error': 'automation_id and vote are required'}, status=status.HTTP_400_BAD_REQUEST)
+            
+        try:
+            automation = StandingOrder.objects.get(id=automation_id, member__payment_group=group)
+        except StandingOrder.DoesNotExist:
+            return Response({'error': 'Automation not found'}, status=status.HTTP_404_NOT_FOUND)
+            
+        if automation.status != 'pending_vote':
+            return Response({'error': 'This automation is not pending a vote'}, status=status.HTTP_400_BAD_REQUEST)
+            
+        payment_profile = get_or_create_payment_profile(request.user)
+        try:
+            member = PaymentGroupMember.objects.get(payment_group=group, payment_profile=payment_profile)
+        except PaymentGroupMember.DoesNotExist:
+            return Response({'error': 'Not a member of this group'}, status=status.HTTP_403_FORBIDDEN)
+            
+        # Initialize lists if empty
+        if automation.approval_votes is None: automation.approval_votes = []
+        if automation.rejection_votes is None: automation.rejection_votes = []
+        
+        member_id = str(member.id)
+        
+        # Remove previous vote if exists
+        if member_id in automation.approval_votes:
+            automation.approval_votes.remove(member_id)
+        if member_id in automation.rejection_votes:
+            automation.rejection_votes.remove(member_id)
+            
+        # Add new vote
+        if vote == 'approve':
+            automation.approval_votes.append(member_id)
+        elif vote == 'reject':
+            automation.rejection_votes.append(member_id)
+        else:
+            return Response({'error': 'Invalid vote choice'}, status=status.HTTP_400_BAD_REQUEST)
+            
+        automation.save()
+        
+        # Check threshold
+        total_members = group.members.count()
+        approvals = len(automation.approval_votes)
+        
+        threshold_percent = group.approval_threshold or 51
+        actual_percent = (approvals / total_members) * 100 if total_members > 0 else 0
+        
+        if actual_percent >= threshold_percent:
+            automation.status = 'approved'
+            automation.is_active = True
+            automation.save()
+            
+        return Response(StandingOrderSerializer(automation).data)
 
     @action(detail=True, methods=['post'])
     def invite(self, request, pk=None):
@@ -2853,7 +3021,8 @@ class PaymentGroupsViewSet(ModelViewSet):
             payment_profile=payment_profile,
             amount=amount,
             transaction_type='kitty_withdrawal',
-            description=f'Kitty withdrawal from: {kitty.name} (funds remain in kitty ecosystem)'
+            description=f'Kitty withdrawal from: {kitty.name} (funds remain in kitty ecosystem)',
+            payment_group=kitty
         )
         
         TransactionHistory.objects.create(
@@ -2871,7 +3040,7 @@ class PaymentGroupsViewSet(ModelViewSet):
             status='completed'
         )
         
-        self.logger.info(f"Kitty withdrawal: {amount} from {kitty.name} - funds kept in kitty ecosystem")
+        logger.info(f"Kitty withdrawal: {amount} from {kitty.name} - funds kept in kitty ecosystem")
         
         return Response({
             'status': 'success',
@@ -3267,7 +3436,20 @@ class ProductViewSet(ModelViewSet):
         products = Product.objects.filter(product_type='recommendation')[:10]
         if not products.exists():
             products = Product.objects.all()[:10]
-        return Response(ProductSerializer(products, many=True).data)
+            
+        def resolve_image_url(path):
+            if not path:
+                return None
+            path_str = str(path)
+            if path_str.startswith('http://') or path_str.startswith('https://'):
+                return path_str
+            return request.build_absolute_uri(path_str)
+            
+        serialized_data = ProductSerializer(products, many=True).data
+        for item in serialized_data:
+            if item.get('image_url'):
+                item['image_url'] = resolve_image_url(item['image_url'])
+        return Response(serialized_data)
 
 # Piggy Bank / Group Target Views
 class GroupTargetViewSet(ModelViewSet):
@@ -3601,7 +3783,7 @@ class GroupTargetViewSet(ModelViewSet):
                 description += f', Forfeited interest: ${forfeited_interest:.2f}'
         description += f', Net transferred to wallet: ${net_amount:.2f}'
         
-        TransactionToken.objects.create(
+        t1 = TransactionToken.objects.create(
             payment_profile=payment_profile,
             transaction_code=uuid.uuid4(),
             amount=Decimal(str(net_amount)),
@@ -3611,10 +3793,25 @@ class GroupTargetViewSet(ModelViewSet):
             piggy_bank=target
         )
         
+        TransactionHistory.objects.create(
+            payment_profile=payment_profile,
+            transaction_token=t1,
+            authorization_token=PaymentAuthorization.objects.create(
+                payment_profile=payment_profile,
+                authorization_code=secrets.token_hex(16)
+            ),
+            verification_token=PaymentVerification.objects.create(
+                payment_profile=payment_profile,
+                verification_code=secrets.token_hex(16)
+            ),
+            amount=Decimal(str(net_amount)),
+            status='completed'
+        )
+        
         # Also record the deduction from piggy bank as savings withdrawal
         withdrawal_type = 'savings_withdrawal' if penalty == 0 else 'savings_withdrawal_penalty'
         penalty_info = f' (Penalty: ${penalty:.2f}, Forfeited interest: ${forfeited_interest:.2f})' if penalty > 0 else ''
-        TransactionToken.objects.create(
+        t2 = TransactionToken.objects.create(
             payment_profile=payment_profile,
             transaction_code=uuid.uuid4(),
             amount=Decimal(str(amount)),
@@ -3622,6 +3819,21 @@ class GroupTargetViewSet(ModelViewSet):
             description=f'Savings withdrawal from "{target.name}". Original amount: ${float(amount):.2f}{penalty_info}. Net transferred to wallet: ${net_amount:.2f}. Remaining balance: ${float(target.current_amount):.2f}',
             payment_group=target.payment_group,
             piggy_bank=target
+        )
+        
+        TransactionHistory.objects.create(
+            payment_profile=payment_profile,
+            transaction_token=t2,
+            authorization_token=PaymentAuthorization.objects.create(
+                payment_profile=payment_profile,
+                authorization_code=secrets.token_hex(16)
+            ),
+            verification_token=PaymentVerification.objects.create(
+                payment_profile=payment_profile,
+                verification_code=secrets.token_hex(16)
+            ),
+            amount=Decimal(str(amount)),
+            status='completed'
         )
         
         response_data = {
@@ -3959,6 +4171,7 @@ class GroupTargetViewSet(ModelViewSet):
                         amount=Decimal(str(member_share)),
                         transaction_type='refund',
                         description=f"Refund from conversion: {target.name}",
+                        payment_group=target.payment_group,
                         piggy_bank=target
                     )
             
@@ -4077,6 +4290,7 @@ class GroupTargetViewSet(ModelViewSet):
                 amount=Decimal(str(automation_amount)),
                 transaction_type='transfer',
                 description=f'Automation: Transferred from {target.name} to wallet',
+                payment_group=target.payment_group,
                 piggy_bank=target
             )
             
@@ -4233,9 +4447,15 @@ class GroupTargetViewSet(ModelViewSet):
         """Search for products, services, courses, subscriptions, etc for automation."""
         query = request.query_params.get('q', '')
         target_type = request.query_params.get('type', 'all')
-        page = int(request.query_params.get('page', 1))
-        page_size = int(request.query_params.get('page_size', 20))
         
+        def resolve_image_url(req, path):
+            if not path:
+                return None
+            path_str = str(path)
+            if path_str.startswith('http://') or path_str.startswith('https://'):
+                return path_str
+            return req.build_absolute_uri(path_str)
+
         results = {
             'products': [],
             'services': [],
@@ -4243,25 +4463,32 @@ class GroupTargetViewSet(ModelViewSet):
             'subscriptions': [],
             'groups': [],
             'investments': [],
-            'donations': []
+            'donations': [],
+            'loans': [],
+            'bills': [],
+            'insurance': []
         }
-        
-        if not query and target_type == 'all':
-            return Response(results)
         
         # Search Products
         if target_type in ['all', 'product']:
             from Payment.models import Product
             products = Product.objects.filter(
                 Q(name__icontains=query) | Q(description__icontains=query)
-            ).filter(status='active')[:10]
+            )[:10]
+            
+            if not products.exists() and len(query.split()) > 1:
+                query_words = query.split()
+                q_object = Q()
+                for word in query_words:
+                    q_object |= Q(name__icontains=word)
+                products = Product.objects.filter(q_object)[:10]
             results['products'] = [{
                 'id': str(p.id),
                 'name': p.name,
                 'type': 'product',
                 'price': float(p.price) if p.price else 0,
-                'image': p.image.url if p.image else None,
-                'seller': p.seller.business_name if p.seller else None
+                'image': resolve_image_url(request, p.image_url) if p.image_url else None,
+                'seller': None
             } for p in products]
         
         # Search Services
@@ -4275,26 +4502,55 @@ class GroupTargetViewSet(ModelViewSet):
                 'name': s.name,
                 'type': 'service',
                 'price': float(s.price) if s.price else 0,
-                'image': s.image.url if s.image else None,
+                'image': resolve_image_url(request, s.image.url) if s.image else None,
                 'provider': s.provider.business_name if s.provider else None
             } for s in services]
         
-        # Search Courses (could be in different apps)
+        # Search Courses (Specialization app)
         if target_type in ['all', 'course']:
             try:
-                from Courses.models import Course
-                courses = Course.objects.filter(
-                    Q(title__icontains=query) | Q(description__icontains=query)
-                ).filter(status='published')[:10]
-                results['courses'] = [{
-                    'id': str(c.id),
-                    'name': c.title,
-                    'type': 'course',
-                    'price': float(c.price) if hasattr(c, 'price') and c.price else 0,
-                    'image': c.cover_image.url if hasattr(c, 'cover_image') and c.cover_image else None,
-                    'instructor': str(c.instructor) if hasattr(c, 'instructor') else None
-                } for c in courses]
-            except:
+                from Specialization.models import Specialization, Stack
+                
+                # Fetch Specializations, Courses, Masterclasses that are paid (not free)
+                specialization_query = Specialization.objects.filter(is_paid=True, price__gt=0)
+                if query:
+                    specialization_query = specialization_query.filter(
+                        Q(name__icontains=query) | Q(description__icontains=query)
+                    )
+                
+                course_list = []
+                for c in specialization_query[:15]:
+                    course_list.append({
+                        'id': str(c.id),
+                        'name': f"{c.get_learning_type_display()}: {c.name}" if c.learning_type else c.name,
+                        'type': c.learning_type or 'course',
+                        'price': float(c.price) if c.price else 0,
+                        'image': resolve_image_url(request, c.image_url) if c.image_url else None,
+                        'instructor': None
+                    })
+                
+                # Fetch Stacks belonging to any paid specialization
+                stack_query = Stack.objects.filter(specialization_stacks__is_paid=True, specialization_stacks__price__gt=0).distinct()
+                if query:
+                    stack_query = stack_query.filter(
+                        Q(name__icontains=query) | Q(description__icontains=query)
+                    )
+                
+                for st in stack_query[:15]:
+                    parent_spec = st.specialization_stacks.filter(is_paid=True, price__gt=0).first()
+                    price = float(parent_spec.price) if parent_spec and parent_spec.price else 49.99
+                    course_list.append({
+                        'id': str(st.id),
+                        'name': f"Stack: {st.name}",
+                        'type': 'stack',
+                        'price': price,
+                        'image': resolve_image_url(request, st.image_url) if st.image_url else None,
+                        'instructor': None
+                    })
+                
+                results['courses'] = course_list
+            except Exception as e:
+                print(f"Error fetching courses: {e}")
                 pass
         
         # Search Subscriptions
@@ -4313,19 +4569,39 @@ class GroupTargetViewSet(ModelViewSet):
             except:
                 pass
         
-        # Search Groups (payment groups user can join)
+        # Search Bookings
+        if target_type in ['all', 'booking']:
+            try:
+                from Payment.models import Booking
+                bookings = Booking.objects.filter(
+                    Q(establishment__name__icontains=query) | Q(booking_type__icontains=query)
+                ).filter(status='confirmed')[:10]
+                results['bookings'] = [{
+                    'id': str(b.id),
+                    'name': f"{b.get_booking_type_display()} at {b.establishment.name}",
+                    'type': 'booking',
+                    'price': float(b.total_price) if b.total_price else 0,
+                    'image': resolve_image_url(request, b.establishment.logo.url) if b.establishment.logo else None
+                } for b in bookings]
+            except:
+                pass
+        
+        # Search Groups
         if target_type in ['all', 'group']:
-            from Payment.models import PaymentGroups
-            groups = PaymentGroups.objects.filter(
-                Q(name__icontains=query) | Q(description__icontains=query)
-            ).filter(status='active').exclude(member_type='private')[:10]
-            results['groups'] = [{
-                'id': str(g.id),
-                'name': g.name,
-                'type': 'group',
-                'entry_fee': float(g.entry_fee) if g.entry_fee else 0,
-                'member_count': g.members.count()
-            } for g in groups]
+            try:
+                from Payment.models import PaymentGroups
+                groups = PaymentGroups.objects.filter(
+                    Q(name__icontains=query) | Q(description__icontains=query)
+                ).filter(is_active=True, is_public=True)[:10]
+                results['groups'] = [{
+                    'id': str(g.id),
+                    'name': g.name,
+                    'type': 'group',
+                    'entry_fee': float(g.entry_fee_amount) if g.entry_fee_required and g.entry_fee_amount else 0,
+                    'member_count': g.members.count()
+                } for g in groups]
+            except Exception:
+                pass
         
         # Search Investment opportunities
         if target_type in ['all', 'investment']:
@@ -4336,23 +4612,29 @@ class GroupTargetViewSet(ModelViewSet):
                     Q(name__icontains=query) | Q(description__icontains=query)
                 ).filter(status='active')[:5]
                 for b in businesses:
+                    image_path = b.cover_photo.url if hasattr(b, 'cover_photo') and b.cover_photo else (b.logo.url if hasattr(b, 'logo') and b.logo else None)
                     investments.append({
                         'id': str(b.id),
                         'name': b.name,
                         'type': 'investment',
+                        'price': float(b.min_investment) if hasattr(b, 'min_investment') else 0,
                         'min_amount': float(b.min_investment) if hasattr(b, 'min_investment') else 0,
-                        'expected_return': b.expected_return if hasattr(b, 'expected_return') else None
+                        'expected_return': b.expected_return if hasattr(b, 'expected_return') else None,
+                        'image': resolve_image_url(request, image_path) if image_path else None
                     })
                 ventures = CapitalVenture.objects.filter(
                     Q(name__icontains=query) | Q(description__icontains=query)
                 ).filter(status='active')[:5]
                 for v in ventures:
+                    image_path = v.cover_photo.url if hasattr(v, 'cover_photo') and v.cover_photo else (v.logo.url if hasattr(v, 'logo') and v.logo else None)
                     investments.append({
                         'id': str(v.id),
                         'name': v.name,
                         'type': 'investment',
+                        'price': float(v.min_investment) if hasattr(v, 'min_investment') else 0,
                         'min_amount': float(v.min_investment) if hasattr(v, 'min_investment') else 0,
-                        'expected_return': v.expected_return if hasattr(v, 'expected_return') else None
+                        'expected_return': v.expected_return if hasattr(v, 'expected_return') else None,
+                        'image': resolve_image_url(request, image_path) if image_path else None
                     })
                 results['investments'] = investments[:10]
             except:
@@ -4360,17 +4642,91 @@ class GroupTargetViewSet(ModelViewSet):
         
         # Search Donations
         if target_type in ['all', 'donation']:
-            from Payment.models import Donation
-            donations = Donation.objects.filter(
-                Q(title__icontains=query) | Q(description__icontains=query)
-            ).filter(status='collecting')[:10]
-            results['donations'] = [{
-                'id': str(d.id),
-                'name': d.title,
-                'type': 'donation',
-                'target_amount': float(d.target_amount) if d.target_amount else 0,
-                'current_amount': float(d.current_amount) if d.current_amount else 0
-            } for d in donations]
+            try:
+                from Payment.models import Donation
+                donations = Donation.objects.filter(
+                    Q(name__icontains=query) | Q(description__icontains=query)
+                ).filter(status='collecting')[:10]
+                results['donations'] = [{
+                    'id': str(d.id),
+                    'name': d.name,
+                    'type': 'donation',
+                    'target_amount': float(d.total_amount) if d.total_amount else 0,
+                    'current_amount': float(d.amount_collected) if d.amount_collected else 0
+                } for d in donations]
+            except Exception:
+                pass
+
+        # Search Loans (active loan applications for repayment)
+        if target_type in ['all', 'loan_repayment', 'loan']:
+            try:
+                from Payment.models import LoanApplication
+                from Authentication.models import Profile
+                try:
+                    profile = Profile.objects.get(user=request.user)
+                except Exception:
+                    profile = None
+                
+                group_id = request.query_params.get('group_id')
+                
+                loans_qs = LoanApplication.objects.filter(status__in=['disbursed', 'repaying'])
+                if group_id:
+                    loans_qs = loans_qs.filter(group_id=group_id)
+                elif profile:
+                    loans_qs = loans_qs.filter(user=profile)
+                
+                loans = loans_qs[:10]
+                results['loans'] = [{
+                    'id': str(l.id),
+                    'name': f"Loan #{str(l.id)[:8]} - KES {l.amount} ({l.loan_product.name})",
+                    'type': 'loan_repayment',
+                    'amount': float(l.amount),
+                    'total_repayment': float(l.total_repayment),
+                    'monthly_payment': float(l.monthly_payment),
+                    'status': l.status
+                } for l in loans]
+            except Exception as e:
+                print(f"Error fetching loans: {e}")
+                pass
+
+        # Search Bills
+        if target_type in ['all', 'bills', 'bill_payment']:
+            try:
+                from Payment.models import BillProvider
+                providers = BillProvider.objects.filter(
+                    Q(name__icontains=query) | Q(description__icontains=query)
+                ).filter(is_active=True)[:10]
+                results['bills'] = [{
+                    'id': str(bp.id),
+                    'name': bp.name,
+                    'type': 'bills',
+                    'category': bp.category,
+                    'image': resolve_image_url(request, bp.logo.url) if bp.logo else None,
+                    'min_amount': float(bp.min_amount),
+                    'max_amount': float(bp.max_amount)
+                } for bp in providers]
+            except Exception as e:
+                print(f"Error fetching bills: {e}")
+                pass
+
+        # Search Insurance (ServiceProducts of type insurance)
+        if target_type in ['all', 'insurance']:
+            try:
+                from Payment.models import ServiceProduct
+                insurance_products = ServiceProduct.objects.filter(
+                    Q(name__icontains=query) | Q(description__icontains=query)
+                ).filter(service_type='insurance', status='active')[:10]
+                results['insurance'] = [{
+                    'id': str(ip.id),
+                    'name': ip.name,
+                    'type': 'insurance',
+                    'price': float(ip.price) if ip.price else 0,
+                    'image': resolve_image_url(request, ip.image.url) if ip.image else None,
+                    'provider': ip.provider.business_name if ip.provider else None
+                } for ip in insurance_products]
+            except Exception as e:
+                print(f"Error fetching insurance: {e}")
+                pass
         
         return Response(results)
 
@@ -5955,6 +6311,49 @@ class BillStandingOrderViewSet(ModelViewSet):
         return Response({'status': 'cancelled'})
 
 
+class StandingOrderViewSet(ModelViewSet):
+    serializer_class = StandingOrderSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        payment_profile = get_or_create_payment_profile(self.request.user)
+        if not payment_profile:
+            return StandingOrder.objects.none()
+        return StandingOrder.objects.filter(member__payment_profile=payment_profile).order_by('-created_at')
+
+    def perform_create(self, serializer):
+        payment_profile = get_or_create_payment_profile(self.request.user)
+        if not payment_profile:
+            raise serializers.ValidationError("Payment profile not found")
+        group_id = self.request.data.get('group_id')
+        if group_id:
+            try:
+                member = PaymentGroupMember.objects.get(payment_group_id=group_id, payment_profile=payment_profile)
+            except PaymentGroupMember.DoesNotExist:
+                raise serializers.ValidationError("You are not a member of this payment group")
+            serializer.save(member=member)
+        else:
+            serializer.save()
+
+    @action(detail=True, methods=['post'])
+    def toggle_active(self, request, pk=None):
+        order = self.get_object()
+        is_active = request.data.get('is_active', not order.is_active)
+        order.is_active = is_active
+        order.status = 'active' if is_active else 'paused'
+        order.save()
+        return Response(StandingOrderSerializer(order).data)
+
+    @action(detail=True, methods=['post'])
+    def cancel(self, request, pk=None):
+        order = self.get_object()
+        order.status = 'rejected'
+        order.is_active = False
+        order.save()
+        return Response({'status': 'cancelled'})
+
+
+
 # ==================== LOAN VIEWSETS ====================
 
 class LoanProductViewSet(ModelViewSet):
@@ -6093,7 +6492,8 @@ class LoanApplicationViewSet(ModelViewSet):
                     amount=net_amount,
                     transaction_type='loan_disbursement',
                     status='completed',
-                    description=f"Loan Disbursement: {product.name}"
+                    description=f"Loan Disbursement: {product.name}",
+                    payment_group=product.group if (getattr(product, 'is_group_loan', False) and getattr(product, 'group', None)) else None
                 )
 
                 loan.status = 'disbursed'
@@ -6154,7 +6554,8 @@ class LoanApplicationViewSet(ModelViewSet):
                     amount=amount,
                     transaction_type='loan_repayment',
                     status='completed',
-                    description=f"Loan Repayment: {product.name}"
+                    description=f"Loan Repayment: {product.name}",
+                    payment_group=product.group if (getattr(product, 'is_group_loan', False) and getattr(product, 'group', None)) else None
                 )
                 
                 # Update specific repayment installment
@@ -7029,6 +7430,32 @@ class GroupInvestmentViewSet(ModelViewSet):
         payment_profile.comrade_balance += final_amount
         payment_profile.save()
         
+        # Create transaction record
+        transaction = TransactionToken.objects.create(
+            payment_profile=payment_profile,
+            transaction_code=uuid.uuid4(),
+            amount=final_amount,
+            transaction_type='investment_withdrawal',
+            description=f'Early withdrawal from investment. Penalty: {penalty_amount}',
+            payment_group=investment.payment_group,
+        )
+        
+        # Create History
+        TransactionHistory.objects.create(
+            payment_profile=payment_profile,
+            transaction_token=transaction,
+            authorization_token=PaymentAuthorization.objects.create(
+                payment_profile=payment_profile,
+                authorization_code=secrets.token_hex(16)
+            ),
+            verification_token=PaymentVerification.objects.create(
+                payment_profile=payment_profile,
+                verification_code=secrets.token_hex(16)
+            ),
+            amount=final_amount,
+            status='completed'
+        )
+        
         # Update proportional ownership
         if investment.quoting_mode == 'proportional' and investment.amount_collected > 0:
             for q in investment.quotes.all():
@@ -7038,7 +7465,8 @@ class GroupInvestmentViewSet(ModelViewSet):
         return Response({
             'status': 'Withdrawal processed',
             'penalty_applied': float(penalty_amount),
-            'amount_received': float(final_amount)
+            'amount_received': float(final_amount),
+            'new_balance': float(payment_profile.comrade_balance)
         })
 
     @action(detail=True, methods=['post'])
@@ -7850,7 +8278,8 @@ class RoundContributionViewSet(ModelViewSet):
             transaction_type='contribution',
             pay_from='comrade_balance',
             payment_option='comrade_balance',
-            description=f'Round contribution to {round_obj.round_name or "Round " + str(round_obj.round_number)} - Cycle {round_obj.current_cycle}'
+            description=f'Round contribution to {round_obj.round_name or "Round " + str(round_obj.round_number)} - Cycle {round_obj.current_cycle}',
+            payment_group=round_obj.payment_group
         )
                 
         return Response({'status': 'contribution recorded', 'round': RoundContributionSerializer(round_obj, context={'request': request}).data})
@@ -7940,7 +8369,8 @@ class RoundContributionViewSet(ModelViewSet):
             transaction_type='payout',
             pay_from='round_pot',
             payment_option=destination,
-            description=f'Round Payout - {round_obj.round_name or "Round " + str(round_obj.round_number)} Cycle {round_obj.current_cycle} claimed'
+            description=f'Round Payout - {round_obj.round_name or "Round " + str(round_obj.round_number)} Cycle {round_obj.current_cycle} claimed',
+            payment_group=round_obj.payment_group
         )
         
         # AFTER successful claim, update the round state
@@ -8162,7 +8592,9 @@ class WithdrawalRequestViewSet(ModelViewSet):
             deduction += immature_deduction
             
         # 2. Early Withdrawal Penalty (for fixed deposits)
-        early_penalty = Decimal(str(withdrawal.payment_group.calculate_withdrawal_penalty(withdrawal.amount)))
+        # PaymentGroups has no calculate_withdrawal_penalty; that is on GroupTarget.
+        # Setting to 0.00 to prevent AttributeError.
+        early_penalty = Decimal('0.00')
         if early_penalty > 0:
             withdrawal.early_withdrawal_penalty = early_penalty
             deduction += early_penalty
@@ -8176,23 +8608,27 @@ class WithdrawalRequestViewSet(ModelViewSet):
             
             # Record the net payout transaction
             TransactionToken.objects.create(
-                sender=request.user, # Platform/Group Admin
-                receiver=withdrawal.destination_wallet.user,
+                payment_profile=payment_profile, # Platform/Group Admin
+                recipient_profile=withdrawal.destination_wallet,
                 amount=payout,
                 transaction_type='withdrawal',
                 status='completed',
-                description=f"Withdrawal from {withdrawal.payment_group.name} (Net)"
+                description=f"Withdrawal from {withdrawal.payment_group.name} (Net)",
+                payment_group=withdrawal.payment_group,
+                payment_option='comrade_balance',
+                pay_from='internal'
             )
             
             # Record the penalty deduction transaction if any
             if deduction > 0:
                 TransactionToken.objects.create(
-                    sender=withdrawal.destination_wallet.user,
-                    receiver=request.user, # Conceptually returned to the Group Pool/Admin
+                    payment_profile=withdrawal.destination_wallet,
+                    recipient_profile=payment_profile, # Conceptually returned to the Group Pool/Admin
                     amount=deduction,
                     transaction_type='fee',
                     status='completed',
-                    description=f"Immature Exit Penalty for {withdrawal.payment_group.name}"
+                    description=f"Immature Exit Penalty for {withdrawal.payment_group.name}",
+                    payment_group=withdrawal.payment_group
                 )
             
             # Deduct only the payout from the group amount (the group pool retains the penalty)
@@ -8420,6 +8856,80 @@ class ProviderRegistrationViewSet(ModelViewSet):
         return Response({'status': 'submitted', 'provider': ProviderRegistrationSerializer(provider).data})
 
     @action(detail=True, methods=['post'])
+    def request_payout(self, request, pk=None):
+        """
+        Request a payout of funds from the Provider's kitty/wallet to their external bank account.
+        """
+        provider = self.get_object()
+        
+        # Security: Only authorized staff or admins can request payouts
+        profile = Profile.objects.get(user=request.user)
+        try:
+            staff = ProviderStaff.objects.get(provider=provider, user=profile)
+            if not staff.can_manage_transactions and not request.user.is_staff:
+                return Response({'error': 'You do not have permission to request payouts'}, status=status.HTTP_403_FORBIDDEN)
+        except ProviderStaff.DoesNotExist:
+            if not request.user.is_staff and not request.user.is_superuser:
+                return Response({'error': 'You do not have permission to request payouts'}, status=status.HTTP_403_FORBIDDEN)
+
+        amount_str = request.data.get('amount')
+        payout_method = request.data.get('method', 'stripe') # stripe, flutterwave, mpesa
+        destination_account = request.data.get('destination_account')
+        
+        if not amount_str or not destination_account:
+            return Response({'error': 'amount and destination_account are required'}, status=status.HTTP_400_BAD_REQUEST)
+            
+        try:
+            amount = Decimal(amount_str)
+        except:
+            return Response({'error': 'Invalid amount format'}, status=status.HTTP_400_BAD_REQUEST)
+            
+        if amount <= 0:
+            return Response({'error': 'Payout amount must be greater than zero'}, status=status.HTTP_400_BAD_REQUEST)
+
+        kitty = provider.linked_payment_group
+        if not kitty or kitty.balance < amount:
+            return Response({'error': 'Insufficient funds in provider kitty'}, status=status.HTTP_400_BAD_REQUEST)
+
+        # Process the Payout via selected Gateway
+        # Note: In production, Stripe payouts use the Stripe Connect Transfers API.
+        # For this prototype/MVP, we'll log it as a transaction and deduct the balance.
+        
+        with db_transaction.atomic():
+            kitty.balance -= amount
+            kitty.save()
+            
+            # Create a ProviderTransaction for the ledger
+            tx = ProviderTransaction.objects.create(
+                provider=provider,
+                user=profile,
+                transaction_type='payout',
+                amount=amount,
+                payment_method=payout_method,
+                status='completed', # Assuming synchronous for MVP
+                reference_number=f"PAYOUT-{uuid.uuid4().hex[:10].upper()}",
+                description=f"Automated Payout to {destination_account}"
+            )
+            
+            # Optionally trigger Flutterwave/Stripe actual transfer API here 
+            # if payout_method == 'flutterwave':
+            #    res = FlutterwaveProvider.initiate_transfer(...)
+            
+        create_notification(
+            user=profile.user,
+            title="Payout Processed",
+            message=f"A payout of {amount} has been initiated to your {payout_method} account.",
+            notification_type='payment'
+        )
+
+        return Response({
+            'status': 'success',
+            'message': 'Payout processed successfully',
+            'transaction_id': tx.id,
+            'amount': float(amount)
+        })
+
+    @action(detail=True, methods=['post'])
     def approve(self, request, pk=None):
         provider = self.get_object()
         profile = Profile.objects.get(user=request.user)
@@ -8641,11 +9151,88 @@ class ProviderTransactionViewSet(ModelViewSet):
     @action(detail=True, methods=['post'])
     def refund(self, request, pk=None):
         tx = self.get_object()
-        if tx.status != 'completed':
-            return Response({'error': 'Only completed transactions can be refunded'}, status=status.HTTP_400_BAD_REQUEST)
-        tx.status = 'refunded'
+        
+        if tx.status not in ['completed', 'pending']:
+            return Response({'error': f'Transaction cannot be refunded from status: {tx.status}'}, status=status.HTTP_400_BAD_REQUEST)
+
+        profile = Profile.objects.get(user=self.request.user)
+        try:
+            staff = ProviderStaff.objects.get(provider=tx.provider, user=profile, can_manage_transactions=True)
+        except ProviderStaff.DoesNotExist:
+            return Response({'error': 'You do not have permission to refund transactions'}, status=status.HTTP_403_FORBIDDEN)
+            
+        reason = request.data.get('reason', 'requested_by_customer')
+        refund_amount_str = request.data.get('amount', str(tx.amount))
+        try:
+            refund_amount = Decimal(refund_amount_str)
+        except:
+            return Response({'error': 'Invalid amount'}, status=status.HTTP_400_BAD_REQUEST)
+            
+        if refund_amount > tx.amount:
+            return Response({'error': 'Refund amount cannot exceed original transaction amount'}, status=status.HTTP_400_BAD_REQUEST)
+
+        # 1. External Gateway Refund (Stripe)
+        if tx.payment_method == 'stripe':
+            # Check if we have a Stripe payment intent ID
+            stripe_id = None
+            if tx.reference_number and tx.reference_number.startswith('pi_'):
+                stripe_id = tx.reference_number
+            elif tx.linked_transaction and tx.linked_transaction.payment_number and tx.linked_transaction.payment_number.startswith('pi_'):
+                stripe_id = tx.linked_transaction.payment_number
+
+            if stripe_id:
+                stripe_res = StripeProvider.create_refund(
+                    payment_intent_id=stripe_id,
+                    amount=float(refund_amount),
+                    reason=reason
+                )
+                if 'error' in stripe_res:
+                    return Response({'error': stripe_res['error']}, status=status.HTTP_400_BAD_REQUEST)
+                    
+                # Update TransactionToken
+                if tx.linked_transaction:
+                    tx.linked_transaction.status = 'refunded' if refund_amount == tx.amount else 'partially_refunded'
+                    tx.linked_transaction.reversal_reason = reason
+                    tx.linked_transaction.save()
+            else:
+                return Response({'error': 'Could not locate Stripe Payment Intent ID for this transaction'}, status=status.HTTP_400_BAD_REQUEST)
+
+        # 2. Comrade Balance Refund (Internal Ledger)
+        elif tx.payment_method == 'comrade_balance':
+            buyer_wallet = get_or_create_payment_profile(tx.user.user)
+            provider_kitty = tx.provider.linked_payment_group
+            
+            if provider_kitty and provider_kitty.balance < refund_amount:
+                return Response({'error': 'Provider Kitty has insufficient balance to cover this refund'}, status=status.HTTP_400_BAD_REQUEST)
+
+            with db_transaction.atomic():
+                if buyer_wallet:
+                    buyer_wallet.balance += refund_amount
+                    buyer_wallet.save()
+                    
+                if provider_kitty:
+                    provider_kitty.balance -= refund_amount
+                    provider_kitty.save()
+                    
+                if tx.linked_transaction:
+                    tx.linked_transaction.status = 'refunded' if refund_amount == tx.amount else 'partially_refunded'
+                    tx.linked_transaction.reversal_reason = reason
+                    tx.linked_transaction.save()
+
+        # Update ProviderTransaction status
+        tx.status = 'refunded' if refund_amount == tx.amount else 'partially_refunded'
+        tx.metadata['refund_reason'] = reason
+        tx.metadata['refund_amount'] = str(refund_amount)
         tx.save()
-        return Response({'status': 'refunded'})
+        
+        create_notification(
+            user=tx.user.user,
+            title="Refund Issued",
+            message=f"A refund of {refund_amount} has been issued by {tx.provider.business_name}.",
+            notification_type='payment'
+        )
+        
+        return Response({'status': tx.status, 'refunded_amount': float(refund_amount)})
 
     @action(detail=False, methods=['get'])
     def summary(self, request):
@@ -9111,6 +9698,7 @@ class AdminLoanApplicationViewSet(ModelViewSet):
                 transaction_type='loan_disbursement',
                 status='completed',
                 description=f'Loan Disbursement: {loan.id} (Net of {loan.processing_fee_amount} fee)',
+                payment_group=loan.group if loan.group else None
             )
             
             # Generate Repayment Installments

@@ -50,6 +50,7 @@ router.register(r'bill-providers', views.BillProviderViewSet, basename='bill-pro
 router.register(r'service-providers', views.UserServiceProviderViewSet, basename='my-service-provider')
 router.register(r'bill-payments', views.BillPaymentViewSet, basename='bill-payment')
 router.register(r'standing-orders', views.BillStandingOrderViewSet, basename='standing-order')
+router.register(r'automations', views.StandingOrderViewSet, basename='automation')
 
 # Loans & Credit
 router.register(r'loan-products', views.LoanProductViewSet, basename='loan-product')

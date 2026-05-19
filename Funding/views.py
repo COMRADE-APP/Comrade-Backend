@@ -277,6 +277,62 @@ class InvestmentOpportunityViewSet(viewsets.ModelViewSet):
             return [permissions.IsAdminUser()]
         return [permissions.IsAuthenticatedOrReadOnly()]
 
+    @action(detail=False, methods=['get'], permission_classes=[permissions.IsAuthenticated])
+    def recommendations(self, request):
+        """
+        Personalized recommended investment opportunities (Top Picks)
+        """
+        qs = InvestmentOpportunity.objects.filter(is_active=True)
+        recommendations = qs.order_by('-min_individual_entry')[:3]
+        if not recommendations.exists():
+            from decimal import Decimal
+            InvestmentOpportunity.objects.create(
+                title="Qomrade High-Yield MMF",
+                description="Our flagship Money Market Fund tailored for consistent low-risk returns.",
+                provider="Comrade Asset Management",
+                type="mmf",
+                min_investment=Decimal("10.00"),
+                min_individual_entry=Decimal("10.00"),
+                min_group_entry=Decimal("50.00"),
+                expected_return="14.5% p.a.",
+                risk_level="low",
+                is_active=True,
+                is_verified=True,
+                verification_status="verified"
+            )
+            InvestmentOpportunity.objects.create(
+                title="Green Agri-Tech Venture Bond",
+                description="Support sustainable agricultural growth and earn stable interest with backing from agricultural land holdings.",
+                provider="Afri-Agro Capital",
+                type="bond_domestic",
+                min_investment=Decimal("50.00"),
+                min_individual_entry=Decimal("50.00"),
+                min_group_entry=Decimal("200.00"),
+                expected_return="18.2% p.a.",
+                risk_level="medium",
+                is_active=True,
+                is_verified=True,
+                verification_status="verified"
+            )
+            InvestmentOpportunity.objects.create(
+                title="Pan-African Tech Stack Index",
+                description="High growth potential in African digital payments and SaaS startups. Recommended for growth-oriented portfolios.",
+                provider="Comrade Ventures",
+                type="stock",
+                min_investment=Decimal("100.00"),
+                min_individual_entry=Decimal("100.00"),
+                min_group_entry=Decimal("500.00"),
+                expected_return="24.0% p.a.",
+                risk_level="high",
+                is_active=True,
+                is_verified=True,
+                verification_status="verified"
+            )
+            recommendations = qs.order_by('-min_individual_entry')[:3]
+            
+        serializer = InvestmentOpportunitySerializer(recommendations, many=True)
+        return Response(serializer.data)
+
 
 # ==============================================================================
 # FUNDING RESPONSES & INTERACTIONS

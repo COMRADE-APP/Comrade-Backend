@@ -449,23 +449,75 @@ class Contribution(models.Model):
             models.Index(fields=['-contributed_at']),
         ]
 
-# Standing Orders for recurring contributions
+# Standing Orders for recurring contributions / automations
 class StandingOrder(models.Model):
-    member = models.ForeignKey(PaymentGroupMember, on_delete=models.CASCADE, related_name='standing_orders')
-    amount = models.DecimalField(decimal_places=2, max_digits=12)
-    frequency = models.CharField(max_length=50, choices=(
+    AUTOMATION_TYPE_CHOICES = (
+        ('contribute', 'Contribute'),
+        ('save', 'Save'),
+        ('purchase', 'Purchase'),
+        ('withdraw', 'Withdraw'),
+        ('loan_repayment', 'Loan Repayment'),
+        ('insurance', 'Insurance'),
+        ('bills', 'Bills & Airtime'),
+        ('investment', 'Investment'),
+        ('donation', 'Donation'),
+    )
+    FREQUENCY_CHOICES = (
         ('daily', 'Daily'),
         ('weekly', 'Weekly'),
+        ('fortnight', 'Fortnight (14 days)'),
         ('biweekly', 'Bi-Weekly'),
         ('monthly', 'Monthly'),
-    ))
+    )
+    WITHDRAWAL_MODE_CHOICES = (
+        ('all', 'All Members at Once'),
+        ('sequential', 'Sequential / Rotating'),
+        ('selected', 'Selected Members'),
+    )
+    AUTOMATION_STATUS_CHOICES = (
+        ('pending_vote', 'Pending Vote'),
+        ('approved', 'Approved'),
+        ('active', 'Active'),
+        ('paused', 'Paused / Deactivated'),
+        ('rejected', 'Rejected'),
+    )
+
+    member = models.ForeignKey(PaymentGroupMember, on_delete=models.CASCADE, related_name='standing_orders')
+    amount = models.DecimalField(decimal_places=2, max_digits=12)
+    frequency = models.CharField(max_length=50, choices=FREQUENCY_CHOICES, default='monthly')
     next_contribution_date = models.DateTimeField()
     is_active = models.BooleanField(default=True)
     created_at = models.DateTimeField(default=timezone.now)
-    
+
+    # Automation type & target
+    automation_type = models.CharField(max_length=30, choices=AUTOMATION_TYPE_CHOICES, default='contribute')
+    target_type = models.CharField(max_length=50, blank=True, null=True, help_text='kitty, piggy_bank, loan, product, insurance, donation, investment, group')
+    target_id = models.CharField(max_length=255, blank=True, null=True, help_text='ID of the target entity')
+    target_name = models.CharField(max_length=255, blank=True, null=True, help_text='Display name of the target')
+
+    # Withdrawal distribution
+    withdrawal_mode = models.CharField(max_length=20, choices=WITHDRAWAL_MODE_CHOICES, default='all', blank=True)
+    withdrawal_recipients = models.JSONField(default=list, blank=True, help_text='Member IDs receiving withdrawal')
+    withdrawal_sequence = models.JSONField(default=list, blank=True, help_text='Ordered member IDs for sequential mode')
+    withdrawal_current_index = models.IntegerField(default=0, help_text='Current position in the sequential cycle')
+
+    # Voting & approval (uses group hierarchy_mode for threshold)
+    status = models.CharField(max_length=20, choices=AUTOMATION_STATUS_CHOICES, default='pending_vote')
+    approval_votes = models.JSONField(default=list, blank=True, help_text='List of member IDs who approved')
+    rejection_votes = models.JSONField(default=list, blank=True, help_text='List of member IDs who rejected')
+
+    # Scheduling
+    start_date = models.DateField(null=True, blank=True, help_text='Scheduled start date (after approval)')
+    execution_day = models.IntegerField(default=1, help_text='Day of month (1-28) for monthly')
+    execution_day_of_week = models.IntegerField(null=True, blank=True, help_text='Day of week: 0=Mon .. 6=Sun (weekly/fortnight)')
+    execution_time_start = models.TimeField(null=True, blank=True, help_text='Start of execution window')
+    execution_time_end = models.TimeField(null=True, blank=True, help_text='End of execution window (or same as start for exact)')
+
     class Meta:
         indexes = [
             models.Index(fields=['next_contribution_date', 'is_active']),
+            models.Index(fields=['status']),
+            models.Index(fields=['automation_type']),
         ]
 
 # Group Invitations

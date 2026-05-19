@@ -60,5 +60,6 @@ def _credit_member(member, amount, group_investment):
         amount=amount,
         transaction_type='investment_payout',
         status='completed',
-        description=f"Investment Payout: {group_investment.name}"
+        description=f"Investment Payout: {group_investment.name}",
+        payment_group=group_investment.payment_group
     )

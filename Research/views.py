@@ -175,6 +175,147 @@ class ResearchProjectViewSet(viewsets.ModelViewSet):
             'total_survey_responses': total_survey_responses
         })
 
+    @action(detail=True, methods=['post'])
+    def run_matching(self, request, pk=None):
+        """
+        Run the AI participant matching algorithm for this research project.
+        Creates ParticipantMatching records for all compatible users.
+        PI only.
+        """
+        project = self.get_object()
+        if project.principal_investigator != request.user and not request.user.is_staff:
+            return Response({'detail': 'Not authorized'}, status=status.HTTP_403_FORBIDDEN)
+
+        from Research.matching import run_matching_for_project
+        matches_count = run_matching_for_project(project)
+
+        return Response({
+            'status': 'matching_complete',
+            'matches_found': matches_count,
+        })
+
+    @action(detail=True, methods=['get'])
+    def matches(self, request, pk=None):
+        """
+        Get the computed participant matches for this project, ordered by score.
+        PI only.
+        """
+        from Research.models import ParticipantMatching
+        project = self.get_object()
+        if project.principal_investigator != request.user and not request.user.is_staff:
+            return Response({'detail': 'Not authorized'}, status=status.HTTP_403_FORBIDDEN)
+
+        matches = ParticipantMatching.objects.filter(research=project).order_by('-match_score')[:50]
+
+        data = []
+        for m in matches:
+            profile = getattr(m.participant, 'profile', None)
+            data.append({
+                'id': str(m.id) if hasattr(m, 'id') else None,
+                'participant_id': m.participant.id,
+                'participant_email': m.participant.email,
+                'participant_name': f"{m.participant.first_name} {m.participant.last_name}".strip() or m.participant.email,
+                'avatar': profile.profile_image.url if profile and profile.profile_image else None,
+                'match_score': m.match_score,
+                'age_match': m.age_match,
+                'education_match': m.education_match,
+                'experience_match': m.experience_match,
+                'availability_match': m.availability_match,
+                'location_match': m.location_match,
+                'notification_sent': m.notification_sent,
+                'participant_applied': m.participant_applied,
+                'matched_at': m.matched_at.isoformat() if m.matched_at else None,
+            })
+
+        return Response(data)
+
+    @action(detail=True, methods=['post'])
+    def disburse_compensation(self, request, pk=None):
+        """
+        Disburse compensation to completed participants.
+        Deducts from the PI's wallet and credits each participant.
+        PI only.
+        """
+        project = self.get_object()
+        if project.principal_investigator != request.user and not request.user.is_staff:
+            return Response({'detail': 'Not authorized'}, status=status.HTTP_403_FORBIDDEN)
+
+        from Payment.utils import get_or_create_payment_profile
+        from django.db import transaction as db_transaction
+        from decimal import Decimal
+
+        completed_participants = ResearchParticipant.objects.filter(
+            research=project,
+            status='completed',
+            compensation_paid=False
+        ).select_related('position', 'user')
+
+        if not completed_participants.exists():
+            return Response({'detail': 'No unpaid completed participants found'}, status=status.HTTP_400_BAD_REQUEST)
+
+        pi_wallet = get_or_create_payment_profile(request.user)
+        if not pi_wallet:
+            return Response({'error': 'PI payment profile not found'}, status=status.HTTP_400_BAD_REQUEST)
+
+        total_disbursed = Decimal('0.00')
+        paid_count = 0
+        errors = []
+
+        for participant in completed_participants:
+            comp_amount = participant.compensation_amount or (
+                participant.position.compensation_amount if participant.position else None
+            )
+            if not comp_amount or comp_amount <= 0:
+                continue
+
+            comp_amount = Decimal(str(comp_amount))
+
+            try:
+                with db_transaction.atomic():
+                    if pi_wallet.balance < comp_amount:
+                        errors.append(f"Insufficient funds for {participant.user.email}")
+                        continue
+
+                    # Deduct from PI
+                    pi_wallet.balance -= comp_amount
+                    pi_wallet.save()
+
+                    # Credit participant
+                    participant_wallet = get_or_create_payment_profile(participant.user)
+                    if participant_wallet:
+                        participant_wallet.balance += comp_amount
+                        participant_wallet.save()
+
+                    # Mark as paid
+                    participant.compensation_paid = True
+                    participant.compensation_date = datetime.now()
+                    participant.compensation_amount = comp_amount
+                    participant.save()
+
+                    total_disbursed += comp_amount
+                    paid_count += 1
+
+                    # Notify participant
+                    from Notifications.models import create_notification
+                    create_notification(
+                        recipient=participant.user,
+                        notification_type='payment',
+                        title='Research Compensation Received',
+                        message=f"You've received {comp_amount} compensation for your participation in \"{project.title}\".",
+                        action_url=f"/research/{project.id}",
+                        extra_data={'amount': str(comp_amount), 'reference': str(project.id)}
+                    )
+
+            except Exception as e:
+                errors.append(f"Error paying {participant.user.email}: {str(e)}")
+
+        return Response({
+            'status': 'disbursement_complete',
+            'participants_paid': paid_count,
+            'total_disbursed': float(total_disbursed),
+            'errors': errors,
+        })
+
 class ParticipantPositionViewSet(viewsets.ModelViewSet):
     serializer_class = ParticipantPositionSerializer
     permission_classes = [permissions.IsAuthenticatedOrReadOnly]
