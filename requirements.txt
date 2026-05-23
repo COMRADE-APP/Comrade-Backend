@@ -123,7 +123,7 @@ pycryptodome==3.23.0
 pydantic==2.12.5
 pydantic_core==2.41.5
 PyJWT==2.10.1
-pyOpenSSL==25.1.0
+pyOpenSSL==25.2.0
 pyotp==2.9.0
 pyparsing==3.2.5
 PyPDF2==3.0.1
