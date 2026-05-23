@@ -347,7 +347,7 @@ class Migration(migrations.Migration):
                         ALTER TABLE "Payment_groupcertificate" RENAME COLUMN "new_id" TO "id";
                         ALTER TABLE "Payment_groupcertificate" ADD PRIMARY KEY ("id");
                     ''',
-                    reverse_sql=migrations.RunSQL.no_remote_code,
+                    reverse_sql=None,
                 ),
             ],
         ),
