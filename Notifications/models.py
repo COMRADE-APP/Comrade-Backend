@@ -28,6 +28,17 @@ NOTIFICATION_TYPES = (
     ('group_contribution', 'Group Contribution'),
     ('group_claim', 'Group Claim'),
     ('group_message', 'Group Message'),
+    # Provider Notifications
+    ('provider_application_submitted', 'Application Submitted'),
+    ('provider_application_approved', 'Application Approved'),
+    ('provider_application_rejected', 'Application Rejected'),
+    ('provider_application_requires_changes', 'Application Requires Changes'),
+    ('provider_query_response', 'Query Response'),
+    ('provider_transaction_complete', 'Transaction Complete'),
+    ('provider_transaction_refund', 'Transaction Refund'),
+    ('provider_payout_received', 'Payout Received'),
+    ('provider_document_approved', 'Document Approved'),
+    ('provider_document_rejected', 'Document Rejected'),
 )
 
 
@@ -99,7 +110,7 @@ class NotificationPreference(models.Model):
         related_name='notification_preferences'
     )
     
-    # Email notifications
+    # Email notifications - Social
     email_likes = models.BooleanField(default=True)
     email_comments = models.BooleanField(default=True)
     email_follows = models.BooleanField(default=True)
@@ -107,13 +118,29 @@ class NotificationPreference(models.Model):
     email_reposts = models.BooleanField(default=True)
     email_announcements = models.BooleanField(default=True)
     
-    # Push notifications (in-app)
+    # Push notifications (in-app) - Social
     push_likes = models.BooleanField(default=True)
     push_comments = models.BooleanField(default=True)
     push_follows = models.BooleanField(default=True)
     push_mentions = models.BooleanField(default=True)
     push_reposts = models.BooleanField(default=True)
     push_announcements = models.BooleanField(default=True)
+    
+    # Provider Email Notifications
+    email_provider_application = models.BooleanField(default=True)
+    email_provider_approved = models.BooleanField(default=True)
+    email_provider_rejected = models.BooleanField(default=True)
+    email_provider_query = models.BooleanField(default=True)
+    email_provider_transaction = models.BooleanField(default=True)
+    email_provider_payout = models.BooleanField(default=True)
+    
+    # Provider Push Notifications
+    push_provider_application = models.BooleanField(default=True)
+    push_provider_approved = models.BooleanField(default=True)
+    push_provider_rejected = models.BooleanField(default=True)
+    push_provider_query = models.BooleanField(default=True)
+    push_provider_transaction = models.BooleanField(default=True)
+    push_provider_payout = models.BooleanField(default=True)
     
     # Digest settings
     email_digest = models.BooleanField(default=False)  # Send daily digest instead of individual emails
@@ -161,6 +188,11 @@ def create_notification(
         'payment', 'payment_failed', 'loan_overdue', 'loan_approved',
         'escrow_resolved', 'insurance_lapsed', 'insurance_premium_due',
         'provider_submitted', 'provider_approved', 'kyc_approved', 'kyc_rejected',
+        # Provider notifications
+        'provider_application_submitted', 'provider_application_approved',
+        'provider_application_rejected', 'provider_application_requires_changes',
+        'provider_query_response', 'provider_transaction_complete',
+        'provider_transaction_refund', 'provider_payout_received',
     }
     if notification_type in CRITICAL_EMAIL_TYPES:
         try:
@@ -177,8 +209,17 @@ def create_notification(
                 'loan_overdue': 'loan_overdue',
                 'loan_approved': 'loan_approved',
                 'escrow_resolved': 'dispute_resolved',
-                'insurance_lapsed': None,  # No template yet
+                'insurance_lapsed': None,
                 'insurance_premium_due': None,
+                # Provider notifications
+                'provider_application_submitted': 'provider_app_submitted',
+                'provider_application_approved': 'provider_app_approved',
+                'provider_application_rejected': 'provider_app_rejected',
+                'provider_application_requires_changes': 'provider_app_changes',
+                'provider_query_response': 'provider_query_response',
+                'provider_transaction_complete': 'provider_transaction',
+                'provider_transaction_refund': 'refund_issued',
+                'provider_payout_received': 'payout_processed',
             }
             
             template_key = template_map.get(notification_type)
@@ -209,6 +250,32 @@ def create_notification(
             import logging
             logging.getLogger(__name__).error(f"Failed to send email for notification {notification.id}: {e}")
     
+    # ── Auto-dispatch SMS for priority provider notifications ──
+    PRIORITY_SMS_TYPES = {
+        'provider_application_approved',
+        'provider_application_rejected',
+        'provider_transaction_complete',
+        'provider_payout_received',
+    }
+    if notification_type in PRIORITY_SMS_TYPES:
+        try:
+            from Notifications.services.sms_service import send_sms
+            user = instance.recipient
+            phone = getattr(user, 'phone_number', None)
+            if phone:
+                sms_map = {
+                    'provider_application_approved': f"Qomrade: Your application to {extra_data.get('provider', 'provider') if extra_data else 'provider'} has been APPROVED!",
+                    'provider_application_rejected': f"Qomrade: Your application to {extra_data.get('provider', 'provider') if extra_data else 'provider'} was not approved. Log in for details.",
+                    'provider_transaction_complete': f"Qomrade: Transaction of {extra_data.get('amount', '') if extra_data else ''} completed with {extra_data.get('provider', 'provider') if extra_data else 'provider'}.",
+                    'provider_payout_received': f"Qomrade: Payout of {extra_data.get('amount', '') if extra_data else ''} received!",
+                }
+                sms_message = sms_map.get(notification_type)
+                if sms_message:
+                    send_sms(phone, sms_message)
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).error(f"Failed to send SMS for notification {notification.id}: {e}")
+    
     return notification
 
 
@@ -223,17 +290,35 @@ def send_push_notification(sender, instance, created, **kwargs):
     if created:
         from .services.push import PushNotificationService
         
-        # Check preferences (example: push_likes, push_comments)
         prefs = getattr(instance.recipient, 'notification_preferences', None)
-        if prefs:
+        
+        # Map notification type to preference field
+        pref_field = None
+        if instance.notification_type.startswith('provider_'):
+            # Map: provider_application_submitted -> push_provider_application
+            type_mapping = {
+                'provider_application_submitted': 'push_provider_application',
+                'provider_application_approved': 'push_provider_approved',
+                'provider_application_rejected': 'push_provider_rejected',
+                'provider_application_requires_changes': 'push_provider_application',
+                'provider_query_response': 'push_provider_query',
+                'provider_transaction_complete': 'push_provider_transaction',
+                'provider_transaction_refund': 'push_provider_transaction',
+                'provider_payout_received': 'push_provider_payout',
+                'provider_document_approved': 'push_provider_application',
+                'provider_document_rejected': 'push_provider_application',
+            }
+            pref_field = type_mapping.get(instance.notification_type)
+        else:
+            # Original logic for social notifications
             pref_field = f"push_{instance.notification_type}s"
+        
+        if prefs and pref_field:
             if hasattr(prefs, pref_field) and not getattr(prefs, pref_field):
                 return
                 
         title = instance.title or "New Notification"
         
-        # Optionally dispatch to Celery for async delivery
-        # For now, inline
         PushNotificationService.send_to_user(
             user=instance.recipient,
             title=title,

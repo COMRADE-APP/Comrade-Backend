@@ -4,6 +4,7 @@ from Institution.models import Institution, InstBranch
 from Organisation.models import Organisation, OrgBranch
 from django.contrib.auth.models import BaseUserManager
 from datetime import datetime
+from Authentication.otp_utils import hash_otp, verify_otp
 
 
 USER_TYPE = (
@@ -144,6 +145,44 @@ class CustomUser(AbstractUser):
             candidate = f"{base}{counter}"
             counter += 1
         return candidate
+    
+    # === OTP Management Methods ===
+    
+    def set_login_otp(self, otp):
+        self.login_otp = hash_otp(otp)
+    
+    def verify_login_otp(self, otp):
+        return verify_otp(otp, self.login_otp)
+    
+    def clear_login_otp(self):
+        self.login_otp = None
+    
+    def set_sms_otp(self, otp):
+        self.sms_otp = hash_otp(otp)
+    
+    def verify_sms_otp(self, otp):
+        return verify_otp(otp, self.sms_otp)
+    
+    def clear_sms_otp(self):
+        self.sms_otp = None
+    
+    def set_registration_otp(self, otp):
+        self.registration_otp = hash_otp(otp)
+    
+    def verify_registration_otp(self, otp):
+        return verify_otp(otp, self.registration_otp)
+    
+    def clear_registration_otp(self):
+        self.registration_otp = None
+    
+    def set_password_reset_otp_secret(self, secret):
+        self.password_reset_otp_secret = hash_otp(secret)
+    
+    def verify_password_reset_otp(self, otp):
+        return verify_otp(otp, self.password_reset_otp_secret)
+    
+    def clear_password_reset_otp_secret(self):
+        self.password_reset_otp_secret = None
     
     class Meta:
         indexes = [

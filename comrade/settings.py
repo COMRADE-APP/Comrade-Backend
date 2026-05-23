@@ -17,9 +17,10 @@ load_dotenv(os.path.join(BASE_DIR, '.env'))
 # In production, SECRET_KEY MUST be set via environment variable.
 _secret = os.getenv('SECRET_KEY', '')
 if not _secret:
-    import warnings
-    warnings.warn('SECRET_KEY not set! Using insecure fallback for local dev only.', stacklevel=1)
-    _secret = 'django-insecure-LOCAL-DEV-ONLY-c+%9#v0&z&-av-84em1*d3aazv4$'
+    raise RuntimeError(
+        'SECRET_KEY environment variable is required. '
+        'Set it in your .env file or environment before starting the server.'
+    )
 SECRET_KEY = _secret
 
 # SECURITY WARNING: don't run with debug turned on in production!

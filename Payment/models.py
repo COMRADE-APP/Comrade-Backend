@@ -3397,3 +3397,44 @@ class ProviderNotification(models.Model):
 
     def __str__(self):
         return f"{self.title} - {self.provider.business_name}"
+
+
+class ProviderRating(models.Model):
+    """
+    Ratings and reviews for providers by users who have used their services
+    """
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    provider = models.ForeignKey(ProviderRegistration, on_delete=models.CASCADE, related_name='ratings')
+    user = models.ForeignKey(Profile, on_delete=models.CASCADE, related_name='provider_ratings')
+    
+    # Rating values (1-5)
+    overall_rating = models.PositiveSmallIntegerField(choices=[(i, i) for i in range(1, 6)])
+    service_quality = models.PositiveSmallIntegerField(choices=[(i, i) for i in range(1, 6)], null=True, blank=True)
+    responsiveness = models.PositiveSmallIntegerField(choices=[(i, i) for i in range(1, 6)], null=True, blank=True)
+    value_for_money = models.PositiveSmallIntegerField(choices=[(i, i) for i in range(1, 6)], null=True, blank=True)
+    
+    # Review content
+    title = models.CharField(max_length=255, blank=True)
+    comment = models.TextField(blank=True)
+    
+    # Related entity (optional link to transaction/application)
+    related_transaction = models.ForeignKey(ProviderTransaction, on_delete=models.SET_NULL, null=True, blank=True, related_name='ratings')
+    related_application = models.ForeignKey(ProviderApplication, on_delete=models.SET_NULL, null=True, blank=True, related_name='ratings')
+    
+    is_verified = models.BooleanField(default=False, help_text='User has completed a transaction with this provider')
+    is_approved = models.BooleanField(default=True, help_text='Review is visible to public')
+    
+    created_at = models.DateTimeField(default=timezone.now)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['provider', '-created_at']),
+            models.Index(fields=['user', '-created_at']),
+            models.Index(fields=['provider', 'is_approved']),
+        ]
+        unique_together = ['provider', 'user', 'related_transaction']
+
+    def __str__(self):
+        return f"{self.provider.business_name} - {self.overall_rating} stars by {self.user.user.email}"

@@ -1,5 +1,6 @@
 from decimal import Decimal
 from rest_framework import serializers
+from comrade.mixins import SanitizeHtmlMixin
 from Payment.models import (
     PaymentProfile, PaymentItem, PaymentLog, PaymentGroups,
     TransactionToken, PaymentAuthorization, PaymentVerification,
@@ -17,7 +18,8 @@ from Payment.models import (
     WithdrawalRequest, GroupSettingsChangeRequest, RoundPosition,
     PiggyBankConversionRequest,
     ProviderRegistration, ProviderDocument, ProviderStaff, ServiceProduct,
-    ProviderTransaction, ProviderQuery, ProviderApplication, ProviderNotification
+    ProviderTransaction, ProviderQuery, ProviderApplication, ProviderNotification,
+    ProviderRating
 )
 from Payment.models import TRANSACTION_CATEGORY, PAY_OPT
 from Authentication.models import Profile, CustomUser
@@ -29,8 +31,9 @@ class PaymentProfileSerializer(serializers.ModelSerializer):
     
     class Meta:
         model = PaymentProfile
-        fields = '__all__'
-        read_only_fields = ['comrade_balance', 'profile_token']
+        fields = ['id', 'user_email', 'user_name', 'comrade_balance', 'preferred_currency',
+                  'tier', 'monthly_purchases', 'last_purchase_month']
+        read_only_fields = ['comrade_balance', 'profile_token', 'tier', 'monthly_purchases', 'last_purchase_month']
     
     def get_user_name(self, obj):
         return f"{obj.user.user.first_name} {obj.user.user.last_name}"
@@ -175,8 +178,6 @@ class TransactionHistoryDetailSerializer(serializers.ModelSerializer):
     recipient_email = serializers.SerializerMethodField()
     payment_option = serializers.CharField(source='transaction_token.payment_option', read_only=True)
     description = serializers.CharField(source='transaction_token.description', read_only=True)
-    authorization_code = serializers.SerializerMethodField()
-    verification_code = serializers.SerializerMethodField()
     can_be_reversed = serializers.SerializerMethodField()
     direction = serializers.SerializerMethodField()
     group_id = serializers.SerializerMethodField()
@@ -271,16 +272,6 @@ class TransactionHistoryDetailSerializer(serializers.ModelSerializer):
             return None
         except Exception:
             return None
-
-    def get_authorization_code(self, obj):
-        if obj.authorization_token:
-            return obj.authorization_token.authorization_code
-        return None
-
-    def get_verification_code(self, obj):
-        if obj.verification_token:
-            return obj.verification_token.verification_code
-        return None
 
     def get_can_be_reversed(self, obj):
         try:
@@ -423,7 +414,7 @@ class GroupPhaseSerializer(serializers.ModelSerializer):
         return 0.0
 
 
-class GroupPostReplySerializer(serializers.ModelSerializer):
+class GroupPostReplySerializer(serializers.ModelSerializer, SanitizeHtmlMixin):
     author_name = serializers.SerializerMethodField()
     author_avatar = serializers.SerializerMethodField()
     upvote_count = serializers.SerializerMethodField()
@@ -498,7 +489,7 @@ class GroupPostReplySerializer(serializers.ModelSerializer):
         return []
 
 
-class GroupPostSerializer(serializers.ModelSerializer):
+class GroupPostSerializer(serializers.ModelSerializer, SanitizeHtmlMixin):
     author_name = serializers.SerializerMethodField()
     author_avatar = serializers.SerializerMethodField()
     replies = serializers.SerializerMethodField()
@@ -994,7 +985,7 @@ class HotelRoomSerializer(serializers.ModelSerializer):
         read_only_fields = ['created_at']
 
 
-class ReviewSerializer(serializers.ModelSerializer):
+class ReviewSerializer(serializers.ModelSerializer, SanitizeHtmlMixin):
     user_name = serializers.SerializerMethodField()
     
     class Meta:
@@ -1260,17 +1251,15 @@ class SavedPaymentMethodSerializer(serializers.ModelSerializer):
 
 
 class SavedPaymentMethodCreateSerializer(serializers.Serializer):
-    """Serializer for creating a saved payment method with validation."""
+    """Serializer for creating a saved payment method with validation.
+    
+    PCI-compliant: Card data must be tokenized on the frontend.
+    This serializer ONLY accepts tokenized provider_token for card methods.
+    """
     method_type = serializers.ChoiceField(choices=['card', 'mpesa', 'paypal', 'bank_transfer', 'equity'])
     
     # Card fields (PCI compliant - expects tokenized provider_token from frontend)
     provider_token = serializers.CharField(required=False, help_text='Stripe PaymentMethod ID (e.g., pm_12345)')
-    
-    # Optional fields for manual entry (deprecated - use provider_token instead)
-    card_number = serializers.CharField(required=False, max_length=19, allow_blank=True)
-    expiry_month = serializers.IntegerField(required=False, min_value=1, max_value=12, allow_null=True)
-    expiry_year = serializers.IntegerField(required=False, min_value=2024, allow_null=True)
-    cvc = serializers.CharField(required=False, max_length=4, allow_blank=True)
     billing_zip = serializers.CharField(required=False, max_length=20, allow_blank=True)
     
     # M-Pesa fields
@@ -1288,10 +1277,6 @@ class SavedPaymentMethodCreateSerializer(serializers.Serializer):
     is_default = serializers.BooleanField(required=False, default=False)
     save_details = serializers.BooleanField(required=False, default=True)
     
-    def validate_card_number(self, value):
-        """Card number validation is deprecated. Use provider_token instead."""
-        return value
-    
     def validate_phone_number(self, value):
         """Validate phone number for M-Pesa."""
         if not value:
@@ -1306,10 +1291,8 @@ class SavedPaymentMethodCreateSerializer(serializers.Serializer):
     def validate(self, data):
         method_type = data.get('method_type')
         if method_type == 'card':
-            required = ['card_number', 'expiry_month', 'expiry_year', 'cvc']
-            missing = [f for f in required if not data.get(f)]
-            if missing:
-                raise serializers.ValidationError({f: 'This field is required for card payments.' for f in missing})
+            if not data.get('provider_token'):
+                raise serializers.ValidationError({'provider_token': 'Provider token is required for card payments. Cards must be tokenized on the frontend.'})
         elif method_type == 'mpesa':
             if not data.get('phone_number'):
                 raise serializers.ValidationError({'phone_number': 'Phone number is required for M-Pesa.'})
@@ -1517,7 +1500,7 @@ class LoanApplicationSerializer(serializers.ModelSerializer):
 
 # ==================== ESCROW SERIALIZERS ====================
 
-class EscrowDisputeSerializer(serializers.ModelSerializer):
+class EscrowDisputeSerializer(serializers.ModelSerializer, SanitizeHtmlMixin):
     raised_by_email = serializers.EmailField(source='raised_by.user.email', read_only=True)
     
     class Meta:
@@ -1558,7 +1541,7 @@ class InsuranceProductSerializer(serializers.ModelSerializer):
         fields = '__all__'
 
 
-class InsuranceClaimSerializer(serializers.ModelSerializer):
+class InsuranceClaimSerializer(serializers.ModelSerializer, SanitizeHtmlMixin):
     status_display = serializers.CharField(source='get_status_display', read_only=True)
     
     class Meta:
@@ -1780,7 +1763,7 @@ class ProviderTransactionSerializer(serializers.ModelSerializer):
         return None
 
 
-class ProviderQuerySerializer(serializers.ModelSerializer):
+class ProviderQuerySerializer(serializers.ModelSerializer, SanitizeHtmlMixin):
     user_name = serializers.SerializerMethodField()
     user_email = serializers.EmailField(source='user.user.email', read_only=True)
     assigned_to_name = serializers.SerializerMethodField()
@@ -2415,3 +2398,39 @@ class ExchangeRateSerializer(serializers.Serializer):
     to_currency = serializers.CharField()
     rate = serializers.DecimalField(max_digits=18, decimal_places=8)
     timestamp = serializers.DateTimeField(default=None, required=False)
+
+
+class ProviderRatingSerializer(serializers.ModelSerializer):
+    user_name = serializers.SerializerMethodField()
+    user_email = serializers.EmailField(source='user.user.email', read_only=True)
+    provider_name = serializers.CharField(source='provider.business_name', read_only=True)
+
+    class Meta:
+        model = ProviderRating
+        fields = [
+            'id', 'provider', 'provider_name', 'user', 'user_name', 'user_email',
+            'overall_rating', 'service_quality', 'responsiveness', 'value_for_money',
+            'title', 'comment', 'is_verified', 'is_approved', 'created_at', 'updated_at'
+        ]
+        read_only_fields = ['id', 'user', 'is_verified', 'is_approved', 'created_at', 'updated_at']
+
+    def get_user_name(self, obj):
+        if obj.user and obj.user.user:
+            return f"{obj.user.user.first_name} {obj.user.user.last_name}".strip() or obj.user.user.email
+        return 'Anonymous'
+
+
+class ProviderRatingCreateSerializer(serializers.ModelSerializer, SanitizeHtmlMixin):
+    class Meta:
+        model = ProviderRating
+        fields = [
+            'provider', 'overall_rating', 'service_quality', 'responsiveness', 'value_for_money',
+            'title', 'comment', 'related_transaction', 'related_application'
+        ]
+
+    def create(self, validated_data):
+        request = self.context.get('request')
+        if request and hasattr(request, 'user'):
+            profile = Profile.objects.get(user=request.user)
+            validated_data['user'] = profile
+        return super().create(validated_data)

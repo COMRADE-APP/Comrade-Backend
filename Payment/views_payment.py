@@ -8,6 +8,7 @@ from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.decorators import action
 from rest_framework import status
+from django.core.exceptions import PermissionDenied
 from django.conf import settings
 import stripe
 import json
@@ -280,19 +281,52 @@ class PaymentMethodViewSet(ModelViewSet):
 # ============================================================================
 
 class DetectPaymentMethodView(APIView):
-    """Auto-detect payment method type from input value."""
+    """Auto-detect payment method type from input value.
+    
+    Note: Does NOT accept raw card numbers for PCI compliance.
+    Card brand detection requires a tokenized provider_token.
+    """
     permission_classes = [IsAuthenticated]
     
     def post(self, request):
         value = request.data.get('value', '')
         if not value:
             return Response(
-                {'error': 'A value (card number, phone number, or email) is required.'},
+                {'error': 'A value (phone number or email) is required.'},
                 status=status.HTTP_400_BAD_REQUEST
             )
         
-        result = detect_payment_method_type(value)
-        return Response(result)
+        # For PCI compliance, only phone and email detection is allowed
+        # Card numbers are never accepted — use provider_token instead
+        digits = re.sub(r'[\s\-\+\(\)]', '', value) if value else ''
+        
+        # Email check (PayPal)
+        if re.match(r'^[^@\s]+@[^@\s]+\.[^@\s]+$', value):
+            return Response({
+                'method_type': 'paypal',
+                'brand': 'paypal',
+                'icon': 'paypal',
+                'is_valid': True,
+                'display': f'PayPal ({value})',
+            })
+        
+        # Phone number (M-Pesa / mobile money)
+        if digits.isdigit() and len(digits) >= 9 and len(digits) <= 15:
+            return Response({
+                'method_type': 'mpesa' if re.match(r'^(254|0)(7|1)\d{8}$', digits) else 'phone',
+                'brand': 'mpesa' if re.match(r'^(254|0)(7|1)\d{8}$', digits) else 'mobile_money',
+                'icon': 'phone',
+                'is_valid': True,
+                'display': f'Mobile Money ({value})',
+            })
+        
+        return Response({
+            'method_type': 'unknown',
+            'brand': None,
+            'icon': None,
+            'is_valid': False,
+            'display': 'Unknown format — use email for PayPal, phone for M-Pesa',
+        })
 
 
 # ============================================================================
@@ -417,6 +451,14 @@ class RefundPaymentView(APIView):
             return Response(
                 {'error': 'Transaction not found'},
                 status=status.HTTP_404_NOT_FOUND
+            )
+        
+        # Ownership check — only the transaction owner can refund
+        payment_profile = get_or_create_payment_profile(request.user)
+        if transaction.payment_profile != payment_profile:
+            return Response(
+                {'error': 'Not authorized to refund this transaction'},
+                status=status.HTTP_403_FORBIDDEN
             )
         
         # Check if already refunded via history
@@ -544,11 +586,20 @@ class StripeWebhookView(APIView):
     def _handle_payment_succeeded(self, payment_intent):
         try:
             transaction = TransactionToken.objects.get(transaction_code=payment_intent['id'])
+            
+            # Idempotency: skip if already marked completed
+            if transaction.status == 'completed':
+                logger.info(f'Stripe webhook: PI {payment_intent["id"]} already processed')
+                return
+            
             TransactionHistory.objects.create(
                 payment_profile=transaction.payment_profile,
                 transaction_token=transaction,
                 status='completed',
             )
+            transaction.status = 'completed'
+            transaction.save()
+            
             # Credit wallet if this is a deposit
             if transaction.transaction_type == 'deposit':
                 pp = transaction.payment_profile
@@ -573,11 +624,20 @@ class StripeWebhookView(APIView):
         """Handle Stripe Checkout Session completion."""
         try:
             transaction = TransactionToken.objects.get(transaction_code=session['id'])
+            
+            # Idempotency: skip if already completed
+            if transaction.status == 'completed':
+                logger.info(f'Stripe checkout: session {session["id"]} already processed')
+                return
+            
             TransactionHistory.objects.create(
                 payment_profile=transaction.payment_profile,
                 transaction_token=transaction,
                 status='completed',
             )
+            transaction.status = 'completed'
+            transaction.save()
+            
             if transaction.transaction_type == 'deposit':
                 pp = transaction.payment_profile
                 pp.comrade_balance += float(transaction.amount)
@@ -617,8 +677,9 @@ class FlutterwaveWebhookView(APIView):
         secret_hash = getattr(settings, 'FLUTTERWAVE_SECRET_HASH', '')
         
         if not secret_hash:
-            logger.warning('FLUTTERWAVE_SECRET_HASH not configured — accepting in dev mode')
-        elif signature != secret_hash:
+            logger.error('FLUTTERWAVE_SECRET_HASH not configured — rejecting webhook')
+            raise PermissionDenied('FLUTTERWAVE_SECRET_HASH not configured')
+        if signature != secret_hash:
             logger.warning(f'Flutterwave webhook signature mismatch')
             return Response({'error': 'Invalid signature'}, status=status.HTTP_403_FORBIDDEN)
         
@@ -730,8 +791,8 @@ class PayPalWebhookView(APIView):
         """Verify PayPal webhook signature using the PayPal API."""
         webhook_id = getattr(settings, 'PAYPAL_WEBHOOK_ID', '')
         if not webhook_id:
-            logger.warning('PAYPAL_WEBHOOK_ID not configured — skipping signature verification')
-            return True  # Allow in dev when webhook ID isn't set
+            logger.error('PAYPAL_WEBHOOK_ID not configured — rejecting webhook')
+            return False  # Fail closed when not configured
         
         # PayPal sends these headers for verification
         transmission_id = request.META.get('HTTP_PAYPAL_TRANSMISSION_ID', '')

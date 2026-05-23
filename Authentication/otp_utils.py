@@ -1,7 +1,9 @@
 """
 OTP Utilities for Authentication
-Handles TOTP generation, QR codes, email/SMS sending, and rate limiting
+Handles TOTP generation, QR codes, email/SMS sending, rate limiting, and OTP hashing
 """
+import hashlib
+import secrets
 import pyotp
 import qrcode
 import io
@@ -209,3 +211,31 @@ def increment_otp_count(user_id, action):
     
     # Set expiry to 24 hours
     cache.set(cache_key, count + 1, 60 * 60 * 24)
+
+
+# ============================================================================
+# OTP HASHING UTILITIES
+# ============================================================================
+
+def hash_otp(value):
+    """
+    Hash an OTP value with a random salt using SHA-256.
+    Returns 'salt$hash' format string suitable for DB storage.
+    """
+    salt = secrets.token_hex(8)
+    hashed = hashlib.sha256((salt + str(value)).encode()).hexdigest()
+    return f"{salt}${hashed}"
+
+
+def verify_otp(value, stored):
+    """
+    Verify an OTP value against a 'salt$hash' stored string.
+    Returns True if the value matches, False otherwise.
+    """
+    if not stored or '$' not in stored:
+        return False
+    try:
+        salt, hashed = stored.split('$', 1)
+        return hashlib.sha256((salt + str(value)).encode()).hexdigest() == hashed
+    except (ValueError, AttributeError):
+        return False

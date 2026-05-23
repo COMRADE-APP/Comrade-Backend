@@ -104,6 +104,74 @@ class EmailService:
                 "— The Qomrade Team"
             ),
         },
+        # Provider notification templates
+        'provider_app_submitted': {
+            'subject': '📝 Application Submitted — {provider}',
+            'body': (
+                "Hi {name},\n\n"
+                "Your application to {provider} has been submitted successfully.\n"
+                "Service: {service_name}\n"
+                "Application ID: {application_id}\n\n"
+                "You'll be notified once the provider reviews your application.\n\n"
+                "— The Qomrade Team"
+            ),
+        },
+        'provider_app_approved': {
+            'subject': '✅ Application Approved — {provider}',
+            'body': (
+                "Hi {name},\n\n"
+                "Great news! Your application to {provider} has been APPROVED!\n"
+                "Service: {service_name}\n"
+                "Application ID: {application_id}\n\n"
+                "You can now access and use this service. Log in to your dashboard to get started.\n\n"
+                "— The Qomrade Team"
+            ),
+        },
+        'provider_app_rejected': {
+            'subject': '⚠️ Application Update — {provider}',
+            'body': (
+                "Hi {name},\n\n"
+                "Unfortunately, your application to {provider} was not approved.\n"
+                "Service: {service_name}\n"
+                "Reason: {reason}\n\n"
+                "You may submit a new application or contact the provider for more information.\n\n"
+                "— The Qomrade Team"
+            ),
+        },
+        'provider_app_changes': {
+            'subject': '📋 Action Required — {provider}',
+            'body': (
+                "Hi {name},\n\n"
+                "{provider} has requested changes to your application.\n"
+                "Service: {service_name}\n"
+                "Notes: {reason}\n\n"
+                "Please log in to update your application and resubmit.\n\n"
+                "— The Qomrade Team"
+            ),
+        },
+        'provider_query_response': {
+            'subject': '💬 Query Response — {provider}',
+            'body': (
+                "Hi {name},\n\n"
+                "{provider} has responded to your query.\n"
+                "Subject: {query_subject}\n"
+                "Response: {response}\n\n"
+                "Log in to view the full response and continue the conversation.\n\n"
+                "— The Qomrade Team"
+            ),
+        },
+        'provider_transaction': {
+            'subject': '💳 Transaction Complete — {provider}',
+            'body': (
+                "Hi {name},\n\n"
+                "Your transaction with {provider} has been completed.\n"
+                "Amount: {amount}\n"
+                "Reference: {reference}\n"
+                "Status: Completed\n\n"
+                "Thank you for using {provider} on Qomrade!\n\n"
+                "— The Qomrade Team"
+            ),
+        },
         'welcome': {
             'subject': '🎉 Welcome to Qomrade!',
             'body': (

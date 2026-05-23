@@ -90,6 +90,7 @@ router.register(r'provider-transactions', views.ProviderTransactionViewSet, base
 router.register(r'provider-queries', views.ProviderQueryViewSet, basename='provider-query')
 router.register(r'provider-applications', views.ProviderApplicationViewSet, basename='provider-application')
 router.register(r'provider-notifications', views.ProviderNotificationViewSet, basename='provider-notification')
+router.register(r'provider-ratings', views.ProviderRatingViewSet, basename='provider-rating')
 
 urlpatterns = [
     path('', include(router.urls)),

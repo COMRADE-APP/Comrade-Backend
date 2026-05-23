@@ -12,7 +12,7 @@ import csv
 import pandas as pd
 from rest_framework.permissions import IsAuthenticated
 from django.db import transaction as db_transaction
-from django.db.models import Q, Sum, F
+from django.db.models import Q, Sum, F, Avg
 from django.utils import timezone
 from datetime import timedelta
 from decimal import Decimal
@@ -40,7 +40,8 @@ from Payment.models import (
     WithdrawalRequest, GroupSettingsChangeRequest, GroupCertificate, RoundPosition,
     PiggyBankConversionRequest,
     ProviderRegistration, ProviderDocument, ProviderStaff, ServiceProduct,
-    ProviderTransaction, ProviderQuery, ProviderApplication, ProviderNotification
+    ProviderTransaction, ProviderQuery, ProviderApplication, ProviderNotification,
+    ProviderRating
 )
 from Payment.serializers import (
     PaymentProfileSerializer, PaymentItemSerializer, PaymentLogSerializer,
@@ -67,7 +68,8 @@ from Payment.serializers import (
     PiggyBankConversionRequestSerializer,
     ProviderRegistrationSerializer, ProviderRegistrationListSerializer, ProviderDocumentSerializer,
     ProviderStaffSerializer, ServiceProductSerializer, ProviderTransactionSerializer,
-    ProviderQuerySerializer, ProviderApplicationSerializer, ProviderNotificationSerializer
+    ProviderQuerySerializer, ProviderApplicationSerializer, ProviderNotificationSerializer,
+    ProviderRatingSerializer, ProviderRatingCreateSerializer
 )
 from Funding.serializers import BusinessSerializer
 from Funding.models import Business
@@ -417,6 +419,234 @@ class PaymentProfileViewSet(ModelViewSet):
         serializer = GroupCheckoutRequestSerializer(requests, many=True, context={'request': request})
         return Response(serializer.data)
 
+    @action(detail=False, methods=['get'])
+    def pending_approvals(self, request):
+        """Fetch all actionable pending approvals for the current user."""
+        payment_profile = get_or_create_payment_profile(request.user)
+        if not payment_profile:
+            return Response({'error': 'Payment profile not found'}, status=status.HTTP_404_NOT_FOUND)
+        
+        unified_list = []
+
+        # 1. Group Checkout Requests (Pending votes from members/creator)
+        checkout_requests = GroupCheckoutRequest.objects.filter(
+            Q(group__members__payment_profile=payment_profile) | Q(group__creator=payment_profile),
+            status='pending'
+        ).distinct()
+
+        for req in checkout_requests:
+            has_voted = req.approvals.filter(id=payment_profile.id).exists() or req.rejections.filter(id=payment_profile.id).exists()
+
+            if not has_voted:
+                initiator_name = req.initiator.user.user.first_name if (req.initiator and hasattr(req.initiator, 'user') and hasattr(req.initiator.user, 'user')) else 'Anonymous'
+                unified_list.append({
+                    "id": str(req.id),
+                    "request_type": "checkout",
+                    "title": "Group Checkout Request",
+                    "amount": str(req.amount),
+                    "status": req.status,
+                    "created_at": req.created_at.isoformat() if req.created_at else None,
+                    "initiator_name": initiator_name,
+                    "group_name": req.group.name if req.group else None,
+                    "group_id": str(req.group.id) if req.group else None,
+                    "target_id": str(req.id),
+                    "approvals_count": req.approvals.count(),
+                    "rejections_count": req.rejections.count(),
+                    "total_members": req.group.members.count() if req.group else 0,
+                    "metadata": {
+                        "items_payload": req.items_payload
+                    }
+                })
+
+        # 2. Withdrawal Requests (Needs approval from Admin/Creator)
+        withdrawal_requests = WithdrawalRequest.objects.filter(
+            payment_group__members__payment_profile=payment_profile,
+            payment_group__members__is_admin=True,
+            status='pending'
+        ).distinct()
+
+        for req in withdrawal_requests:
+            initiator_name = req.requester.user.user.first_name if (req.requester and hasattr(req.requester, 'user') and hasattr(req.requester.user, 'user')) else 'Anonymous'
+            unified_list.append({
+                "id": str(req.id),
+                "request_type": "withdrawal",
+                "title": f"Withdrawal ({req.get_withdrawal_type_display()})",
+                "amount": str(req.amount),
+                "status": req.status,
+                "created_at": req.created_at.isoformat() if hasattr(req, 'created_at') and req.created_at else None,
+                "initiator_name": initiator_name,
+                "group_name": req.payment_group.name if req.payment_group else None,
+                "group_id": str(req.payment_group.id) if req.payment_group else None,
+                "target_id": str(req.id),
+                "approvals_count": 0,
+                "rejections_count": 0,
+                "total_members": 1,
+                "metadata": {
+                    "reason": req.reason
+                }
+            })
+
+        # 3. Piggy Bank Conversions (Needs votes from group members)
+        piggy_requests = PiggyBankConversionRequest.objects.filter(
+            piggy_bank__payment_group__members__payment_profile=payment_profile,
+            status='pending'
+        ).distinct()
+
+        for req in piggy_requests:
+            try:
+                member = PaymentGroupMember.objects.get(payment_group=req.piggy_bank.payment_group, payment_profile=payment_profile)
+                has_voted = req.approving_members.filter(id=member.id).exists() or req.rejecting_members.filter(id=member.id).exists()
+            except PaymentGroupMember.DoesNotExist:
+                has_voted = False
+                
+            if not has_voted:
+                unified_list.append({
+                    "id": str(req.id),
+                    "request_type": "piggy_bank",
+                    "title": f"Piggy Bank Conversion ({req.get_conversion_type_display()})",
+                    "amount": str(req.piggy_bank.current_amount) if req.piggy_bank else "0.00",
+                    "status": req.status,
+                    "created_at": req.created_at.isoformat() if req.created_at else None,
+                    "initiator_name": "Group Member",
+                    "group_name": req.piggy_bank.payment_group.name if req.piggy_bank and req.piggy_bank.payment_group else None,
+                    "group_id": str(req.piggy_bank.payment_group.id) if req.piggy_bank and req.piggy_bank.payment_group else None,
+                    "target_id": str(req.piggy_bank.id) if req.piggy_bank else None,
+                    "approvals_count": req.approving_members.count(),
+                    "rejections_count": req.rejecting_members.count(),
+                    "total_members": req.piggy_bank.payment_group.members.count() if req.piggy_bank and req.piggy_bank.payment_group else 0,
+                    "metadata": {
+                        "piggy_bank_name": req.piggy_bank.name if req.piggy_bank else None,
+                        "reason": req.reason
+                    }
+                })
+
+        # 4. Loan Applications (Group loans needing Admin approval)
+        from Payment.models import LoanApplication
+        loan_requests = LoanApplication.objects.filter(
+            group__members__payment_profile=payment_profile,
+            group__members__is_admin=True,
+            status='pending'
+        ).distinct()
+
+        for req in loan_requests:
+            initiator_name = req.user.user.first_name if hasattr(req.user, 'user') else 'Anonymous'
+            unified_list.append({
+                "id": str(req.id),
+                "request_type": "loan",
+                "title": f"Loan Application ({req.loan_product.name if req.loan_product else 'Loan'})",
+                "amount": str(req.amount),
+                "status": req.status,
+                "created_at": req.created_at.isoformat() if req.created_at else None,
+                "initiator_name": initiator_name,
+                "group_name": req.group.name if req.group else None,
+                "group_id": str(req.group.id) if req.group else None,
+                "target_id": str(req.id),
+                "approvals_count": 0,
+                "rejections_count": 0,
+                "total_members": 1,
+                "metadata": {
+                    "purpose": req.purpose,
+                    "tenure_months": req.tenure_months
+                }
+            })
+
+        # 5. Escrow Transactions (Buyer needs to release funds when delivered/funded)
+        from Payment.models import EscrowTransaction
+        escrow_requests = EscrowTransaction.objects.filter(
+            buyer=payment_profile.user,
+            status__in=['funded', 'delivered']
+        ).distinct()
+
+        for req in escrow_requests:
+            seller_name = req.seller.user.first_name if (req.seller and hasattr(req.seller, 'user')) else 'Anonymous Seller'
+            unified_list.append({
+                "id": str(req.id),
+                "request_type": "escrow",
+                "title": f"Escrow Release ({req.title})",
+                "amount": str(req.total_amount),
+                "status": req.status,
+                "created_at": req.created_at.isoformat() if hasattr(req, 'created_at') and req.created_at else None,
+                "initiator_name": seller_name,
+                "group_name": None,
+                "group_id": None,
+                "target_id": str(req.id),
+                "approvals_count": 0,
+                "rejections_count": 0,
+                "total_members": 1,
+                "metadata": {
+                    "escrow_type": req.escrow_type
+                }
+            })
+
+        # 6. Group Invitations
+        from Payment.models import GroupInvitation
+        invitations = GroupInvitation.objects.filter(
+            Q(invited_email=request.user.email) | Q(invited_profile=payment_profile),
+            status='pending'
+        ).distinct()
+
+        for req in invitations:
+            initiator_name = req.invited_by.user.user.first_name if (req.invited_by and hasattr(req.invited_by, 'user') and hasattr(req.invited_by.user, 'user')) else 'Group Admin'
+            unified_list.append({
+                "id": str(req.id),
+                "request_type": "group_invitation",
+                "title": f"Group Invitation to {req.payment_group.name if req.payment_group else 'Group'}",
+                "amount": "0.00",
+                "status": req.status,
+                "created_at": req.created_at.isoformat() if hasattr(req, 'created_at') and req.created_at else None,
+                "initiator_name": initiator_name,
+                "group_name": req.payment_group.name if req.payment_group else None,
+                "group_id": str(req.payment_group.id) if req.payment_group else None,
+                "target_id": str(req.id),
+                "approvals_count": 0,
+                "rejections_count": 0,
+                "total_members": 1,
+                "metadata": {
+                    "role": "Member" # Assuming role mapping here is simplified since it wasn't on the model directly
+                }
+            })
+
+        # 7. Group Automations (Standing Orders requiring vote)
+        from Payment.models import StandingOrder
+        automations = StandingOrder.objects.filter(
+            member__payment_group__members__payment_profile=payment_profile,
+            status='pending_vote'
+        ).distinct()
+        
+        for req in automations:
+            try:
+                member = PaymentGroupMember.objects.get(payment_group=req.member.payment_group, payment_profile=payment_profile)
+                member_id = str(member.id)
+                has_voted = (req.approval_votes and member_id in req.approval_votes) or (req.rejection_votes and member_id in req.rejection_votes)
+            except PaymentGroupMember.DoesNotExist:
+                has_voted = False
+
+            if not has_voted:
+                initiator_name = req.member.user.user.first_name if (req.member and hasattr(req.member, 'user') and hasattr(req.member.user, 'user')) else 'Anonymous'
+                unified_list.append({
+                    "id": str(req.id),
+                    "request_type": "automation",
+                    "title": f"Group Automation ({req.get_automation_type_display()})",
+                    "amount": str(req.amount),
+                    "status": req.status,
+                    "created_at": req.created_at.isoformat() if hasattr(req, 'created_at') and req.created_at else None,
+                    "initiator_name": initiator_name,
+                    "group_name": req.member.payment_group.name if req.member.payment_group else None,
+                    "group_id": str(req.member.payment_group.id) if req.member.payment_group else None,
+                    "target_id": str(req.id),
+                    "approvals_count": len(req.approval_votes) if req.approval_votes else 0,
+                    "rejections_count": len(req.rejection_votes) if req.rejection_votes else 0,
+                    "total_members": req.member.payment_group.members.count() if req.member.payment_group else 0,
+                    "metadata": {
+                        "frequency": req.frequency,
+                    }
+                })
+
+        # Sort combined list by created_at descending
+        unified_list.sort(key=lambda x: x.get('created_at') or '', reverse=True)
+
+        return Response(unified_list)
+
 from Payment.utils import check_purchase_limit, increment_purchase_count, check_group_creation_limit, get_max_group_members, get_or_create_payment_profile
 
 class TransactionViewSet(ModelViewSet):
@@ -648,20 +878,27 @@ class TransactionViewSet(ModelViewSet):
         is_sender = transaction.payment_profile == payment_profile
         is_recipient = transaction.recipient_profile == payment_profile
 
-        if not is_sender and not is_recipient:
-            return Response({'error': 'Not authorized to reverse this transaction'}, status=status.HTTP_403_FORBIDDEN)
+        # Only the sender can reverse a transaction
+        if not is_sender:
+            return Response({'error': 'Only the sender can reverse this transaction'}, status=status.HTTP_403_FORBIDDEN)
 
         sender_profile = transaction.payment_profile
         recipient_profile = transaction.recipient_profile
 
-        if is_sender and recipient_profile:
-            sender_profile.comrade_balance += transaction.amount
-            sender_profile.save()
-        elif is_recipient and sender_profile:
-            sender_profile.comrade_balance += transaction.amount
-            sender_profile.save()
-            recipient_profile.comrade_balance -= transaction.amount
-            recipient_profile.save()
+        # Lock both profiles for atomicity
+        if recipient_profile:
+            sender_profile = PaymentProfile.objects.select_for_update().get(pk=sender_profile.pk)
+            recipient_profile = PaymentProfile.objects.select_for_update().get(pk=recipient_profile.pk)
+
+            # Atomic deduction from recipient, credit to sender
+            PaymentProfile.objects.filter(pk=recipient_profile.pk).update(
+                comrade_balance=F('comrade_balance') - Decimal(str(transaction.amount))
+            )
+            PaymentProfile.objects.filter(pk=sender_profile.pk).update(
+                comrade_balance=F('comrade_balance') + Decimal(str(transaction.amount))
+            )
+            sender_profile.refresh_from_db()
+            recipient_profile.refresh_from_db()
 
         transaction.status = 'reversed'
         transaction.reversed_at = timezone.now()
@@ -680,7 +917,7 @@ class TransactionViewSet(ModelViewSet):
         return Response({
             'status': 'success',
             'message': 'Transaction reversed successfully',
-            'new_balance': float(sender_profile.comrade_balance) if is_sender else float(recipient_profile.comrade_balance)
+            'new_balance': float(sender_profile.comrade_balance) if is_sender else float(recipient_profile.comrade_balance) if recipient_profile else 0
         })
 
     @action(detail=False, methods=['post'])
@@ -705,21 +942,17 @@ class TransactionViewSet(ModelViewSet):
         if not payment_profile:
              return Response({'error': 'Could not create payment profile'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
         
-        # Create transaction record
+        # Create transaction record (pending — webhook will confirm)
         transaction = TransactionToken.objects.create(
             payment_profile=payment_profile,
             transaction_type='deposit',
             amount=amount,
             payment_option=payment_method,
             pay_from='external',
-            status='completed'
+            status='pending'
         )
         
-        # Update balance
-        payment_profile.comrade_balance += amount
-        payment_profile.save()
-        
-        # Create history record
+        # Create history record (pending until webhook confirmation)
         TransactionHistory.objects.create(
             payment_profile=payment_profile,
             transaction_token=transaction,
@@ -732,12 +965,12 @@ class TransactionViewSet(ModelViewSet):
                 verification_code=secrets.token_hex(16)
             ),
             amount=amount,
-            status='completed'
+            status='pending'
         )
         
         return Response({
-            'status': 'success',
-            'message': f'Successfully deposited ${amount:.2f}',
+            'status': 'pending',
+            'message': f'Deposit of ${amount:.2f} initiated. Awaiting payment confirmation.',
             'new_balance': float(payment_profile.comrade_balance),
             'transaction_id': str(transaction.transaction_code)
         }, status=status.HTTP_201_CREATED)
@@ -1430,7 +1663,7 @@ class PaymentGroupsViewSet(ModelViewSet):
         target_member = member
         if on_behalf_of_id:
             try:
-                target_member = PaymentGroupMember.objects.get(id=on_behalf_of_id, payment_group=group)
+                target_member = PaymentGroupMember.objects.select_for_update().get(id=on_behalf_of_id, payment_group=group)
             except (PaymentGroupMember.DoesNotExist, ValueError):
                 return Response({'error': 'Target member not found in this group'}, status=status.HTTP_404_NOT_FOUND)
 
@@ -3413,7 +3646,10 @@ class ProductViewSet(ModelViewSet):
     
     @action(detail=False, methods=['post'])
     def sync_inventory(self, request):
-        """Sync inventory from hardcoded data or parsed file data"""
+        """Sync inventory from hardcoded data or parsed file data (staff only)"""
+        if not request.user.is_staff:
+            return Response({'error': 'Staff access required'}, status=status.HTTP_403_FORBIDDEN)
+        
         inventory_data = request.data.get('inventory', [])
         # Expecting a list of dicts: [{'product_id': ...}, ...]
         updated_products = []
@@ -3853,10 +4089,14 @@ class GroupTargetViewSet(ModelViewSet):
     
     @action(detail=True, methods=['post'])
     def lock(self, request, pk=None):
-        """Lock a piggy bank"""
+        """Lock a piggy bank with validation"""
         target = self.get_object()
         lock_type = request.data.get('lock_type', 'locked')
         maturity_date = request.data.get('maturity_date')
+        
+        valid_lock_types = ['none', 'locked', 'locked_time', 'locked_goal']
+        if lock_type not in valid_lock_types:
+            return Response({'error': f'Invalid lock_type. Must be one of: {", ".join(valid_lock_types)}'}, status=status.HTTP_400_BAD_REQUEST)
         
         if lock_type == 'locked_time' and maturity_date:
             target.maturity_date = maturity_date
@@ -9225,11 +9465,20 @@ class ProviderTransactionViewSet(ModelViewSet):
         tx.metadata['refund_amount'] = str(refund_amount)
         tx.save()
         
+        # Notify user about refund
         create_notification(
-            user=tx.user.user,
-            title="Refund Issued",
+            recipient=tx.user.user,
+            notification_type='provider_transaction_refund',
+            title='Refund Issued',
             message=f"A refund of {refund_amount} has been issued by {tx.provider.business_name}.",
-            notification_type='payment'
+            action_url=f"/payments/transactions/{tx.id}",
+            extra_data={
+                'provider': tx.provider.business_name,
+                'amount': str(refund_amount),
+                'reason': reason,
+                'reference': tx.reference_number,
+                'transaction_id': str(tx.id),
+            }
         )
         
         return Response({'status': tx.status, 'refunded_amount': float(refund_amount)})
@@ -9262,7 +9511,15 @@ class ProviderQueryViewSet(ModelViewSet):
         except ProviderRegistration.DoesNotExist:
             raise serializers.ValidationError("Provider not found")
         profile = Profile.objects.get(user=self.request.user)
-        serializer.save(provider=provider, user=profile)
+        query = serializer.save(provider=provider, user=profile)
+        
+        create_notification(
+            recipient=provider.user.user,
+            notification_type='provider_new_query',
+            title='New Query Received',
+            message=f"You have a new query from {profile.user.get_full_name()}: {query.subject}",
+            action_url=f"/providers/dashboard?tab=queries",
+        )
 
     @action(detail=True, methods=['post'])
     def assign(self, request, pk=None):
@@ -9275,6 +9532,14 @@ class ProviderQueryViewSet(ModelViewSet):
         query.assigned_to = staff
         query.status = 'in_progress'
         query.save()
+        
+        create_notification(
+            recipient=query.user.user,
+            notification_type='query_assigned',
+            title='Query Now In Progress',
+            message=f"Your query '{query.subject}' is now being handled by {staff.user.user.get_full_name()}",
+            action_url=f"/payments/queries/{query.id}",
+        )
         return Response({'assigned_to': staff.user.user.get_full_name(), 'status': query.status})
 
     @action(detail=True, methods=['post'])
@@ -9290,6 +9555,14 @@ class ProviderQueryViewSet(ModelViewSet):
         query.resolved_by = staff
         query.resolved_at = timezone.now()
         query.save()
+        
+        create_notification(
+            recipient=query.user.user,
+            notification_type='query_resolved',
+            title='Query Resolved',
+            message=f"Your query '{query.subject}' has been resolved by {staff.user.user.get_full_name()}",
+            action_url=f"/payments/queries/{query.id}",
+        )
         return Response({'status': 'resolved'})
 
     @action(detail=True, methods=['post'])
@@ -9345,12 +9618,35 @@ class ProviderApplicationViewSet(ModelViewSet):
         app.status = 'submitted'
         app.submitted_at = timezone.now()
         app.save()
+        
+        # Notify provider staff about new application
         create_notification(
             recipient=app.provider.user.user,
-            notification_type='application_submitted',
-            message=f"New application from {app.user.user.get_full_name()}",
+            notification_type='provider_application_submitted',
+            title='New Application',
+            message=f"New application from {app.user.user.get_full_name()} for {app.service_product.name}",
             action_url=f"/payments/provider-applications/{app.id}",
+            extra_data={
+                'provider': app.provider.business_name,
+                'service_name': app.service_product.name,
+                'application_id': str(app.id),
+            }
         )
+        
+        # Notify user about submission confirmation
+        create_notification(
+            recipient=app.user.user,
+            notification_type='provider_application_submitted',
+            title='Application Submitted',
+            message=f"Your application to {app.provider.business_name} for {app.service_product.name} has been submitted.",
+            action_url=f"/payments/my-applications/{app.id}",
+            extra_data={
+                'provider': app.provider.business_name,
+                'service_name': app.service_product.name,
+                'application_id': str(app.id),
+            }
+        )
+        
         return Response({'status': 'submitted'})
 
     @action(detail=True, methods=['post'])
@@ -9390,11 +9686,18 @@ class ProviderApplicationViewSet(ModelViewSet):
                 app.linked_loan = loan
                 app.save()
 
+        notification_type = 'provider_application_approved' if decision == 'approved' else 'provider_application_rejected'
         create_notification(
             recipient=app.user.user,
-            notification_type='application_reviewed',
-            message=f"Your application has been {decision}",
+            notification_type=notification_type,
+            title=f"Application {decision.title()}",
+            message=f"Your application to {app.provider.business_name} for {app.service_product.name} has been {decision}.",
             action_url=f"/payments/provider-applications/{app.id}",
+            extra_data={
+                'provider': app.provider.business_name,
+                'service_name': app.service_product.name,
+                'application_id': str(app.id),
+            }
         )
         return Response({'status': decision})
 
@@ -9407,9 +9710,16 @@ class ProviderApplicationViewSet(ModelViewSet):
         app.save()
         create_notification(
             recipient=app.user.user,
-            notification_type='documents_required',
-            message=f"Additional documents required for your application",
+            notification_type='provider_application_requires_changes',
+            title='Action Required',
+            message=f"{app.provider.business_name} has requested additional documents for your application.",
             action_url=f"/payments/provider-applications/{app.id}",
+            extra_data={
+                'provider': app.provider.business_name,
+                'service_name': app.service_product.name,
+                'application_id': str(app.id),
+                'reason': f"Required documents: {', '.join(required_docs)}",
+            }
         )
         return Response({'status': 'pending_documents', 'required_documents': required_docs})
 
@@ -9418,6 +9728,103 @@ class ProviderApplicationViewSet(ModelViewSet):
         profile = Profile.objects.get(user=request.user)
         apps = ProviderApplication.objects.filter(user=profile).order_by('-created_at')
         return Response(ProviderApplicationSerializer(apps, many=True).data)
+
+
+class ProviderRatingViewSet(ModelViewSet):
+    serializer_class = ProviderRatingSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        profile = Profile.objects.get(user=self.request.user)
+        provider_id = self.request.query_params.get('provider')
+        
+        if provider_id:
+            return ProviderRating.objects.filter(provider_id=provider_id, is_approved=True)
+        
+        return ProviderRating.objects.filter(user=profile)
+
+    def get_serializer_class(self):
+        if self.action == 'create':
+            return ProviderRatingCreateSerializer
+        return ProviderRatingSerializer
+
+    def perform_create(self, serializer):
+        profile = Profile.objects.get(user=self.request.user)
+        
+        transaction_id = self.request.data.get('related_transaction')
+        application_id = self.request.data.get('related_application')
+        
+        if transaction_id:
+            try:
+                transaction = ProviderTransaction.objects.get(id=transaction_id, user=profile)
+                serializer.save(user=profile, related_transaction=transaction, is_verified=True)
+                return
+            except ProviderTransaction.DoesNotExist:
+                pass
+        
+        if application_id:
+            try:
+                application = ProviderApplication.objects.get(id=application_id, user=profile, status='approved')
+                serializer.save(user=profile, related_application=application, is_verified=True)
+                return
+            except ProviderApplication.DoesNotExist:
+                pass
+        
+        serializer.save(user=profile)
+
+    @action(detail=False, methods=['get'])
+    def for_provider(self, request):
+        provider_id = request.query_params.get('provider_id')
+        if not provider_id:
+            return Response({'error': 'provider_id required'}, status=status.HTTP_400_BAD_REQUEST)
+        
+        ratings = ProviderRating.objects.filter(
+            provider_id=provider_id,
+            is_approved=True
+        ).order_by('-created_at')
+        
+        return Response(ProviderRatingSerializer(ratings, many=True).data)
+
+    @action(detail=False, methods=['get'])
+    def provider_stats(self, request):
+        provider_id = request.query_params.get('provider_id')
+        if not provider_id:
+            return Response({'error': 'provider_id required'}, status=status.HTTP_400_BAD_REQUEST)
+        
+        ratings = ProviderRating.objects.filter(provider_id=provider_id, is_approved=True)
+        
+        if not ratings.exists():
+            return Response({
+                'average_rating': 0,
+                'total_reviews': 0,
+                'five_star': 0, 'four_star': 0, 'three_star': 0, 'two_star': 0, 'one_star': 0
+            })
+        
+        avg_rating = ratings.aggregate(Avg('overall_rating'))['overall_rating__avg'] or 0
+        
+        return Response({
+            'average_rating': round(avg_rating, 1),
+            'total_reviews': ratings.count(),
+            'five_star': ratings.filter(overall_rating=5).count(),
+            'four_star': ratings.filter(overall_rating=4).count(),
+            'three_star': ratings.filter(overall_rating=3).count(),
+            'two_star': ratings.filter(overall_rating=2).count(),
+            'one_star': ratings.filter(overall_rating=1).count(),
+        })
+
+    @action(detail=True, methods=['post'])
+    def approve(self, request, pk=None):
+        rating = self.get_object()
+        rating.is_approved = True
+        rating.save()
+        return Response({'is_approved': True})
+
+    @action(detail=True, methods=['post'])
+    def reject(self, request, pk=None):
+        rating = self.get_object()
+        rating.is_approved = False
+        rating.save()
+        return Response({'is_approved': False})
 
 
 class ProviderNotificationViewSet(ModelViewSet):

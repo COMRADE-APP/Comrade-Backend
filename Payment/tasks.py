@@ -896,3 +896,125 @@ def _process_automation_loan_repayment(order, group, amount, payment_profile):
         description=f"Group automation: Loan Repayment for {order.target_name}",
         payment_group=group
     )
+
+
+# ============================================================================
+# NOTIFICATION DIGEST TASK
+# ============================================================================
+
+@shared_task
+def send_daily_notification_digest():
+    """
+    Send daily email digest to users who have enabled digest notifications.
+    Aggregates unread notifications from the past 24 hours.
+    """
+    from Notifications.models import Notification, NotificationPreference
+    from django.core.mail import send_mail
+    from django.conf import settings
+    import logging
+    
+    logger = logging.info("Running daily notification digest task")
+    
+    # Get users who have digest enabled
+    users_with_digest = NotificationPreference.objects.filter(
+        email_digest=True,
+        user__isnull=False
+    ).select_related('user')
+    
+    logger.info(f"Found {users_with_digest.count()} users with email digest enabled")
+    
+    for pref in users_with_digest:
+        user = pref.user
+        if not user.email:
+            continue
+            
+        # Get unread notifications from past 24 hours
+        yesterday = timezone.now() - timedelta(days=1)
+        unread_notifications = Notification.objects.filter(
+            recipient=user,
+            created_at__gte=yesterday,
+            is_read=False
+        ).order_by('-created_at')[:20]  # Limit to 20 most recent
+        
+        if not unread_notifications.exists():
+            continue
+            
+        # Build digest email
+        notification_count = unread_notifications.count()
+        
+        # Categorize notifications
+        financial_notifications = unread_notifications.filter(
+            notification_type__startswith='provider_'
+        ) | unread_notifications.filter(
+            notification_type__in=['group_round', 'group_contribution', 'group_claim']
+        )
+        
+        social_notifications = unread_notifications.exclude(
+            id__in=financial_notifications.values('id')
+        )
+        
+        # Build email content
+        subject = f"Qomrade Daily Digest - {notification_count} new notifications"
+        
+        html_content = f"""
+        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+            <h2 style="color: #1a1a2e;">Your Daily Qomrade Digest</h2>
+            <p style="color: #666;">You have {notification_count} new notifications from the past 24 hours.</p>
+        """
+        
+        if financial_notifications.exists():
+            html_content += """
+            <h3 style="color: #1a1a2e; border-bottom: 2px solid #4f46e5; padding-bottom: 8px;">
+                Financial Updates
+            </h3>
+            <ul style="list-style: none; padding: 0;">
+            """
+            for notif in financial_notifications[:5]:
+                html_content += f"""
+                <li style="padding: 12px; border-bottom: 1px solid #eee; background: #f9f9f9; margin-bottom: 8px; border-radius: 8px;">
+                    <strong>{notif.title or 'Notification'}</strong><br>
+                    <span style="color: #666;">{notif.message}</span><br>
+                    <small style="color: #999;">{notif.created_at.strftime('%b %d, %H:%M')}</small>
+                </li>
+                """
+            html_content += "</ul>"
+        
+        if social_notifications.exists():
+            html_content += """
+            <h3 style="color: #1a1a2e; border-bottom: 2px solid #4f46e5; padding-bottom: 8px;">
+                Social Updates
+            </h3>
+            <ul style="list-style: none; padding: 0;">
+            """
+            for notif in social_notifications[:5]:
+                html_content += f"""
+                <li style="padding: 12px; border-bottom: 1px solid #eee; background: #f9f9f9; margin-bottom: 8px; border-radius: 8px;">
+                    <strong>{notif.title or 'Notification'}</strong><br>
+                    <span style="color: #666;">{notif.message}</span><br>
+                    <small style="color: #999;">{notif.created_at.strftime('%b %d, %H:%M')}</small>
+                </li>
+                """
+            html_content += "</ul>"
+        
+        html_content += f"""
+            <div style="margin-top: 24px; padding: 16px; background: #f0f0f0; border-radius: 8px;">
+                <p style="margin: 0; color: #666; font-size: 12px;">
+                    Manage your notification preferences in your 
+                    <a href="{settings.FRONTEND_URL}/settings/notifications" style="color: #4f46e5;">settings</a>.
+                </p>
+            </div>
+        </div>
+        """
+        
+        try:
+            send_mail(
+                subject=subject,
+                message=f"You have {notification_count} new notifications on Qomrade",
+                from_email=settings.DEFAULT_FROM_EMAIL,
+                recipient_list=[user.email],
+                html_message=html_content,
+                fail_silently=True
+            )
+            logger.info(f"Sent digest to {user.email}")
+        except Exception as e:
+            logger.error(f"Failed to send digest to {user.email}: {e}")

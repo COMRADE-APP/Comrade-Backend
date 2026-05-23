@@ -45,7 +45,7 @@ class SanitizeHtmlMixin:
 class RichTextSanitizeMixin(SanitizeHtmlMixin):
     """
     Sanitization mixin for rich text editors (e.g., articles, complex descriptions).
-    Allows safe formatting tags but strictly blocks scripts and iframes.
+    Allows safe formatting tags but strictly blocks scripts, iframes, and javascript: URIs.
     """
     allowed_tags = [
         'p', 'b', 'i', 'strong', 'em', 'u', 'strike',
@@ -58,3 +58,24 @@ class RichTextSanitizeMixin(SanitizeHtmlMixin):
         'img': ['src', 'alt', 'title', 'width', 'height'],
         '*': ['class', 'style']
     }
+    allowed_protocols = ['http', 'https', 'mailto', 'tel']
+    
+    def validate(self, attrs):
+        """Sanitize with explicit protocol whitelist to block javascript: URIs."""
+        sanitized_attrs = {}
+        for key, value in attrs.items():
+            if key in self.skip_sanitization_fields:
+                sanitized_attrs[key] = value
+                continue
+            if isinstance(value, str):
+                cleaned_value = bleach.clean(
+                    value,
+                    tags=self.allowed_tags,
+                    attributes=self.allowed_attributes,
+                    protocols=self.allowed_protocols,
+                    strip=True
+                )
+                sanitized_attrs[key] = cleaned_value
+            else:
+                sanitized_attrs[key] = value
+        return super(SanitizeHtmlMixin, self).validate(sanitized_attrs)

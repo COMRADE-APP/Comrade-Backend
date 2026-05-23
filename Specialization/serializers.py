@@ -7,13 +7,14 @@ from Specialization.models import (
     Certificate, IssuedCertificate,
     Lesson, Quiz, QuizQuestion, QuizAttempt, Enrollment, LearnerProgress
 )
+from comrade.mixins import RichTextSanitizeMixin
 
 
 # ============================================================================
 # LESSON & CONTENT SERIALIZERS
 # ============================================================================
 
-class LessonSerializer(serializers.ModelSerializer):
+class LessonSerializer(serializers.ModelSerializer, RichTextSanitizeMixin):
     has_quiz = serializers.SerializerMethodField()
 
     class Meta:

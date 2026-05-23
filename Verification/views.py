@@ -4,7 +4,7 @@ Verification Views for all entity types including liveness detection
 from rest_framework import viewsets, status, generics
 from rest_framework.decorators import action
 from rest_framework.response import Response
-from rest_framework.permissions import IsAuthenticated, AllowAny
+from rest_framework.permissions import IsAuthenticated, IsAdminUser, AllowAny
 from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
@@ -36,7 +36,7 @@ class EntityVerificationViewSet(viewsets.ModelViewSet):
         if self.action in ['create', 'initiate_liveness', 'complete_liveness']:
             return [AllowAny()]
         elif self.action in ['staff_dashboard', 'bulk_action']:
-            return [IsAuthenticated()]
+            return [IsAdminUser()]
         return [IsAuthenticated()]
     
     def get_serializer_class(self):
@@ -177,6 +177,9 @@ class EntityVerificationViewSet(viewsets.ModelViewSet):
     
     @action(detail=False, methods=['get'])
     def staff_dashboard(self, request):
+        if not request.user.is_staff:
+            return Response({'error': 'Staff access required'}, status=status.HTTP_403_FORBIDDEN)
+        
         status_filter = request.query_params.get('status')
         entity_type = request.query_params.get('entity_type')
         
@@ -197,6 +200,9 @@ class EntityVerificationViewSet(viewsets.ModelViewSet):
     
     @action(detail=False, methods=['post'])
     def bulk_action(self, request):
+        if not request.user.is_staff:
+            return Response({'error': 'Staff access required'}, status=status.HTTP_403_FORBIDDEN)
+        
         serializer = BulkVerificationActionSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         
@@ -272,7 +278,12 @@ class LivenessVerificationViewSet(viewsets.ModelViewSet):
         return LivenessVerificationSerializer
     
     def get_queryset(self):
-        return LivenessVerification.objects.all()
+        user = self.request.user
+        if not user.is_authenticated:
+            return LivenessVerification.objects.none()
+        if user.is_staff:
+            return LivenessVerification.objects.all()
+        return LivenessVerification.objects.filter(verification_request__submitted_by=user)
     
     @action(detail=False, methods=['post'])
     def initiate(self, request):
@@ -519,7 +530,7 @@ class VerificationVideoViewSet(viewsets.ModelViewSet):
 class IdentificationVerificationViewSet(viewsets.ModelViewSet):
     """ViewSet for ID verification"""
     parser_classes = (MultiPartParser, FormParser)
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAdminUser]
     
     def get_serializer_class(self):
         return EntityIdentificationSerializer
@@ -576,9 +587,12 @@ class VerificationChecklistViewSet(viewsets.ReadOnlyModelViewSet):
 
 class VerificationStatsView(generics.ListAPIView):
     """API endpoint for verification statistics"""
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAdminUser]
     
     def list(self, request, *args, **kwargs):
+        if not request.user.is_staff:
+            return Response({'error': 'Staff access required'}, status=status.HTTP_403_FORBIDDEN)
+        
         total = EntityVerificationRequest.objects.count()
         pending = EntityVerificationRequest.objects.filter(status='submitted').count()
         under_review = EntityVerificationRequest.objects.filter(status='under_review').count()

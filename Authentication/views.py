@@ -93,7 +93,7 @@ class RegisterView(APIView):
             
             # Generate OTP for registration verification
             otp_code = str(secrets.SystemRandom().randint(100000, 999999))
-            user.registration_otp = otp_code
+            user.set_registration_otp(otp_code)
             user.registration_otp_expires = timezone.now() + timezone.timedelta(minutes=OTP_EXPIRY_MINUTES)
             user.save()
             
@@ -179,12 +179,12 @@ class RegisterVerifyView(APIView):
         if timezone.now() > user.registration_otp_expires:
             return Response({"detail": "Verification code expired."}, status=status.HTTP_400_BAD_REQUEST)
         
-        if otp != user.registration_otp:
+        if not user.verify_registration_otp(otp):
             return Response({"detail": "Invalid verification code."}, status=status.HTTP_400_BAD_REQUEST)
         
         # Activate user and clear OTP
         user.is_active = True
-        user.registration_otp = None
+        user.clear_registration_otp()
         user.registration_otp_expires = None
         
         # Set user type boolean flags
@@ -328,11 +328,9 @@ class LoginView(APIView):
                     "detail": "Daily SMS limit reached. Please try email instead."
                 }, status=status.HTTP_429_TOO_MANY_REQUESTS)
             
-            user.sms_otp = otp_code
+            user.set_sms_otp(otp_code)
             user.sms_otp_expires = timezone.now() + timezone.timedelta(minutes=OTP_EXPIRY_MINUTES)
             user.save()
-
-            print(user.login_otp, '--------------------------')
             
             sms_sent = send_sms_otp(user.phone_number, otp_code, action='login')
             increment_otp_count(user.id, 'sms_login')
@@ -362,11 +360,9 @@ class LoginView(APIView):
             # Use static numeric OTP for email too (better UX than TOTP)
             otp_code = str(secrets.SystemRandom().randint(100000, 999999))
             
-            user.login_otp = otp_code
+            user.set_login_otp(otp_code)
             user.login_otp_expires = timezone.now() + timezone.timedelta(minutes=OTP_EXPIRY_MINUTES)
             user.save()
-
-            print(user.login_otp, '--------------------------')
             
             email_sent = send_email_otp(user.email, otp_code, action='login')
             increment_otp_count(user.id, 'login')
@@ -407,12 +403,11 @@ class LoginVerifyView(APIView):
         if timezone.now() > user.login_otp_expires:
             return Response({"detail": "Verification code expired."}, status=status.HTTP_400_BAD_REQUEST)
         
-        if otp != user.login_otp:
-            print("Invalid verification code.")
+        if not user.verify_login_otp(otp):
             return Response({"detail": "Invalid verification code."}, status=status.HTTP_400_BAD_REQUEST)
         
         # Clear OTP after successful verification
-        user.login_otp = None
+        user.clear_login_otp()
         user.login_otp_expires = None
         user.save()
         
@@ -497,7 +492,7 @@ class ResendOTPView(APIView):
             if not can_send:
                 return Response({'detail': 'Limit reached.'}, status=status.HTTP_429_TOO_MANY_REQUESTS)
                 
-            user.sms_otp = otp_code
+            user.set_sms_otp(otp_code)
             user.sms_otp_expires = timezone.now() + timezone.timedelta(minutes=OTP_EXPIRY_MINUTES)
             user.save()
             
@@ -510,7 +505,7 @@ class ResendOTPView(APIView):
             if not can_send:
                 return Response({'detail': 'Limit reached.'}, status=status.HTTP_429_TOO_MANY_REQUESTS)
                 
-            user.login_otp = otp_code
+            user.set_login_otp(otp_code)
             user.login_otp_expires = timezone.now() + timezone.timedelta(minutes=OTP_EXPIRY_MINUTES)
             user.save()
             
@@ -587,11 +582,11 @@ class VerifySMSOTPView(APIView):
         if timezone.now() > user.sms_otp_expires:
             return Response({"detail": "SMS code expired."}, status=status.HTTP_400_BAD_REQUEST)
         
-        if user.sms_otp != otp:
+        if not user.verify_sms_otp(otp):
             return Response({"detail": "Invalid SMS code."}, status=status.HTTP_400_BAD_REQUEST)
         
         # Clear OTP
-        user.sms_otp = None
+        user.clear_sms_otp()
         user.sms_otp_expires = None
         user.save()
         
@@ -640,7 +635,7 @@ class PasswordResetRequestView(APIView):
             }, status=status.HTTP_429_TOO_MANY_REQUESTS)
         
         otp_secret = generate_totp_secret()
-        user.password_reset_otp_secret = otp_secret
+        user.set_password_reset_otp_secret(otp_secret)
         user.password_reset_otp_expires = timezone.now() + timezone.timedelta(minutes=OTP_EXPIRY_MINUTES)
         user.save()
         
@@ -674,12 +669,12 @@ class PasswordResetConfirmView(APIView):
         if timezone.now() > user.password_reset_otp_expires:
             return Response({"detail": "Code expired."}, status=status.HTTP_400_BAD_REQUEST)
         
-        if not verify_totp_otp(user.password_reset_otp_secret, otp):
+        if not user.verify_password_reset_otp(otp):
             return Response({"detail": "Invalid code."}, status=status.HTTP_400_BAD_REQUEST)
         
         # Reset password
         user.set_password(new_password)
-        user.password_reset_otp_secret = None
+        user.clear_password_reset_otp_secret()
         user.password_reset_otp_expires = None
         user.save()
         
