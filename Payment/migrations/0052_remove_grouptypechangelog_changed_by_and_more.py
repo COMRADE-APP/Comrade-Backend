@@ -337,8 +337,7 @@ class Migration(migrations.Migration):
             database_operations=[
                 migrations.RunSQL(
                     sql='''
-                        ALTER TABLE "Payment_groupcertificate" ALTER COLUMN "id" DROP DEFAULT;
-                        DROP SEQUENCE IF EXISTS "Payment_groupcertificate_id_seq";
+                        ALTER TABLE "Payment_groupcertificate" ALTER COLUMN "id" DROP IDENTITY IF EXISTS;
                         ALTER TABLE "Payment_groupcertificate" ADD COLUMN "new_id" uuid DEFAULT gen_random_uuid();
                         UPDATE "Payment_groupcertificate" SET "new_id" = gen_random_uuid();
                         ALTER TABLE "Payment_groupcertificate" ALTER COLUMN "new_id" SET NOT NULL;
