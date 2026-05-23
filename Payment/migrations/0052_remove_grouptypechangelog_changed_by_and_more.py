@@ -324,12 +324,32 @@ class Migration(migrations.Migration):
                 to="Payment.paymentgroupmember",
             ),
         ),
-        migrations.AlterField(
-            model_name="groupcertificate",
-            name="id",
-            field=models.UUIDField(
-                default=uuid.uuid4, editable=False, primary_key=True, serialize=False
-            ),
+        migrations.SeparateDatabaseAndState(
+            state_operations=[
+                migrations.AlterField(
+                    model_name="groupcertificate",
+                    name="id",
+                    field=models.UUIDField(
+                        default=uuid.uuid4, editable=False, primary_key=True, serialize=False
+                    ),
+                ),
+            ],
+            database_operations=[
+                migrations.RunSQL(
+                    sql='''
+                        ALTER TABLE "Payment_groupcertificate" ALTER COLUMN "id" DROP DEFAULT;
+                        DROP SEQUENCE IF EXISTS "Payment_groupcertificate_id_seq";
+                        ALTER TABLE "Payment_groupcertificate" ADD COLUMN "new_id" uuid DEFAULT gen_random_uuid();
+                        UPDATE "Payment_groupcertificate" SET "new_id" = gen_random_uuid();
+                        ALTER TABLE "Payment_groupcertificate" ALTER COLUMN "new_id" SET NOT NULL;
+                        ALTER TABLE "Payment_groupcertificate" DROP CONSTRAINT "Payment_groupcertificate_pkey";
+                        ALTER TABLE "Payment_groupcertificate" DROP COLUMN "id" CASCADE;
+                        ALTER TABLE "Payment_groupcertificate" RENAME COLUMN "new_id" TO "id";
+                        ALTER TABLE "Payment_groupcertificate" ADD PRIMARY KEY ("id");
+                    ''',
+                    reverse_sql=migrations.RunSQL.no_remote_code,
+                ),
+            ],
         ),
         migrations.AlterField(
             model_name="groupcertificate",
