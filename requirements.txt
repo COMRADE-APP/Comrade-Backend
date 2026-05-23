@@ -34,7 +34,7 @@ constantly==23.10.4
 coreapi==2.3.3
 coreschema==0.0.4
 cron-descriptor==1.4.5
-cryptography==44.0.2
+cryptography>=46.0.0
 daphne==4.2.1
 distro==1.9.0
 dj-database-url==3.1.2
@@ -47,7 +47,7 @@ django-cors-headers==4.9.0
 django-filter==25.2
 django-guardian==3.2.0
 django-mfa==3.2
-django-mfa2==3.1.2
+django-mfa2==3.2.0
 django-ratelimit==4.1.0
 django-redis==6.0.0
 django-rest-auth==0.9.5
@@ -64,7 +64,7 @@ edge-tts==7.2.7
 elevenlabs==2.37.0
 environ==1.0
 Farama-Notifications==0.0.4
-fido2==1.2.0
+fido2>=2.0,<2.3
 filelock==3.24.3
 forex-python==1.9.2
 frozenlist==1.8.0
@@ -123,7 +123,7 @@ pycryptodome==3.23.0
 pydantic==2.12.5
 pydantic_core==2.41.5
 PyJWT==2.10.1
-pyOpenSSL==25.2.0
+pyOpenSSL
 pyotp==2.9.0
 pyparsing==3.2.5
 PyPDF2==3.0.1
