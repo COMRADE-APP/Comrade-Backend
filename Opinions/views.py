@@ -330,7 +330,9 @@ class OpinionViewSet(viewsets.ModelViewSet):
             is_deleted=False,
             visibility='public',
             created_at__gte=yesterday
-        ).order_by('-likes_count', '-comments_count', '-reposts_count')[:50]
+        ).select_related('user', 'reposted_by', 'original_opinion__user')\
+         .prefetch_related('media_files')\
+         .order_by('-likes_count', '-comments_count', '-reposts_count')[:50]
         
         serializer = OpinionSerializer(queryset, many=True, context={'request': request})
         return Response(serializer.data)

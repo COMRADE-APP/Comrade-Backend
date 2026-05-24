@@ -81,6 +81,7 @@ INSTALLED_APPS = [
 ]
 
 MIDDLEWARE = [
+    'django.middleware.cache.UpdateCacheMiddleware',
     'corsheaders.middleware.CorsMiddleware',
     'whitenoise.middleware.WhiteNoiseMiddleware',
     'django.middleware.security.SecurityMiddleware',
@@ -95,6 +96,7 @@ MIDDLEWARE = [
     'ActivityLog.tracking_middleware.ActivityTrackingMiddleware',
     'comrade.security_middleware.SecurityHeadersMiddleware',
     'comrade.security_middleware.FileUploadValidationMiddleware',
+    'django.middleware.cache.FetchFromCacheMiddleware',
 ]
 
 # ALLOWED_HOSTS: read from env, with sensible defaults
@@ -569,6 +571,13 @@ if os.getenv('REDIS_SENTINEL_HOST'):
     CELERY_BROKER_TRANSPORT_OPTIONS = {'master_name': os.getenv('REDIS_MASTER_NAME', 'mymaster')}
 else:
     ASGI_APPLICATION = 'comrade.asgi.application'
+    CACHES = {
+        "default": {
+            "BACKEND": "django.core.cache.backends.locmem.LocMemCache",
+            "LOCATION": "comrade-local-cache",
+            "TIMEOUT": 300,
+        }
+    }
     CHANNEL_LAYERS = {
         "default": {
             "BACKEND": "channels_redis.core.RedisChannelLayer",
@@ -577,6 +586,10 @@ else:
             },
         },
     }
+
+CACHE_MIDDLEWARE_ALIAS = 'default'
+CACHE_MIDDLEWARE_SECONDS = 60
+CACHE_MIDDLEWARE_KEY_PREFIX = 'comrade'
 
 # ============================================================================
 # SENTRY ERROR TRACKING

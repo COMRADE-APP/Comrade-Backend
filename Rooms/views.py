@@ -87,7 +87,9 @@ class RoomViewSet(ModelViewSet):
     
     def get_queryset(self):
         """Filter rooms based on query parameters"""
-        queryset = Room.objects.filter(operation_state='active')
+        queryset = Room.objects.filter(operation_state='active')\
+            .select_related('created_by')\
+            .prefetch_related('members', 'admins', 'moderators')
         
         # Filter by name search
         search = self.request.query_params.get('search')
@@ -114,7 +116,9 @@ class RoomViewSet(ModelViewSet):
         rooms = Room.objects.filter(
             members=request.user,
             operation_state='active'
-        ).annotate(
+        ).select_related('created_by')\
+         .prefetch_related('members', 'admins', 'moderators')\
+         .annotate(
             latest_message_at=Max('chats__created_at')
         ).order_by('-latest_message_at', '-created_on')
         serializer = RoomListSerializer(rooms, many=True, context={'request': request})
@@ -570,7 +574,7 @@ class RoomViewSet(ModelViewSet):
         
         if request.method == 'GET':
             # Get chats with optional filters
-            chats = RoomChat.objects.filter(room=room, is_deleted=False).select_related('sender')
+            chats = RoomChat.objects.filter(room=room, is_deleted=False).select_related('sender').prefetch_related('files')
             
             # Filter by message type
             msg_type = request.query_params.get('type')
@@ -749,20 +753,30 @@ class RoomViewSet(ModelViewSet):
     def members_detail(self, request, pk=None):
         """Get detailed member list with roles and follow status"""
         room = self.get_object()
-        members = room.members.all()
+        members = room.members.select_related('user_profile').all()
+        
+        # Batch role lookups
+        admin_ids = set(room.admins.values_list('id', flat=True))
+        moderator_ids = set(room.moderators.values_list('id', flat=True))
+        
+        # Single batch follow query
+        followed_ids = set()
+        if request.user.is_authenticated:
+            followed_ids = set(
+                Follow.objects.filter(
+                    follower=request.user, following__in=members
+                ).values_list('following_id', flat=True)
+            )
         
         result = []
         for member in members:
             role = 'member'
-            if member in room.admins.all():
+            if member.id in admin_ids:
                 role = 'admin'
-            elif member in room.moderators.all():
+            elif member.id in moderator_ids:
                 role = 'moderator'
             
-            # Check if current user is following this member
-            is_following = Follow.objects.filter(
-                follower=request.user, following=member
-            ).exists() if request.user.is_authenticated else False
+            is_following = member.id in followed_ids
             
             avatar_url = None
             if hasattr(member, 'user_profile') and member.user_profile and member.user_profile.avatar:
@@ -954,7 +968,7 @@ class DirectMessageViewSet(ModelViewSet):
         
         queryset = DirectMessage.objects.filter(
             Q(sender=user) | Q(receiver=user)
-        ).order_by('-time_stamp')
+        ).select_related('sender', 'receiver', 'dm_room').order_by('-time_stamp')
         
         if dm_room_id:
             queryset = queryset.filter(dm_room_id=dm_room_id)
@@ -1037,7 +1051,7 @@ class DirectMessageRoomViewSet(ModelViewSet):
         """Get only DM rooms the user is part of"""
         return DirectMessageRoom.objects.filter(
             participants=self.request.user
-        ).order_by('-created_on')
+        ).prefetch_related('participants').order_by('-created_on')
     
     def get_serializer_class(self):
         if self.action == 'list':
@@ -1080,7 +1094,7 @@ class DirectMessageRoomViewSet(ModelViewSet):
     def messages(self, request, pk=None):
         """Get all messages for a DM room"""
         dm_room = self.get_object()
-        messages = dm_room.messages.all().order_by('time_stamp')
+        messages = dm_room.messages.select_related('sender', 'receiver').all().order_by('time_stamp')
         
         # Paginate
         page = self.paginate_queryset(messages)
