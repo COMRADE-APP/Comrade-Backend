@@ -106,9 +106,9 @@ urlpatterns = [
     path('change-password/', ChangePasswordView.as_view(), name='change-password'),
     path('update-profile/', UpdateProfileView.as_view(), name='update-profile'),
     path('profile/', UserProfileView.as_view(), name='user-profile'),
-    path('profile/<str:user_identifier>/', UserProfileDetailView.as_view(), name='user-profile-detail'),
     path('profile/avatar/', UploadAvatarView.as_view(), name='upload-avatar'),
     path('profile/cover/', UploadCoverView.as_view(), name='upload-cover'),
+    path('profile/<str:user_identifier>/', UserProfileDetailView.as_view(), name='user-profile-detail'),
     path('profile-setup/', ProfileSetupView.as_view(), name='profile-setup'),
     
     # Account Management
