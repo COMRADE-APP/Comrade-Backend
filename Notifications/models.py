@@ -284,18 +284,13 @@ from django.dispatch import receiver
 
 @receiver(post_save, sender=Notification)
 def send_push_notification(sender, instance, created, **kwargs):
-    """
-    Automatically send push notification when a new Notification is created
-    """
     if created:
         from .services.push import PushNotificationService
-        
+
         prefs = getattr(instance.recipient, 'notification_preferences', None)
-        
-        # Map notification type to preference field
+
         pref_field = None
         if instance.notification_type.startswith('provider_'):
-            # Map: provider_application_submitted -> push_provider_application
             type_mapping = {
                 'provider_application_submitted': 'push_provider_application',
                 'provider_application_approved': 'push_provider_approved',
@@ -310,15 +305,14 @@ def send_push_notification(sender, instance, created, **kwargs):
             }
             pref_field = type_mapping.get(instance.notification_type)
         else:
-            # Original logic for social notifications
             pref_field = f"push_{instance.notification_type}s"
-        
+
         if prefs and pref_field:
             if hasattr(prefs, pref_field) and not getattr(prefs, pref_field):
                 return
-                
+
         title = instance.title or "New Notification"
-        
+
         PushNotificationService.send_to_user(
             user=instance.recipient,
             title=title,
@@ -329,3 +323,24 @@ def send_push_notification(sender, instance, created, **kwargs):
                 "action_url": instance.action_url
             }
         )
+
+        # Push via WebSocket for real-time badge update
+        try:
+            from channels.layers import get_channel_layer
+            from asgiref.sync import async_to_sync
+            channel_layer = get_channel_layer()
+            async_to_sync(channel_layer.group_send)(
+                f'notify_{instance.recipient.id}',
+                {
+                    'type': 'send_notification',
+                    'payload': {
+                        'notification_id': str(instance.id),
+                        'type': instance.notification_type,
+                        'title': title,
+                        'message': instance.message,
+                        'action_url': instance.action_url,
+                    }
+                }
+            )
+        except Exception:
+            pass
