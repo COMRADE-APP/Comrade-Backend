@@ -541,8 +541,10 @@ CELERY_TASK_TIME_LIMIT = 300  # 5 minutes max per task
 CELERY_BROKER_CONNECTION_RETRY_ON_STARTUP = True
 
 # ============================================================================
-# REDIS SENTINEL & CHANNELS CONFIGURATION
+# ASGI, REDIS SENTINEL & CHANNELS CONFIGURATION
 # ============================================================================
+ASGI_APPLICATION = 'comrade.asgi.application'
+
 if os.getenv('REDIS_SENTINEL_HOST'):
     CHANNEL_LAYERS = {
         "default": {
@@ -553,24 +555,20 @@ if os.getenv('REDIS_SENTINEL_HOST'):
         },
     }
 
-    # ============================================================================
-    # CACHING CONFIGURATION
-    # ============================================================================
     redis_host = os.getenv('REDIS_HOST', '127.0.0.1')
     redis_port = os.getenv('REDIS_PORT', '6379')
     CACHES = {
         "default": {
             "BACKEND": "django_redis.cache.RedisCache",
             "LOCATION": f"redis://{redis_host}:{redis_port}/1",
-            "OPTIONS": {
+            "CONFIG": {
                 "CLIENT_CLASS": "django_redis.client.DefaultClient",
             }
         }
     }
-    CELERY_BROKER_URL = f"sentinel://{os.getenv('REDIS_SENTINEL_HOST')}:{os.getenv('REDIS_SENTINEL_PORT', 26379)}/"
+    CELERY_BROKER_URL = f"sentinel://{os.getenv('REDIS_SENTINEL_HOST')}:{int(os.getenv('REDIS_SENTINEL_PORT', 26379))}/"
     CELERY_BROKER_TRANSPORT_OPTIONS = {'master_name': os.getenv('REDIS_MASTER_NAME', 'mymaster')}
 else:
-    ASGI_APPLICATION = 'comrade.asgi.application'
     CACHES = {
         "default": {
             "BACKEND": "django.core.cache.backends.locmem.LocMemCache",
