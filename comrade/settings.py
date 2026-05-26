@@ -545,29 +545,50 @@ CELERY_BROKER_CONNECTION_RETRY_ON_STARTUP = True
 # ============================================================================
 ASGI_APPLICATION = 'comrade.asgi.application'
 
-if os.getenv('REDIS_SENTINEL_HOST'):
+redis_sentinel_host = os.getenv('REDIS_SENTINEL_HOST')
+redis_host = os.getenv('REDIS_HOST') or os.getenv('REDIS_URL')
+
+if redis_sentinel_host:
     CHANNEL_LAYERS = {
         "default": {
             "BACKEND": "channels_redis.core.RedisChannelLayer",
             "CONFIG": {
-                "hosts": [{"sentinels": [(os.getenv('REDIS_SENTINEL_HOST'), int(os.getenv('REDIS_SENTINEL_PORT', 26379)))], "master_name": os.getenv('REDIS_MASTER_NAME', 'mymaster')}],
+                "hosts": [{"sentinels": [(redis_sentinel_host, int(os.getenv('REDIS_SENTINEL_PORT', 26379)))], "master_name": os.getenv('REDIS_MASTER_NAME', 'mymaster')}],
             },
         },
     }
 
-    redis_host = os.getenv('REDIS_HOST', '127.0.0.1')
-    redis_port = os.getenv('REDIS_PORT', '6379')
+    _rhost = os.getenv('REDIS_HOST', '127.0.0.1')
+    _rport = os.getenv('REDIS_PORT', '6379')
     CACHES = {
         "default": {
             "BACKEND": "django_redis.cache.RedisCache",
-            "LOCATION": f"redis://{redis_host}:{redis_port}/1",
+            "LOCATION": f"redis://{_rhost}:{_rport}/1",
             "CONFIG": {
                 "CLIENT_CLASS": "django_redis.client.DefaultClient",
             }
         }
     }
-    CELERY_BROKER_URL = f"sentinel://{os.getenv('REDIS_SENTINEL_HOST')}:{int(os.getenv('REDIS_SENTINEL_PORT', 26379))}/"
+    CELERY_BROKER_URL = f"sentinel://{redis_sentinel_host}:{int(os.getenv('REDIS_SENTINEL_PORT', 26379))}/"
     CELERY_BROKER_TRANSPORT_OPTIONS = {'master_name': os.getenv('REDIS_MASTER_NAME', 'mymaster')}
+elif redis_host:
+    CHANNEL_LAYERS = {
+        "default": {
+            "BACKEND": "channels_redis.core.RedisChannelLayer",
+            "CONFIG": {
+                "hosts": [(redis_host, int(os.getenv('REDIS_PORT', 6379)))],
+            },
+        },
+    }
+    CACHES = {
+        "default": {
+            "BACKEND": "django_redis.cache.RedisCache",
+            "LOCATION": f"redis://{redis_host}:{int(os.getenv('REDIS_PORT', 6379))}/1",
+            "CONFIG": {
+                "CLIENT_CLASS": "django_redis.client.DefaultClient",
+            }
+        }
+    }
 else:
     CACHES = {
         "default": {
@@ -578,10 +599,7 @@ else:
     }
     CHANNEL_LAYERS = {
         "default": {
-            "BACKEND": "channels_redis.core.RedisChannelLayer",
-            "CONFIG": {
-                "hosts": [(os.getenv('REDIS_HOST', '127.0.0.1'), 6379)],
-            },
+            "BACKEND": "channels.layers.InMemoryChannelLayer",
         },
     }
 
