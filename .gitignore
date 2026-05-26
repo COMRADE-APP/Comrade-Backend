@@ -65,4 +65,4 @@ token.txt
 
 # ignore .txt files except requirements.txt
 *.txt
-!requirements.txt
+!requirements.txtML/data/raw_scraped/*.parquet
