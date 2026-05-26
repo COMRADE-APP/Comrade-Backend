@@ -545,8 +545,8 @@ CELERY_BROKER_CONNECTION_RETRY_ON_STARTUP = True
 # ============================================================================
 ASGI_APPLICATION = 'comrade.asgi.application'
 
+redis_url = os.getenv('REDIS_URL')
 redis_sentinel_host = os.getenv('REDIS_SENTINEL_HOST')
-redis_host = os.getenv('REDIS_HOST') or os.getenv('REDIS_URL')
 
 if redis_sentinel_host:
     CHANNEL_LAYERS = {
@@ -571,19 +571,19 @@ if redis_sentinel_host:
     }
     CELERY_BROKER_URL = f"sentinel://{redis_sentinel_host}:{int(os.getenv('REDIS_SENTINEL_PORT', 26379))}/"
     CELERY_BROKER_TRANSPORT_OPTIONS = {'master_name': os.getenv('REDIS_MASTER_NAME', 'mymaster')}
-elif redis_host:
+elif redis_url:
     CHANNEL_LAYERS = {
         "default": {
             "BACKEND": "channels_redis.core.RedisChannelLayer",
             "CONFIG": {
-                "hosts": [(redis_host, int(os.getenv('REDIS_PORT', 6379)))],
+                "hosts": [redis_url],
             },
         },
     }
     CACHES = {
         "default": {
             "BACKEND": "django_redis.cache.RedisCache",
-            "LOCATION": f"redis://{redis_host}:{int(os.getenv('REDIS_PORT', 6379))}/1",
+            "LOCATION": redis_url,
             "CONFIG": {
                 "CLIENT_CLASS": "django_redis.client.DefaultClient",
             }
