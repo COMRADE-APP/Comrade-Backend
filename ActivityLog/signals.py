@@ -18,14 +18,14 @@ def log_financial_transaction(sender, instance, created, **kwargs):
             if instance.payment_profile and instance.payment_profile.user:
                 user = instance.payment_profile.user.user
 
-            action_type = f"transaction_{instance.transaction_type}"
+            action_type = f"transaction_{getattr(instance, 'transaction_category', 'transfer')}"
             
             details = {
                 'transaction_id': str(instance.id),
-                'transaction_code': str(getattr(instance, 'transaction_code', '')),
+                'transaction_code': str(getattr(instance.transaction_token, 'transaction_code', '')) if instance.transaction_token else '',
                 'amount': str(instance.amount),
                 'status': getattr(instance, 'status', 'completed'),
-                'description': instance.description,
+                'description': instance.transaction_token.description if instance.transaction_token and hasattr(instance.transaction_token, 'description') else '',
             }
 
             ActionLog.objects.create(
@@ -39,7 +39,7 @@ def log_financial_transaction(sender, instance, created, **kwargs):
                 UserActivity.objects.create(
                     user=user,
                     activity_type='payment',
-                    description=f"Transaction: {instance.transaction_type} of {instance.amount}",
+                    description=f"Transaction: {getattr(instance, 'transaction_category', 'transfer')} of {instance.amount}",
                     metadata=details
                 )
         except Exception as e:

@@ -1094,15 +1094,20 @@ class DirectMessageRoomViewSet(ModelViewSet):
     def messages(self, request, pk=None):
         """Get all messages for a DM room"""
         dm_room = self.get_object()
-        messages = dm_room.messages.select_related('sender', 'receiver').all().order_by('time_stamp')
+        # Sort descending to get the latest messages first in the page
+        messages = dm_room.messages.select_related('sender', 'receiver').all().order_by('-time_stamp')
         
         # Paginate
         page = self.paginate_queryset(messages)
         if page is not None:
             serializer = DirectMessageSerializer(page, many=True, context={'request': request})
-            return self.get_paginated_response(serializer.data)
+            # Reverse to restore ascending chronological order for the client UI
+            data = serializer.data
+            data.reverse()
+            return self.get_paginated_response(data)
         
-        serializer = DirectMessageSerializer(messages, many=True, context={'request': request})
+        # If pagination is disabled/inactive, return in chronological order
+        serializer = DirectMessageSerializer(messages.order_by('time_stamp'), many=True, context={'request': request})
         return Response(serializer.data)
     
     @action(detail=True, methods=['post'])

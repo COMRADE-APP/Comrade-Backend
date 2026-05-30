@@ -707,6 +707,7 @@ class TransactionViewSet(ModelViewSet):
                     'group_cover_photo': t_data.get('group_cover_photo'),
                     'payment_type': 'group' if t_data.get('group_id') else 'individual',
                     'can_be_reversed': t.status in ['completed', 'verified', 'settled'] and not t.reversed_at,
+                    'balance_after': str(t.balance_after) if getattr(t, 'balance_after', None) is not None else None,
                     'transaction_details': t_data
                 })
         except Exception as e:
@@ -745,6 +746,7 @@ class TransactionViewSet(ModelViewSet):
                     'group_cover_photo': order.payment_group.cover_photo.url if order.payment_group and order.payment_group.cover_photo else None,
                     'payment_type': order.payment_type or 'individual',
                     'can_be_reversed': False,
+                    'balance_after': str(order.transaction_tokens.first().balance_after) if hasattr(order, 'transaction_tokens') and order.transaction_tokens.exists() and order.transaction_tokens.first().balance_after else None,
                     'transaction_details': {
                         'group_id': str(order.payment_group.id) if order.payment_group else None,
                         'group_name': order.payment_group.name if order.payment_group else None,
@@ -1619,6 +1621,35 @@ class PaymentGroupsViewSet(ModelViewSet):
             # Deduct from wallet
             payment_profile.comrade_balance -= amount
             payment_profile.save()
+            
+            # Create wallet transaction
+            import secrets
+            transaction = TransactionToken.objects.create(
+                payment_profile=payment_profile,
+                transaction_type='contribution',
+                amount=amount,
+                payment_option='comrade_balance',
+                description=f'Group contribution to {group.name}',
+                payment_group=group,
+                balance_after=payment_profile.comrade_balance
+            )
+            TransactionHistory.objects.create(
+                payment_profile=payment_profile,
+                transaction_token=transaction,
+                authorization_token=PaymentAuthorization.objects.create(
+                    payment_profile=payment_profile,
+                    authorization_code=secrets.token_hex(16)
+                ),
+                verification_token=PaymentVerification.objects.create(
+                    payment_profile=payment_profile,
+                    verification_code=secrets.token_hex(16)
+                ),
+                amount=amount,
+                status='completed',
+                transaction_category='contribution',
+                payment_type='group',
+                balance_after=payment_profile.comrade_balance
+            )
         elif payment_method == 'stripe':
             # Create Stripe PaymentIntent - return client_secret for frontend to complete
             result = StripeProvider.create_payment_intent(
@@ -3825,6 +3856,36 @@ class GroupTargetViewSet(ModelViewSet):
         payment_profile.comrade_balance -= Decimal(str(amount))
         payment_profile.save()
         
+        # Create wallet transaction
+        import secrets
+        transaction = TransactionToken.objects.create(
+            payment_profile=payment_profile,
+            transaction_type='piggy_bank_contribution',
+            amount=amount,
+            payment_option='comrade_balance',
+            description=f'Piggy bank contribution to {target.name}',
+            payment_group=target.payment_group if target.payment_group else None,
+            piggy_bank=target,
+            balance_after=payment_profile.comrade_balance
+        )
+        TransactionHistory.objects.create(
+            payment_profile=payment_profile,
+            transaction_token=transaction,
+            authorization_token=PaymentAuthorization.objects.create(
+                payment_profile=payment_profile,
+                authorization_code=secrets.token_hex(16)
+            ),
+            verification_token=PaymentVerification.objects.create(
+                payment_profile=payment_profile,
+                verification_code=secrets.token_hex(16)
+            ),
+            amount=amount,
+            status='completed',
+            transaction_category='piggy_bank_contribution',
+            payment_type='group' if target.payment_group else 'individual',
+            balance_after=payment_profile.comrade_balance
+        )
+        
         # Add to piggy bank balance atomically
         target = GroupTarget.objects.select_for_update().get(id=target.id)
         target.current_amount += Decimal(str(amount))
@@ -3905,6 +3966,37 @@ class GroupTargetViewSet(ModelViewSet):
             amount = float(amount)
         except ValueError:
             return Response({'error': 'Invalid amount'}, status=status.HTTP_400_BAD_REQUEST)
+            
+        user = request.user
+        payment_profile = get_or_create_payment_profile(user)
+        if not payment_profile:
+             return Response({'error': 'Could not create payment profile'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+        if target.payment_group:
+            # Group Piggy Bank -> requires approval
+            from Payment.models import PiggyBankActionRequest, PaymentGroupMember
+            # check if member
+            if not PaymentGroupMember.objects.filter(payment_group=target.payment_group, payment_profile=payment_profile).exists():
+                return Response({'error': 'Not a member of this group'}, status=status.HTTP_403_FORBIDDEN)
+            
+            req = PiggyBankActionRequest.objects.create(
+                piggy_bank=target,
+                requested_by=payment_profile,
+                action_type='withdraw',
+                amount=amount,
+                reason=request.data.get('reason', '')
+            )
+            return Response({'status': 'Withdrawal request created, pending group approval', 'request_id': str(req.id)})
+        else:
+            # Individual Piggy Bank -> execute immediately
+            return self._execute_withdraw_internal(target, amount, payment_profile, request)
+
+    def _execute_withdraw_internal(self, target, amount, payment_profile, request):
+        from decimal import Decimal
+        from Payment.models import TransactionToken, TransactionHistory, PaymentAuthorization, PaymentVerification, PaymentGroupMember
+        import uuid
+        import secrets
+        from django.utils import timezone
         
         # ── Savings-type enforcement ──
         can_wd, wd_message = target.can_withdraw()
@@ -3963,21 +4055,12 @@ class GroupTargetViewSet(ModelViewSet):
             if member_total < float(target.require_min_contribution_amount):
                 return Response({'error': f'Must have contributed at least ${float(target.require_min_contribution_amount):.2f}. You have contributed ${member_total:.2f}'}, status=status.HTTP_400_BAD_REQUEST)
         
-        # Get payment profile
-        user = request.user
-        payment_profile = get_or_create_payment_profile(user)
-        if not payment_profile:
-             return Response({'error': 'Could not create payment profile'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-        
         # Check max withdrawals per day
         if target.max_withdrawals_per_day > 0 and target.last_withdrawal_date:
             from datetime import timedelta
             if target.last_withdrawal_date.date() == timezone.now().date():
-                # Check how many withdrawals today - would need to track this separately
-                # For now, just check if there's been a recent withdrawal
                 time_since_last = timezone.now() - target.last_withdrawal_date
                 if time_since_last < timedelta(hours=24):
-                    # Could implement a counter, but for now allow it
                     pass
         
         # Check member age requirement
@@ -4086,8 +4169,156 @@ class GroupTargetViewSet(ModelViewSet):
             response_data['penalty_note'] = f'A {float(target.penalty_rate)}% early withdrawal penalty of ${penalty:.2f} was applied. Accrued interest of ${forfeited_interest:.2f} was forfeited.'
         
         return Response(response_data)
-    
+        
     @action(detail=True, methods=['post'])
+    def extend_maturity(self, request, pk=None):
+        target = self.get_object()
+        new_date_str = request.data.get('maturity_date')
+        if not new_date_str:
+            return Response({'error': 'New maturity date is required'}, status=status.HTTP_400_BAD_REQUEST)
+        
+        from dateutil.parser import parse
+        try:
+            new_date = parse(new_date_str)
+        except Exception:
+            return Response({'error': 'Invalid date format'}, status=status.HTTP_400_BAD_REQUEST)
+            
+        user = request.user
+        payment_profile = get_or_create_payment_profile(user)
+        
+        if target.payment_group:
+            from Payment.models import PiggyBankActionRequest, PaymentGroupMember
+            if not PaymentGroupMember.objects.filter(payment_group=target.payment_group, payment_profile=payment_profile).exists():
+                return Response({'error': 'Not a member of this group'}, status=status.HTTP_403_FORBIDDEN)
+            req = PiggyBankActionRequest.objects.create(
+                piggy_bank=target,
+                requested_by=payment_profile,
+                action_type='extend_maturity',
+                new_maturity_date=new_date,
+                reason=request.data.get('reason', '')
+            )
+            return Response({'status': 'Maturity extension request created, pending group approval', 'request_id': str(req.id)})
+        else:
+            return self._execute_extend_maturity_internal(target, new_date)
+
+    def _execute_extend_maturity_internal(self, target, new_date):
+        target.maturity_date = new_date
+        target.save()
+        return Response({'status': 'Maturity date extended successfully', 'new_maturity_date': target.maturity_date})
+        
+    @action(detail=True, methods=['post'])
+    def dissolve(self, request, pk=None):
+        target = self.get_object()
+        user = request.user
+        payment_profile = get_or_create_payment_profile(user)
+        
+        if target.payment_group:
+            from Payment.models import PiggyBankActionRequest, PaymentGroupMember
+            if not PaymentGroupMember.objects.filter(payment_group=target.payment_group, payment_profile=payment_profile).exists():
+                return Response({'error': 'Not a member of this group'}, status=status.HTTP_403_FORBIDDEN)
+            req = PiggyBankActionRequest.objects.create(
+                piggy_bank=target,
+                requested_by=payment_profile,
+                action_type='dissolve',
+                reason=request.data.get('reason', '')
+            )
+            return Response({'status': 'Dissolve request created, pending group approval', 'request_id': str(req.id)})
+        else:
+            return self._execute_dissolve_internal(target, payment_profile, request)
+
+    def _execute_dissolve_internal(self, target, payment_profile, request):
+        amount = float(target.current_amount)
+        if amount > 0:
+            wd_res = self._execute_withdraw_internal(target, amount, payment_profile, request)
+            if wd_res.status_code != 200:
+                return wd_res
+        
+        target.status = 'inactive'
+        target.is_active = False
+        target.save()
+        return Response({'status': 'Piggy bank dissolved and deactivated successfully', 'withdrawn_amount': amount})
+
+    @action(detail=True, methods=['get'])
+    def action_requests(self, request, pk=None):
+        target = self.get_object()
+        from Payment.models import PiggyBankActionRequest, PiggyBankActionRequestVote
+        from Payment.serializers import PiggyBankActionRequestSerializer
+        reqs = PiggyBankActionRequest.objects.filter(piggy_bank=target).order_by('-created_at')
+        data = PiggyBankActionRequestSerializer(reqs, many=True).data
+        
+        # add user vote status
+        payment_profile = get_or_create_payment_profile(request.user)
+        for r in data:
+            vote = PiggyBankActionRequestVote.objects.filter(request_id=r['id'], voter=payment_profile).first()
+            r['current_user_vote'] = vote.vote if vote else None
+            
+        return Response(data)
+
+    @action(detail=True, methods=['post'])
+    @db_transaction.atomic
+    def vote_action(self, request, pk=None):
+        target = self.get_object()
+        request_id = request.data.get('request_id')
+        vote_choice = request.data.get('vote')
+        
+        if vote_choice not in ['approve', 'reject']:
+            return Response({'error': 'Invalid vote'}, status=status.HTTP_400_BAD_REQUEST)
+            
+        from Payment.models import PiggyBankActionRequest, PiggyBankActionRequestVote, PaymentGroupMember
+        action_req = PiggyBankActionRequest.objects.filter(id=request_id, piggy_bank=target).first()
+        if not action_req:
+            return Response({'error': 'Request not found'}, status=status.HTTP_404_NOT_FOUND)
+            
+        if action_req.status != 'pending':
+            return Response({'error': f'Request already {action_req.status}'}, status=status.HTTP_400_BAD_REQUEST)
+            
+        payment_profile = get_or_create_payment_profile(request.user)
+        if not PaymentGroupMember.objects.filter(payment_group=target.payment_group, payment_profile=payment_profile).exists():
+            return Response({'error': 'Not a member of this group'}, status=status.HTTP_403_FORBIDDEN)
+            
+        vote_obj, created = PiggyBankActionRequestVote.objects.update_or_create(
+            request=action_req,
+            voter=payment_profile,
+            defaults={'vote': vote_choice}
+        )
+        
+        # check 100% consensus
+        total_members = target.payment_group.members.count()
+        approvals = action_req.votes.filter(vote='approve').count()
+        rejections = action_req.votes.filter(vote='reject').count()
+        
+        if approvals == total_members:
+            action_req.status = 'approved'
+            action_req.save()
+            # execute action
+            if action_req.action_type == 'withdraw':
+                res = self._execute_withdraw_internal(target, float(action_req.amount), action_req.requested_by, request)
+                if res.status_code == 200:
+                    action_req.status = 'executed'
+                else:
+                    action_req.status = 'failed'
+                action_req.save()
+            elif action_req.action_type == 'extend_maturity':
+                res = self._execute_extend_maturity_internal(target, action_req.new_maturity_date)
+                action_req.status = 'executed'
+                action_req.save()
+            elif action_req.action_type == 'dissolve':
+                res = self._execute_dissolve_internal(target, action_req.requested_by, request)
+                if res.status_code == 200:
+                    action_req.status = 'executed'
+                else:
+                    action_req.status = 'failed'
+                action_req.save()
+                
+            return Response({'status': 'Vote recorded and action executed due to 100% consensus'})
+        
+        if rejections > 0:
+            # 100% consensus failed
+            action_req.status = 'rejected'
+            action_req.save()
+            return Response({'status': 'Vote recorded. Action rejected because 100% consensus is required.'})
+            
+        return Response({'status': 'Vote recorded successfully', 'approvals': approvals, 'total': total_members})
     def lock(self, request, pk=None):
         """Lock a piggy bank with validation"""
         target = self.get_object()
@@ -7376,8 +7607,9 @@ class DonationViewSet(ModelViewSet):
             return Response({'error': 'Amount required'}, status=status.HTTP_400_BAD_REQUEST)
         
         try:
-            amount = float(amount)
-        except ValueError:
+            from decimal import Decimal
+            amount = Decimal(str(amount))
+        except (ValueError, TypeError):
             return Response({'error': 'Invalid amount'}, status=status.HTTP_400_BAD_REQUEST)
 
         user = request.user
@@ -7391,8 +7623,38 @@ class DonationViewSet(ModelViewSet):
             return Response({'error': 'Insufficient balance'}, status=status.HTTP_400_BAD_REQUEST)
 
         # Deduct
-        payment_profile.comrade_balance -= Decimal(str(amount))
+        payment_profile.comrade_balance -= amount
         payment_profile.save()
+        
+        # Create wallet transaction
+        import secrets
+        transaction = TransactionToken.objects.create(
+            payment_profile=payment_profile,
+            transaction_type='contribution',
+            amount=amount,
+            payment_option='comrade_balance',
+            description=f'Donation contribution to {donation.name}',
+            payment_group=donation.payment_group if donation.payment_group else None,
+            balance_after=payment_profile.comrade_balance
+        )
+        TransactionHistory.objects.create(
+            payment_profile=payment_profile,
+            transaction_token=transaction,
+            authorization_token=PaymentAuthorization.objects.create(
+                payment_profile=payment_profile,
+                authorization_code=secrets.token_hex(16)
+            ),
+            verification_token=PaymentVerification.objects.create(
+                payment_profile=payment_profile,
+                verification_code=secrets.token_hex(16)
+            ),
+            amount=amount,
+            status='completed',
+            transaction_category='contribution',
+            payment_type='group' if donation.payment_group else 'individual',
+            balance_after=payment_profile.comrade_balance
+        )
+
 
         # Find member if group donation
         member = None
@@ -7405,7 +7667,7 @@ class DonationViewSet(ModelViewSet):
         # Create contribution
         contribution = DonationContribution.objects.create(
             donation=donation,
-            donor_profile=payment_profile if not member else None,
+            donor_profile=payment_profile,
             member=member,
             amount=amount,
             status='confirmed',

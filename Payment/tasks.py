@@ -104,83 +104,118 @@ def process_standing_orders():
     )
 
     for order in active_orders:
-        # Determine if this order is due based on frequency
-        if not _is_order_due(order, now):
+        if order.consecutive_failures >= 5:
             continue
 
-        try:
-            with db_transaction.atomic():
-                user_profile = order.user
-                payment_profile = user_profile.payment_profile.first()
-                if not payment_profile:
-                    logger.warning(f"No payment profile for user {user_profile.id}")
-                    failed += 1
-                    continue
+        while True:
+            # Check if due. If not due, break out of loop.
+            if not _is_order_due(order, now):
+                break
 
-                # Check sufficient balance
-                if payment_profile.wallet_balance < order.amount:
-                    logger.warning(
-                        f"Insufficient balance for standing order {order.id}: "
-                        f"balance={payment_profile.wallet_balance}, required={order.amount}"
+            try:
+                with db_transaction.atomic():
+                    user_profile = order.user
+                    payment_profile = user_profile.payment_profile.first()
+                    if not payment_profile:
+                        logger.warning(f"No payment profile for user {user_profile.id}")
+                        failed += 1
+                        break
+
+                    # Check sufficient balance
+                    if payment_profile.wallet_balance < order.amount:
+                        logger.warning(
+                            f"Insufficient balance for standing order {order.id}: "
+                            f"balance={payment_profile.wallet_balance}, required={order.amount}"
+                        )
+                        order.consecutive_failures += 1
+                        order.save()
+
+                        if order.consecutive_failures >= 5:
+                            order.status = 'paused'
+                            order.save()
+                            # Notify user that it paused
+                            from Notifications.models import create_notification
+                            try:
+                                create_notification(
+                                    recipient=user_profile.user,
+                                    notification_type='payment_failed',
+                                    message=(
+                                        f"Your standing order to {order.provider.name} failed 5 times "
+                                        f"due to insufficient funds and has been paused. Please add funds and resume it."
+                                    ),
+                                    action_url="/payments/bills",
+                                )
+                            except Exception:
+                                pass
+                        else:
+                            _notify_insufficient_funds(user_profile, order)
+                        
+                        failed += 1
+                        break  # Stop trying for this order today
+
+                    # Deduct from wallet
+                    payment_profile.wallet_balance -= order.amount
+                    payment_profile.save()
+
+                    # Create transaction record
+                    txn = TransactionToken.objects.create(
+                        sender_profile=payment_profile,
+                        amount=order.amount,
+                        transaction_type='bill_payment',
+                        status='completed',
+                        description=f"Standing order: {order.provider.name}",
                     )
-                    # Notify user of insufficient funds
-                    _notify_insufficient_funds(user_profile, order)
-                    failed += 1
-                    continue
 
-                # Deduct from wallet
-                payment_profile.wallet_balance -= order.amount
-                payment_profile.save()
+                    # Create bill payment record
+                    BillPayment.objects.create(
+                        user=user_profile,
+                        provider=order.provider.category if hasattr(order.provider, 'category') else 'other',
+                        account_number=order.provider.account_number,
+                        amount=order.amount,
+                        status='completed',
+                        transaction=txn,
+                    )
 
-                # Create transaction record
-                txn = TransactionToken.objects.create(
-                    sender_profile=payment_profile,
-                    amount=order.amount,
-                    transaction_type='bill_payment',
-                    status='completed',
-                    description=f"Standing order: {order.provider.name}",
-                )
+                    # Success: Reset failures and advance date
+                    order.consecutive_failures = 0
+                    
+                    # Update next_run_date (we simulate this by updating start_date to the execution date)
+                    # wait, earlier we added next_run_date to BillStandingOrder! We should use it!
+                    _advance_bill_order_date(order)
+                    order.save()
 
-                # Create bill payment record
-                BillPayment.objects.create(
-                    user=user_profile,
-                    provider=order.provider.category if hasattr(order.provider, 'category') else 'other',
-                    account_number=order.provider.account_number,
-                    amount=order.amount,
-                    status='completed',
-                    transaction=txn,
-                )
+                    processed += 1
+                    logger.info(f"Processed standing order {order.id} for {order.amount}")
 
-                processed += 1
-                logger.info(f"Processed standing order {order.id} for {order.amount}")
-
-        except Exception as e:
-            logger.error(f"Failed to process standing order {order.id}: {e}")
-            failed += 1
+            except Exception as e:
+                logger.error(f"Failed to process standing order {order.id}: {e}")
+                failed += 1
+                break
 
     logger.info(f"Standing orders processed: {processed}, failed: {failed}")
     return f"Processed: {processed}, Failed: {failed}"
 
 
-def _is_order_due(order, today):
-    """Check if a standing order is due based on its frequency."""
-    start = order.start_date
-    if not start:
-        return False
-
-    days_since_start = (today - start).days
-    if days_since_start < 0:
-        return False
-
-    if order.frequency == 'weekly':
-        return days_since_start % 7 == 0
+def _advance_bill_order_date(order):
+    from datetime import timedelta
+    from dateutil.relativedelta import relativedelta
+    if not order.next_run_date:
+        order.next_run_date = order.start_date
+        
+    if order.frequency == 'daily':
+        order.next_run_date += timedelta(days=1)
+    elif order.frequency == 'weekly':
+        order.next_run_date += timedelta(weeks=1)
     elif order.frequency == 'monthly':
-        return today.day == start.day or (
-            today.day == 1 and start.day > 28  # Handle months with fewer days
-        )
+        order.next_run_date += relativedelta(months=1)
     elif order.frequency == 'quarterly':
-        return days_since_start % 90 == 0
-    return False
+        order.next_run_date += relativedelta(months=3)
+
+
+    if not order.next_run_date:
+        order.next_run_date = order.start_date
+        
+    return order.next_run_date <= today
 
 
 def _notify_insufficient_funds(user_profile, order):
@@ -624,40 +659,70 @@ def process_group_automations():
     ).select_related('member__payment_profile', 'member__payment_group')
     
     for order in active_orders:
-        try:
-            with db_transaction.atomic():
-                amount = order.amount
-                group = order.member.payment_group
-                payment_profile = order.member.payment_profile
-                
-                if order.automation_type == 'withdraw':
-                    _process_automation_withdraw(order, group, amount, payment_profile)
-                elif order.automation_type == 'contribute':
-                    _process_automation_contribute(order, group, amount, payment_profile)
-                elif order.automation_type == 'save':
-                    _process_automation_save(order, group, amount, payment_profile)
-                elif order.automation_type == 'purchase':
-                    _process_automation_purchase(order, group, amount, payment_profile)
-                elif order.automation_type == 'loan_repayment':
-                    _process_automation_loan_repayment(order, group, amount, payment_profile)
-                else:
-                    logger.warning(f"Unhandled automation type {order.automation_type} for order {order.id}")
-                    
-                _update_next_run_date(order)
-                processed += 1
-                
-        except Exception as e:
-            logger.error(f"Failed to process group automation {order.id}: {e}")
-            failed += 1
+        if order.consecutive_failures >= 5:
+            continue
+
+        while order.next_contribution_date <= now:
             try:
-                import random
-                from datetime import timedelta
-                random_delay = random.randint(15, 120)
-                order.next_contribution_date = timezone.now() + timedelta(minutes=random_delay)
+                with db_transaction.atomic():
+                    amount = order.amount
+                    group = order.member.payment_group
+                    payment_profile = order.member.payment_profile
+                    
+                    if order.automation_type == 'withdraw':
+                        _process_automation_withdraw(order, group, amount, payment_profile)
+                    elif order.automation_type == 'contribute':
+                        _process_automation_contribute(order, group, amount, payment_profile)
+                    elif order.automation_type == 'save':
+                        _process_automation_save(order, group, amount, payment_profile)
+                    elif order.automation_type == 'purchase':
+                        _process_automation_purchase(order, group, amount, payment_profile)
+                    elif order.automation_type == 'loan_repayment':
+                        _process_automation_loan_repayment(order, group, amount, payment_profile)
+                    else:
+                        logger.warning(f"Unhandled automation type {order.automation_type} for order {order.id}")
+                        
+                    # Success
+                    order.consecutive_failures = 0
+                    _update_next_run_date(order)
+                    processed += 1
+                    
+            except ValueError as ve:
+                # Insufficient funds usually throws ValueError here
+                logger.error(f"Failed to process group automation {order.id}: {ve}")
+                order.consecutive_failures += 1
                 order.save()
-                logger.info(f"Rescheduled failed automation {order.id} to retry in {random_delay} minutes")
-            except Exception as reschedule_err:
-                logger.error(f"Failed to reschedule automation {order.id}: {reschedule_err}")
+                
+                if order.consecutive_failures >= 5:
+                    order.status = 'paused'
+                    order.is_active = False
+                    order.save()
+                    from Notifications.models import create_notification
+                    try:
+                        create_notification(
+                            recipient=order.member.payment_profile.user.user,
+                            notification_type='payment_failed',
+                            message=f"Group automation for {group.name} failed 5 times and has been paused. Please review your balance.",
+                            action_url=f"/payments/groups/{group.id}",
+                        )
+                    except Exception:
+                        pass
+                failed += 1
+                break # Break out of while loop and wait for next celery run
+
+            except Exception as e:
+                logger.error(f"Failed to process group automation {order.id}: {e}")
+                failed += 1
+                try:
+                    import random
+                    from datetime import timedelta
+                    random_delay = random.randint(15, 120)
+                    order.next_contribution_date = timezone.now() + timedelta(minutes=random_delay)
+                    order.save()
+                    logger.info(f"Rescheduled failed automation {order.id} to retry in {random_delay} minutes")
+                except Exception as reschedule_err:
+                    logger.error(f"Failed to reschedule automation {order.id}: {reschedule_err}")
+                break
 
     logger.info(f"Group automations processed: {processed}, failed: {failed}")
     return f"Processed: {processed}, Failed: {failed}"
@@ -669,24 +734,13 @@ def _update_next_run_date(order):
     now = timezone.now()
     
     if order.frequency == 'daily':
-        order.next_contribution_date = order.next_contribution_date + timedelta(days=1)
+        order.next_contribution_date += timedelta(days=1)
     elif order.frequency == 'weekly':
-        order.next_contribution_date = order.next_contribution_date + timedelta(weeks=1)
+        order.next_contribution_date += timedelta(weeks=1)
     elif order.frequency == 'fortnight':
-        order.next_contribution_date = order.next_contribution_date + timedelta(days=14)
+        order.next_contribution_date += timedelta(days=14)
     elif order.frequency == 'monthly':
-        order.next_contribution_date = order.next_contribution_date + relativedelta(months=1)
-    
-    # Catch up if it's still in the past
-    while order.next_contribution_date <= now:
-        if order.frequency == 'daily':
-            order.next_contribution_date += timedelta(days=1)
-        elif order.frequency == 'weekly':
-            order.next_contribution_date += timedelta(weeks=1)
-        elif order.frequency == 'fortnight':
-            order.next_contribution_date += timedelta(days=14)
-        elif order.frequency == 'monthly':
-            order.next_contribution_date += relativedelta(months=1)
+        order.next_contribution_date += relativedelta(months=1)
             
     order.save()
 

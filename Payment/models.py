@@ -122,6 +122,7 @@ class TransactionToken(models.Model):
     payment_group = models.ForeignKey('PaymentGroups', on_delete=models.SET_NULL, null=True, blank=True, related_name='transactions')
     piggy_bank = models.ForeignKey('GroupTarget', on_delete=models.SET_NULL, null=True, blank=True, related_name='transactions')
     status = models.CharField(max_length=200, choices=TRANSACTION_STATUS, default='completed')
+    balance_after = models.DecimalField(decimal_places=2, max_digits=12, null=True, blank=True)
     reversed_at = models.DateTimeField(null=True, blank=True)
     reversal_reason = models.TextField(blank=True, null=True)
     
@@ -158,6 +159,7 @@ class TransactionHistory(models.Model):
     transaction_category = models.CharField(max_length=200, default='transfer')
     payment_type = models.CharField(max_length=200, choices=PAY_TYPE, default='individual')
     status = models.CharField(max_length=200, choices=TRANSACTION_STATUS, default='pending')
+    balance_after = models.DecimalField(decimal_places=2, max_digits=12, null=True, blank=True)
     created_at = models.DateTimeField(default=timezone.now)
 
 class PaymentItem(models.Model):
@@ -487,6 +489,7 @@ class StandingOrder(models.Model):
     frequency = models.CharField(max_length=50, choices=FREQUENCY_CHOICES, default='monthly')
     next_contribution_date = models.DateTimeField()
     is_active = models.BooleanField(default=True)
+    consecutive_failures = models.IntegerField(default=0)
     created_at = models.DateTimeField(default=timezone.now)
 
     # Automation type & target
@@ -776,6 +779,49 @@ class IndividualShare(models.Model):
     current_amount = models.DecimalField(decimal_places=2, max_digits=12, default=0.00)
     quantity = models.IntegerField(default=1) # Target quantity of item
     achieved = models.BooleanField(default=False)
+
+class PiggyBankActionRequest(models.Model):
+    STATUS_CHOICES = (
+        ('pending', 'Pending Approval'),
+        ('approved', 'Approved'),
+        ('rejected', 'Rejected'),
+        ('executed', 'Executed'),
+        ('failed', 'Failed'),
+    )
+    
+    ACTION_CHOICES = (
+        ('extend_maturity', 'Extend Maturity Date'),
+        ('withdraw', 'Withdraw Amount'),
+        ('dissolve', 'Dissolve Piggy Bank'),
+    )
+    
+    import uuid
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    piggy_bank = models.ForeignKey(GroupTarget, on_delete=models.CASCADE, related_name='action_requests')
+    requested_by = models.ForeignKey(PaymentProfile, on_delete=models.CASCADE)
+    action_type = models.CharField(max_length=20, choices=ACTION_CHOICES)
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending')
+    
+    # Action specific data
+    amount = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True)
+    new_maturity_date = models.DateTimeField(null=True, blank=True)
+    reason = models.TextField(blank=True)
+    
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+class PiggyBankActionRequestVote(models.Model):
+    VOTE_CHOICES = (
+        ('approve', 'Approve'),
+        ('reject', 'Reject'),
+    )
+    request = models.ForeignKey(PiggyBankActionRequest, on_delete=models.CASCADE, related_name='votes')
+    voter = models.ForeignKey(PaymentProfile, on_delete=models.CASCADE)
+    vote = models.CharField(max_length=10, choices=VOTE_CHOICES)
+    created_at = models.DateTimeField(auto_now_add=True)
+    
+    class Meta:
+        unique_together = ('request', 'voter')
 
 class PiggyBankConversionRequest(models.Model):
     STATUS_CHOICES = (
@@ -2558,6 +2604,8 @@ class BillStandingOrder(models.Model):
     amount = models.DecimalField(max_digits=12, decimal_places=2)
     frequency = models.CharField(max_length=20, choices=STANDING_ORDER_FREQ, default='monthly')
     start_date = models.DateField()
+    next_run_date = models.DateField(null=True, blank=True)
+    consecutive_failures = models.IntegerField(default=0)
     end_date = models.DateField(null=True, blank=True)
     status = models.CharField(max_length=20, choices=STANDING_ORDER_STATUS, default='active')
     created_at = models.DateTimeField(default=timezone.now)

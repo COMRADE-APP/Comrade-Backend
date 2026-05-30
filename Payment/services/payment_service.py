@@ -343,17 +343,17 @@ class FlutterwaveProvider:
         try:
             r = requests.get(f'{base_url}/transactions/{transaction_id}/verify', headers=headers, timeout=30)
             data = r.json()
-            if data.get('status') == 'success' and data['data']['status'] == 'successful':
+            if data.get('status') == 'success' and data.get('data') and data['data'].get('status') == 'successful':
                 return {
                     'status': 'completed',
-                    'amount': data['data']['amount'],
-                    'currency': data['data']['currency'],
-                    'tx_ref': data['data']['tx_ref'],
-                    'flw_ref': data['data']['flw_ref'],
-                    'payment_type': data['data']['payment_type'],
+                    'amount': data['data'].get('amount', 0),
+                    'currency': data['data'].get('currency', 'KES'),
+                    'tx_ref': data['data'].get('tx_ref', ''),
+                    'flw_ref': data['data'].get('flw_ref', ''),
+                    'payment_type': data['data'].get('payment_type', ''),
                 }
             return {
-                'status': data['data'].get('status', 'failed'),
+                'status': data.get('data', {}).get('status', 'failed') if isinstance(data.get('data'), dict) else 'failed',
                 'message': data.get('message', 'Verification failed'),
             }
         except requests.RequestException as e:
@@ -815,7 +815,7 @@ class PaymentRouter:
             destination: Override destination (paypal/mpesa/equity/stripe/flutterwave/pesapal)
             details: Dict with destination-specific details (email, phone, account_number)
         """
-        dest = destination or getattr(settings, 'PAYMENT_DESTINATION', 'stripe')
+        dest = destination or getattr(settings, 'PAYMENT_DESTINATION', 'flutterwave')
         details = details or {}
         
         if dest == 'paypal':
@@ -919,31 +919,19 @@ class PaymentService:
     @staticmethod
     def initiate_deposit(user, amount, method, details):
         """Initiate a deposit using the specified payment method."""
-        user_label = user.user.email if hasattr(user, 'user') else 'user'
-        if method == 'mpesa':
-            phone = details.get('phone_number')
-            if not phone:
-                return {"error": "Phone number is required for M-Pesa deposits"}
-            return MpesaProvider.stk_push(
-                phone, amount, "Qomrade Deposit", f"Deposit for {user_label}"
-            )
-        elif method in ('stripe', 'card'):
-            payment_method_id = details.get('payment_method_id')
-            return StripeProvider.create_payment_intent(
-                amount, 
-                description=f"Deposit for {user_label}",
-                payment_method_id=payment_method_id
-            )
-        elif method == 'paypal':
-            return PayPalProvider.create_order(amount, description=f"Deposit for {user_label}")
-        elif method == 'flutterwave':
-            email = details.get('email', user_label)
-            phone = details.get('phone_number', '')
-            return FlutterwaveProvider.initiate_payment(
-                amount, currency=details.get('currency', 'KES'),
-                email=email, phone=phone,
-                description=f"Deposit for {user_label}"
-            )
+        user_label = 'user'
+        try:
+            if hasattr(user, 'user'):
+                if hasattr(user.user, 'user') and hasattr(user.user.user, 'email'):
+                    user_label = user.user.user.email # PaymentProfile -> Profile -> User -> email
+                elif hasattr(user.user, 'email'):
+                    user_label = user.user.email # Direct User
+        except Exception:
+            pass
+            
+        if method in ('flutterwave', 'card', 'stripe', 'mpesa'):
+            # Return inline ready status. Frontend handles standard inline checkout modal.
+            return {"status": "ready_for_inline", "provider": "flutterwave"}
         elif method == 'pesapal':
             email = details.get('email', user_label)
             phone = details.get('phone_number', '')
@@ -985,30 +973,11 @@ class PaymentService:
     @staticmethod
     def process_payment(amount, currency, method, details):
         """Process a payment using the specified method."""
-        if method == 'stripe':
-            return StripeProvider.create_payment_intent(
-                amount, currency, 
-                details.get('description', 'Purchase'),
-                details.get('payment_method_id'),
-                metadata=details.get('metadata')
-            )
-        elif method == 'mpesa':
-            phone = details.get('phone_number')
-            if not phone:
-                return {"error": "Phone number is required for M-Pesa payments"}
-            return MpesaProvider.stk_push(
-                phone, amount, "Qomrade", details.get('description', 'Payment')[:13]
-            )
+        if method in ('flutterwave', 'stripe', 'card', 'mpesa'):
+            return {"status": "ready_for_inline", "provider": "flutterwave"}
         elif method == 'paypal':
             return PayPalProvider.create_order(
                 amount, currency, details.get('description', 'Purchase')
-            )
-        elif method == 'flutterwave':
-            return FlutterwaveProvider.initiate_payment(
-                amount, currency=currency,
-                email=details.get('email', ''),
-                phone=details.get('phone_number', ''),
-                description=details.get('description', 'Purchase'),
             )
         elif method == 'pesapal':
             return PesapalProvider.submit_order(

@@ -399,6 +399,36 @@ class GroupInvitationSerializer(serializers.ModelSerializer):
     def get_invited_by_name(self, obj):
         return f"{obj.invited_by.user.user.first_name} {obj.invited_by.user.user.last_name}"
 
+class PiggyBankActionRequestSerializer(serializers.ModelSerializer):
+    requested_by_name = serializers.SerializerMethodField()
+    piggy_bank_name = serializers.CharField(source='piggy_bank.name', read_only=True)
+    approvals_count = serializers.SerializerMethodField()
+    rejections_count = serializers.SerializerMethodField()
+    total_members = serializers.SerializerMethodField()
+    
+    class Meta:
+        from Payment.models import PiggyBankActionRequest
+        model = PiggyBankActionRequest
+        fields = '__all__'
+        read_only_fields = ['created_at', 'updated_at', 'status']
+        
+    def get_requested_by_name(self, obj):
+        try:
+            return f"{obj.requested_by.user.user.first_name} {obj.requested_by.user.user.last_name}"
+        except Exception:
+            return 'Unknown'
+        
+    def get_approvals_count(self, obj):
+        return obj.votes.filter(vote='approve').count()
+        
+    def get_rejections_count(self, obj):
+        return obj.votes.filter(vote='reject').count()
+        
+    def get_total_members(self, obj):
+        if obj.piggy_bank.payment_group:
+            return obj.piggy_bank.payment_group.members.count()
+        return 1
+
 # ── Group Phase / Post serializers ─────────────────────────────
 class GroupPhaseSerializer(serializers.ModelSerializer):
     progress_percentage = serializers.SerializerMethodField()

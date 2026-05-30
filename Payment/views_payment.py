@@ -704,15 +704,25 @@ class FlutterwaveWebhookView(APIView):
             if verification.get('status') == 'completed':
                 try:
                     transaction = TransactionToken.objects.get(transaction_code=tx_ref)
+                    if transaction.status == 'completed':
+                        return Response({'status': 'already verified'})
+                    
+                    if transaction.transaction_type == 'deposit':
+                        from decimal import Decimal
+                        pp = transaction.payment_profile
+                        pp.comrade_balance += Decimal(str(transaction.amount))
+                        pp.save()
+                    
+                    transaction.balance_after = transaction.payment_profile.comrade_balance
+                    transaction.status = 'completed'
+                    transaction.save()
+
                     TransactionHistory.objects.create(
                         payment_profile=transaction.payment_profile,
                         transaction_token=transaction,
                         status='completed',
+                        balance_after=transaction.payment_profile.comrade_balance
                     )
-                    if transaction.transaction_type == 'deposit':
-                        pp = transaction.payment_profile
-                        pp.comrade_balance += float(transaction.amount)
-                        pp.save()
                     logger.info(f'Flutterwave payment completed: {tx_ref} (FLW: {flw_ref})')
                 except TransactionToken.DoesNotExist:
                     logger.debug(f'Flutterwave webhook: no token for tx_ref {tx_ref}')
@@ -720,6 +730,53 @@ class FlutterwaveWebhookView(APIView):
         return Response({'status': 'success'})
 
 
+class VerifyFlutterwaveView(APIView):
+    """Synchronously verify a Flutterwave inline modal payment"""
+    permission_classes = [IsAuthenticated]
+    
+    def post(self, request):
+        transaction_id = request.data.get('transaction_id')
+        tx_ref = request.data.get('tx_ref')
+        
+        if not transaction_id:
+            return Response({'error': 'transaction_id is required'}, status=status.HTTP_400_BAD_REQUEST)
+            
+        # Verify the transaction with Flutterwave
+        from Payment.services.payment_service import FlutterwaveProvider
+        verification = FlutterwaveProvider.verify_transaction(transaction_id)
+        
+        if verification.get('status') == 'completed':
+            try:
+                # Often the tx_ref holds the local transaction code
+                transaction_code = verification.get('tx_ref') or tx_ref
+                transaction = TransactionToken.objects.get(transaction_code=transaction_code)
+                
+                # Check for idempotency
+                if transaction.status == 'completed':
+                    return Response({'message': 'Transaction already verified'})
+                    
+                if transaction.transaction_type == 'deposit':
+                    from decimal import Decimal
+                    pp = transaction.payment_profile
+                    pp.comrade_balance += Decimal(str(transaction.amount))
+                    pp.save()
+                    
+                transaction.balance_after = transaction.payment_profile.comrade_balance
+                transaction.status = 'completed'
+                transaction.save()
+
+                TransactionHistory.objects.create(
+                    payment_profile=transaction.payment_profile,
+                    transaction_token=transaction,
+                    status='completed',
+                    balance_after=transaction.payment_profile.comrade_balance
+                )
+                
+                return Response({'message': 'Payment verified successfully'})
+            except TransactionToken.DoesNotExist:
+                return Response({'error': 'Local transaction token not found'}, status=status.HTTP_404_NOT_FOUND)
+        else:
+            return Response({'error': 'Flutterwave verification failed or transaction not successful'}, status=status.HTTP_400_BAD_REQUEST)
 class PesapalIPNView(APIView):
     """Handle Pesapal Instant Payment Notifications (IPN).
     

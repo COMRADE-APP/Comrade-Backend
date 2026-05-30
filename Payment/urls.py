@@ -6,7 +6,7 @@ from Payment.views_payment import (
     PaymentMethodViewSet, ProcessPaymentView, RefundPaymentView,
     StripeWebhookView, PayPalWebhookView, MpesaCallbackView,
     FlutterwaveWebhookView, PesapalIPNView, GatewayConfigView,
-    DetectPaymentMethodView
+    DetectPaymentMethodView, VerifyFlutterwaveView
 )
 from Payment.views_transactions import (
     DepositView, WithdrawView, TransferView, VerifyAccountView
@@ -109,11 +109,12 @@ urlpatterns = [
     path('transfer/', TransferView.as_view(), name='transfer'),
     path('verify-account/', VerifyAccountView.as_view(), name='verify-account'),
     
-    # Webhooks
+    # Webhooks & Verifications
     path('stripe/webhook/', StripeWebhookView.as_view(), name='stripe-webhook'),
     path('paypal/webhook/', PayPalWebhookView.as_view(), name='paypal-webhook'),
     path('mpesa/callback/', MpesaCallbackView.as_view(), name='mpesa-callback'),
     path('flutterwave/webhook/', FlutterwaveWebhookView.as_view(), name='flutterwave-webhook'),
+    path('flutterwave/verify/', VerifyFlutterwaveView.as_view(), name='flutterwave-verify'),
     path('pesapal/ipn/', PesapalIPNView.as_view(), name='pesapal-ipn'),
     
     # Dynamic Pricing (RL Model)
