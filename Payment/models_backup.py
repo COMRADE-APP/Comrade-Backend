@@ -160,7 +160,6 @@ class TransactionHistory(models.Model):
     payment_type = models.CharField(max_length=200, choices=PAY_TYPE, default='individual')
     status = models.CharField(max_length=200, choices=TRANSACTION_STATUS, default='pending')
     balance_after = models.DecimalField(decimal_places=2, max_digits=12, null=True, blank=True)
-    group_member_balance_after = models.DecimalField(decimal_places=2, max_digits=12, null=True, blank=True, help_text="Member's specific balance or contribution total within the group at time of transaction")
     created_at = models.DateTimeField(default=timezone.now)
 
 class PaymentItem(models.Model):
@@ -490,7 +489,6 @@ class StandingOrder(models.Model):
     frequency = models.CharField(max_length=50, choices=FREQUENCY_CHOICES, default='monthly')
     next_contribution_date = models.DateTimeField()
     is_active = models.BooleanField(default=True)
-    consecutive_failures = models.IntegerField(default=0)
     created_at = models.DateTimeField(default=timezone.now)
 
     # Automation type & target
@@ -734,10 +732,6 @@ class GroupTarget(models.Model):
     
     MAX_INDIVIDUAL_PIGGY_BANKS = 3
     MAX_GROUP_PIGGY_MEMBERSHIPS = 3
-
-    leave_requires_vote = models.BooleanField(default=False)
-    leave_inconvenience_fee_percentage = models.DecimalField(max_digits=5, decimal_places=2, default=0.00)
-    leave_vote_waives_penalty = models.BooleanField(default=True)
     
     class Meta:
         ordering = ['-created_at']
@@ -776,27 +770,623 @@ class GroupTarget(models.Model):
             return penalty
         return 0
 
-
-class PiggyBankMember(models.Model):
-    piggy_bank = models.ForeignKey('GroupTarget', on_delete=models.CASCADE, related_name='piggy_members')
+# Individual Savings within a Group Target (for non-sharable)
+class IndividualShare(models.Model):
+    target = models.ForeignKey(GroupTarget, on_delete=models.CASCADE, related_name='shares')
+    member = models.ForeignKey(PaymentGroupMember, on_delete=models.CASCADE)
+    target_amount = models.DecimalField(decimal_places=2, max_digits=12)
+    current_amount = models.DecimalField(decimal_places=2, max_digits=12, default=0.00)
+    quantity = models.IntegerField(default=1) # Target quantity of item
+    reversed_at = models.DateTimeField(null=True, blank=True)
+    reversal_reason = models.TextField(blank=True, null=True)
+    
+    class Meta:
+        indexes = [
+            models.Index(fields=['payment_profile']),
+            models.Index(fields=['-created_at']),
+            models.Index(fields=['transaction_type']),
+        ]
+class PaymentAuthorization(models.Model):
+    payment_profile = models.ForeignKey(PaymentProfile, on_delete=models.CASCADE)
+    authorization_code = models.CharField(max_length=10000, unique=True)
+    created_at = models.DateTimeField(default=timezone.now)
+class PaymentVerification(models.Model):
+    payment_profile = models.ForeignKey(PaymentProfile, on_delete=models.CASCADE)
+    verification_code = models.CharField(max_length=10000, unique=True)
+    created_at = models.DateTimeField(default=timezone.now)
+class TransactionTracker(models.Model):
+    transaction_token = models.ForeignKey(TransactionToken, on_delete=models.CASCADE)
+    authorization_token = models.ForeignKey(PaymentAuthorization, on_delete=models.CASCADE, null=True, blank=True)
+    verification_token = models.ForeignKey(PaymentVerification, on_delete=models.CASCADE, null=True, blank=True)
+    status = models.CharField(max_length=200, choices=TRANSACTION_STATUS, default='pending')
+    updated_at = models.DateTimeField(default=timezone.now)
+class TransactionHistory(models.Model):
+    payment_profile = models.ForeignKey(PaymentProfile, on_delete=models.CASCADE)
+    transaction_token = models.ForeignKey(TransactionToken, on_delete=models.CASCADE)
+    authorization_token = models.ForeignKey(PaymentAuthorization, on_delete=models.CASCADE, blank=True, null=True)
+    verification_token = models.ForeignKey(PaymentVerification, on_delete=models.CASCADE, blank=True, null=True)
+    amount = models.DecimalField(decimal_places=2, max_digits=12, default=Decimal('0.00'))
+    transaction_category = models.CharField(max_length=200, default='transfer')
+    payment_type = models.CharField(max_length=200, choices=PAY_TYPE, default='individual')
+    status = models.CharField(max_length=200, choices=TRANSACTION_STATUS, default='pending')
+    balance_after = models.DecimalField(decimal_places=2, max_digits=12, null=True, blank=True)
+    created_at = models.DateTimeField(default=timezone.now)
+class PaymentItem(models.Model):
+    name = models.CharField(max_length=2000)
+    cost = models.DecimalField(decimal_places=2, max_digits=12)
+    quantity = models.FloatField()
+    total_cost = models.DecimalField(decimal_places=2, max_digits=12)
+    description = models.TextField(blank=True)
+    created_at = models.DateTimeField(default=timezone.now)
+    
+    def save(self, *args, **kwargs):
+        self.total_cost = self.cost * self.quantity
+        super().save(*args, **kwargs)
+class PaymentLog(models.Model):
+    payment_profile = models.ForeignKey(PaymentProfile, on_delete=models.CASCADE, related_name='purchase_profile')
+    amount = models.DecimalField(decimal_places=2, max_digits=12)
+    purchase_item = models.ManyToManyField(PaymentItem, blank=True)
+    payment_type = models.CharField(max_length=2000, choices=PAY_TYPE, default='individual')
+    payment_date = models.DateTimeField(default=timezone.now)
+    recipient = models.ForeignKey(PaymentProfile, on_delete=models.CASCADE, related_name='sale_profile')
+    notes = models.TextField(blank=True)
+# Payment Group - Group savings/purchases
+class PaymentGroups(models.Model):
+    import uuid
+    
+    CONTRIBUTION_TYPE_CHOICES = (
+        ('fixed', 'Fixed Amount'),
+        ('percentage', 'Percentage'),
+        ('flexible', 'Flexible'),
+    )
+    
+    FREQUENCY_CHOICES = (
+        ('daily', 'Daily'),
+        ('weekly', 'Weekly'),
+        ('biweekly', 'Bi-Weekly'),
+        ('monthly', 'Monthly'),
+        ('quarterly', 'Quarterly'),
+        ('one_time', 'One Time'),
+    )
+    
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    name = models.CharField(max_length=5000)
+    cover_photo = models.ImageField(upload_to='group_covers/', blank=True, null=True)
+    description = models.TextField(blank=True)
+    creator = models.ForeignKey(PaymentProfile, on_delete=models.CASCADE, related_name='created_groups', blank=True, null=True)
+    max_capacity = models.IntegerField(default=3) # Default to Free tier limit
+    tier = models.CharField(max_length=200, choices=TIER_OPT, default='free')
+    item_grouping = models.ManyToManyField(PaymentItem, blank=True)
+    
+    # Room linkage – auto-create a Room alongside this group
+    linked_room = models.ForeignKey(
+        'Rooms.Room', on_delete=models.SET_NULL,
+        null=True, blank=True, related_name='linked_payment_group'
+    )
+    auto_create_room = models.BooleanField(default=True)
+    
+    # Group settings
+    target_amount = models.DecimalField(decimal_places=2, max_digits=12, null=True, blank=True)
+    current_amount = models.DecimalField(decimal_places=2, max_digits=12, default=0.00)
+    expiry_date = models.DateTimeField(null=True, blank=True)
+    deadline = models.DateTimeField(null=True, blank=True)  # Alternative deadline field
+    is_active = models.BooleanField(default=True)
+    is_public = models.BooleanField(default=True)  # Visibility setting
+    auto_purchase = models.BooleanField(default=False)
+    requires_approval = models.BooleanField(default=True)
+    allow_anonymous = models.BooleanField(default=False)  # Allow anonymous membership
+    
+    # Application & Entry Fee Requirements
+    entry_fee_required = models.BooleanField(default=False)
+    entry_fee_amount = models.DecimalField(decimal_places=2, max_digits=12, default=0.00)
+    custom_application_questions = models.JSONField(default=list, blank=True, help_text='List of questions for applicants')
+    
+    # Contribution settings
+    contribution_type = models.CharField(max_length=20, choices=CONTRIBUTION_TYPE_CHOICES, default='flexible')
+    contribution_amount = models.DecimalField(decimal_places=2, max_digits=12, default=0.00)
+    frequency = models.CharField(max_length=20, choices=FREQUENCY_CHOICES, default='monthly')
+    
+    # Group Type
+    GROUP_TYPE_CHOICES = (
+        ('standard', 'Standard Group'),
+        ('piggy_bank', 'Piggy Bank Group'),
+        ('kitty', 'Entity Kitty'),
+    )
+    group_type = models.CharField(max_length=20, choices=GROUP_TYPE_CHOICES, default='standard')
+    
+    # Generic relation to any entity (Business, CapitalVenture, Shop, Org, etc.)
+    entity_content_type = models.ForeignKey(
+        'contenttypes.ContentType', on_delete=models.SET_NULL,
+        null=True, blank=True, related_name='kitty_groups'
+    )
+    entity_object_id = models.CharField(max_length=255, blank=True, null=True)
+    entity = GenericForeignKey('entity_content_type', 'entity_object_id')
+    
+    # Group lifecycle / maturation
+    is_matured = models.BooleanField(default=False)  # True when deadline has passed
+    termination_requested_by = models.ManyToManyField(
+        PaymentProfile, blank=True, related_name='termination_requests'
+    )  # Members who agreed to terminate
+    is_terminated = models.BooleanField(default=False)
+    
+    # --- New: Pitch & Proposition ---
+    investment_pitch = models.TextField(blank=True, default='', help_text='Investment or donation pitch description')
+    loan_proposition = models.TextField(blank=True, default='', help_text='Loan offering/proposition details')
+    parent_group = models.ForeignKey(
+        'self', on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='sub_groups', help_text='Parent group (expansion of)'
+    )
+    joining_minimum = models.DecimalField(
+        decimal_places=2, max_digits=12, default=0.00,
+        help_text='Minimum wallet balance required to join'
+    )
+    accent_color = models.CharField(
+        max_length=7, default='#6366f1', blank=True,
+        help_text='Hex accent colour for UI theming, e.g. #6366f1'
+    )
+    # Advanced Features
+    is_kitty = models.BooleanField(default=False, help_text='Is this a group kitty?')
+    immature_exit_penalty_rate = models.DecimalField(max_digits=5, decimal_places=2, default=2.00, help_text='Penalty % for early exit')
+    round_amount = models.DecimalField(max_digits=12, decimal_places=2, default=0.00, help_text='Default amount for rounds')
+    round_assignment_method = models.CharField(max_length=20, default='random', help_text='Default assignment method')
+    pitch_visibility = models.CharField(max_length=20, default='internal', help_text='Visibility of the pitch')
+    approval_threshold = models.IntegerField(default=51, help_text='Percentage of votes required for approval')
+    hierarchy_mode = models.CharField(max_length=20, default='flat', help_text='Hierarchy mode: flat, tiered, or strict')
+    transaction_trigger_role = models.CharField(max_length=50, default='admin', help_text='Role required to trigger group transactions')
+    allow_partial_withdrawal = models.BooleanField(default=True)
+    is_lifetime = models.BooleanField(default=False, help_text='Does the group have no expiry?')
+    is_round_contribution_enabled = models.BooleanField(default=False)
+    round_frequency = models.CharField(max_length=20, default='monthly')
+    round_persistence_mode = models.CharField(max_length=20, default='none', help_text='none, carry_over, or auto_restart')
+    round_persistence_count = models.IntegerField(default=0)
+    
+    rules_text = models.TextField(blank=True, default='', help_text='Official group rules and regulations')
+    created_at = models.DateTimeField(default=timezone.now)
+    updated_at = models.DateTimeField(auto_now=True)
+    
+    class Meta:
+        indexes = [
+            models.Index(fields=['creator']),
+            models.Index(fields=['is_active']),
+            models.Index(fields=['-created_at']),
+        ]
+        verbose_name_plural = 'Payment Groups'
+    
+    def __str__(self):
+        return self.name
+class GroupPhase(models.Model):
+    """Tracks named phases (e.g. Seed Round, Growth) with targets and proportions."""
+    import uuid
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    group = models.ForeignKey(PaymentGroups, on_delete=models.CASCADE, related_name='phases')
+    name = models.CharField(max_length=255)
+    description = models.TextField(blank=True)
+    target_amount = models.DecimalField(decimal_places=2, max_digits=12, default=0.00)
+    proportion = models.DecimalField(decimal_places=2, max_digits=5, default=0.00, help_text='% of total target')
+    current_amount = models.DecimalField(decimal_places=2, max_digits=12, default=0.00)
+    start_date = models.DateField(null=True, blank=True)
+    end_date = models.DateField(null=True, blank=True)
+    order = models.PositiveIntegerField(default=0)
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(default=timezone.now)
+    class Meta:
+        ordering = ['order', 'created_at']
+        indexes = [models.Index(fields=['group', 'order'])]
+    def __str__(self):
+        return f"{self.group.name} — {self.name}"
+class GroupPost(models.Model):
+    """Discord-style post in a group's public discourse feed."""
+    import uuid
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    group = models.ForeignKey(PaymentGroups, on_delete=models.CASCADE, related_name='posts')
+    author = models.ForeignKey(PaymentProfile, on_delete=models.CASCADE, related_name='group_posts')
+    content = models.TextField()
+    image = models.ImageField(upload_to='group_posts/', blank=True, null=True)
+    is_pinned = models.BooleanField(default=False)
+    reactions = models.JSONField(default=dict, blank=True, help_text='{"👍": [user_id,...], ...}')
+    upvotes = models.ManyToManyField(PaymentProfile, related_name='upvoted_group_posts', blank=True)
+    can_share = models.BooleanField(default=True)
+    created_at = models.DateTimeField(default=timezone.now)
+    updated_at = models.DateTimeField(auto_now=True)
+    class Meta:
+        ordering = ['-is_pinned', '-created_at']
+        indexes = [
+            models.Index(fields=['group', '-created_at']),
+        ]
+    def __str__(self):
+        return f"Post by {self.author} in {self.group.name}"
+class GroupPostReply(models.Model):
+    """Threaded reply on a GroupPost."""
+    import uuid
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    post = models.ForeignKey(GroupPost, on_delete=models.CASCADE, related_name='replies')
+    author = models.ForeignKey(PaymentProfile, on_delete=models.CASCADE, related_name='group_replies')
+    parent_reply = models.ForeignKey('self', on_delete=models.CASCADE, null=True, blank=True, related_name='child_replies')
+    content = models.TextField()
+    reactions = models.JSONField(default=dict, blank=True, help_text='{"👍": [user_id,...], ...}')
+    upvotes = models.ManyToManyField(PaymentProfile, related_name='upvoted_group_replies', blank=True)
+    created_at = models.DateTimeField(default=timezone.now)
+    class Meta:
+        ordering = ['created_at']
+    def __str__(self):
+        return f"Reply by {self.author} on {self.post_id}"
+class GroupCheckoutRequest(models.Model):
+    """Tracks a proposed group checkout that requires member approval."""
+    group = models.ForeignKey(PaymentGroups, on_delete=models.CASCADE, related_name='checkout_requests')
+    initiator = models.ForeignKey(PaymentProfile, on_delete=models.SET_NULL, null=True, related_name='initiated_checkouts')
+    amount = models.DecimalField(max_digits=12, decimal_places=2)
+    items_payload = models.JSONField(default=list, help_text="Cart items and checkout payload")
+    
+    STATUS_CHOICES = [
+        ('pending', 'Pending Approval'),
+        ('approved', 'Approved & Processed'),
+        ('rejected', 'Rejected'),
+        ('failed', 'Processing Failed')
+    ]
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending')
+    
+    approvals = models.ManyToManyField(PaymentProfile, related_name='approved_checkouts', blank=True)
+    rejections = models.ManyToManyField(PaymentProfile, related_name='rejected_checkouts', blank=True)
+    
+    created_at = models.DateTimeField(default=timezone.now)
+    updated_at = models.DateTimeField(auto_now=True)
+    def __str__(self):
+        return f"Checkout Request for {self.group.name} - KES {self.amount}"
+    def get_approval_percentage(self):
+        total_members = self.group.members.count()
+        if total_members == 0:
+            return 0
+        return (self.approvals.count() / total_members) * 100
+# Payment Group Members
+class PaymentGroupMember(models.Model):
+    payment_group = models.ForeignKey(PaymentGroups, on_delete=models.CASCADE, related_name='members')
     payment_profile = models.ForeignKey(PaymentProfile, on_delete=models.CASCADE)
     is_admin = models.BooleanField(default=False)
-    joined_at = models.DateTimeField(default=timezone.now)
+    is_anonymous = models.BooleanField(default=False)  # Anonymous membership
+    anonymous_alias = models.CharField(max_length=100, blank=True)  # e.g. "Member-A3F2"
+    contribution_percentage = models.DecimalField(decimal_places=2, max_digits=5, default=0.00)
     total_contributed = models.DecimalField(decimal_places=2, max_digits=12, default=0.00)
-    total_withdrawn = models.DecimalField(decimal_places=2, max_digits=12, default=0.00)
+    joined_at = models.DateTimeField(default=timezone.now)
     is_active = models.BooleanField(default=True)
-
+    
     class Meta:
-        unique_together = ['piggy_bank', 'payment_profile']
+        unique_together = ['payment_group', 'payment_profile']
         indexes = [
-            models.Index(fields=['piggy_bank']),
+            models.Index(fields=['payment_group']),
             models.Index(fields=['payment_profile']),
         ]
-
+    
+    def save(self, *args, **kwargs):
+        if self.is_anonymous and not self.anonymous_alias:
+            import secrets
+            self.anonymous_alias = f"Member-{secrets.token_hex(2).upper()}"
+        super().save(*args, **kwargs)
+# Contribution tracking
+class Contribution(models.Model):
+    import uuid
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    payment_group = models.ForeignKey(PaymentGroups, on_delete=models.CASCADE, related_name='contributions')
+    target = models.ForeignKey('GroupTarget', on_delete=models.CASCADE, null=True, blank=True, related_name='contributions')
+    member = models.ForeignKey(PaymentGroupMember, on_delete=models.CASCADE)
+    amount = models.DecimalField(decimal_places=2, max_digits=12)
+    transaction = models.ForeignKey(TransactionToken, on_delete=models.SET_NULL, null=True, blank=True)
+    on_behalf_of = models.ForeignKey(PaymentGroupMember, on_delete=models.SET_NULL, null=True, blank=True, related_name='group_contributions_on_behalf')
+    contributed_at = models.DateTimeField(default=timezone.now)
+    notes = models.TextField(blank=True)
+    
+    class Meta:
+        indexes = [
+            models.Index(fields=['payment_group']),
+            models.Index(fields=['-contributed_at']),
+        ]
+# Standing Orders for recurring contributions / automations
+class StandingOrder(models.Model):
+    AUTOMATION_TYPE_CHOICES = (
+        ('contribute', 'Contribute'),
+        ('save', 'Save'),
+        ('purchase', 'Purchase'),
+        ('withdraw', 'Withdraw'),
+        ('loan_repayment', 'Loan Repayment'),
+        ('insurance', 'Insurance'),
+        ('bills', 'Bills & Airtime'),
+        ('investment', 'Investment'),
+        ('donation', 'Donation'),
+    )
+    FREQUENCY_CHOICES = (
+        ('daily', 'Daily'),
+        ('weekly', 'Weekly'),
+        ('fortnight', 'Fortnight (14 days)'),
+        ('biweekly', 'Bi-Weekly'),
+        ('monthly', 'Monthly'),
+    )
+    WITHDRAWAL_MODE_CHOICES = (
+        ('all', 'All Members at Once'),
+        ('sequential', 'Sequential / Rotating'),
+        ('selected', 'Selected Members'),
+    )
+    AUTOMATION_STATUS_CHOICES = (
+        ('pending_vote', 'Pending Vote'),
+        ('approved', 'Approved'),
+        ('active', 'Active'),
+        ('paused', 'Paused / Deactivated'),
+        ('rejected', 'Rejected'),
+    )
+    member = models.ForeignKey(PaymentGroupMember, on_delete=models.CASCADE, related_name='standing_orders')
+    amount = models.DecimalField(decimal_places=2, max_digits=12)
+    frequency = models.CharField(max_length=50, choices=FREQUENCY_CHOICES, default='monthly')
+    next_contribution_date = models.DateTimeField()
+    is_active = models.BooleanField(default=True)
+    consecutive_failures = models.IntegerField(default=0)
+    created_at = models.DateTimeField(default=timezone.now)
+    # Automation type & target
+    automation_type = models.CharField(max_length=30, choices=AUTOMATION_TYPE_CHOICES, default='contribute')
+    target_type = models.CharField(max_length=50, blank=True, null=True, help_text='kitty, piggy_bank, loan, product, insurance, donation, investment, group')
+    target_id = models.CharField(max_length=255, blank=True, null=True, help_text='ID of the target entity')
+    target_name = models.CharField(max_length=255, blank=True, null=True, help_text='Display name of the target')
+    # Withdrawal distribution
+    withdrawal_mode = models.CharField(max_length=20, choices=WITHDRAWAL_MODE_CHOICES, default='all', blank=True)
+    withdrawal_recipients = models.JSONField(default=list, blank=True, help_text='Member IDs receiving withdrawal')
+    withdrawal_sequence = models.JSONField(default=list, blank=True, help_text='Ordered member IDs for sequential mode')
+    withdrawal_current_index = models.IntegerField(default=0, help_text='Current position in the sequential cycle')
+    # Voting & approval (uses group hierarchy_mode for threshold)
+    status = models.CharField(max_length=20, choices=AUTOMATION_STATUS_CHOICES, default='pending_vote')
+    approval_votes = models.JSONField(default=list, blank=True, help_text='List of member IDs who approved')
+    rejection_votes = models.JSONField(default=list, blank=True, help_text='List of member IDs who rejected')
+    # Scheduling
+    start_date = models.DateField(null=True, blank=True, help_text='Scheduled start date (after approval)')
+    execution_day = models.IntegerField(default=1, help_text='Day of month (1-28) for monthly')
+    execution_day_of_week = models.IntegerField(null=True, blank=True, help_text='Day of week: 0=Mon .. 6=Sun (weekly/fortnight)')
+    execution_time_start = models.TimeField(null=True, blank=True, help_text='Start of execution window')
+    execution_time_end = models.TimeField(null=True, blank=True, help_text='End of execution window (or same as start for exact)')
+    class Meta:
+        indexes = [
+            models.Index(fields=['next_contribution_date', 'is_active']),
+            models.Index(fields=['status']),
+            models.Index(fields=['automation_type']),
+        ]
+# Group Invitations
+class GroupInvitation(models.Model):
+    import uuid
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    payment_group = models.ForeignKey(PaymentGroups, on_delete=models.CASCADE, related_name='invitations')
+    invited_profile = models.ForeignKey(PaymentProfile, on_delete=models.CASCADE, null=True, blank=True)
+    invited_email = models.EmailField(null=True, blank=True)
+    invited_by = models.ForeignKey(PaymentProfile, on_delete=models.CASCADE, related_name='sent_invitations')
+    status = models.CharField(max_length=20, choices=(
+        ('pending', 'Pending'),
+        ('accepted', 'Accepted'),
+        ('rejected', 'Rejected'),
+        ('expired', 'Expired'),
+    ), default='pending')
+    invitation_link = models.CharField(max_length=500, unique=True)
+    created_at = models.DateTimeField(default=timezone.now)
+    expires_at = models.DateTimeField()
+    
+    class Meta:
+        unique_together = ['payment_group', 'invited_profile']
+        indexes = [
+            models.Index(fields=['status']),
+            models.Index(fields=['expires_at']),
+        ]
+# Shop Products / Services
+class Product(models.Model):
+    PRODUCT_TYPES = (
+        ('physical', 'Physical Product'),
+        ('digital', 'Digital Product'),
+        ('service', 'Service'),
+        ('subscription', 'Subscription'), # Resource, Specialization, etc.
+        ('recommendation', 'Recommendation'),
+    )
+    
+    name = models.CharField(max_length=255)
+    description = models.TextField()
+    price = models.DecimalField(decimal_places=2, max_digits=12)
+    product_type = models.CharField(max_length=50, choices=PRODUCT_TYPES, default='physical')
+    image_url = models.URLField(blank=True, null=True)
+    
+    # Inventory Tracking
+    stock_quantity = models.IntegerField(default=0)
+    sku = models.CharField(max_length=100, blank=True)
+    
+    # Logic flags
+    is_sharable = models.BooleanField(default=True) # Sharable = 1 product for all group members; Non-sharable = 1 per member
+    allow_group_purchase = models.BooleanField(default=True) # If False, product is strictly individual purchase only
+    requires_subscription = models.BooleanField(default=False)
+    duration_days = models.IntegerField(default=30) # For subscriptions
+    
+    created_at = models.DateTimeField(auto_now_add=True)
+    
     def __str__(self):
-        return f"{self.payment_profile.user.user.email} → {self.piggy_bank.name}"
-
-
+        return self.name
+# User Subscription to Products/Services
+class UserSubscription(models.Model):
+    user = models.ForeignKey(PaymentProfile, on_delete=models.CASCADE, related_name='subscriptions')
+    product = models.ForeignKey(Product, on_delete=models.CASCADE)
+    start_date = models.DateTimeField(auto_now_add=True)
+    end_date = models.DateTimeField()
+    is_active = models.BooleanField(default=True)
+    auto_renew = models.BooleanField(default=False)
+    
+    class Meta:
+        indexes = [
+            models.Index(fields=['user', 'is_active']),
+            models.Index(fields=['end_date']),
+        ]
+# Group Target/Goals (Piggy Bank)
+class GroupTarget(models.Model):
+    LOCK_OPTIONS = (
+        ('unlocked', 'Unlocked'),
+        ('locked', 'Locked'),  # Simple locked status
+        ('locked_time', 'Locked until Date'),
+        ('locked_goal', 'Locked until Goal'),
+    )
+    
+    STATUS_CHOICES = (
+        ('active', 'Active'),
+        ('pending', 'Pending'),
+        ('completed', 'Completed'),
+        ('cancelled', 'Cancelled'),
+    )
+    
+    SAVINGS_TYPE_CHOICES = (
+        ('normal', 'Normal Piggy Bank'),
+        ('locked', 'Locked Savings'),
+        ('fixed_deposit', 'Fixed Deposit'),
+    )
+    
+    CONTRIBUTION_MODE_CHOICES = (
+        ('equal', 'Equal Contributions'),
+        ('proportional', 'Proportional Contributions'),
+    )
+    WITHDRAWAL_MODE_CHOICES = (
+        ('free', 'Free Withdrawal'),
+        ('locked', 'Locked (No early withdrawal)'),
+        ('flexible', 'Flexible (Limited amount/time)'),
+    )
+    
+    # Owner for individual piggy banks (null if group piggy bank)
+    owner = models.ForeignKey(PaymentProfile, on_delete=models.CASCADE, null=True, blank=True, related_name='individual_piggy_banks')
+    # Group piggy bank - null for individual
+    payment_group = models.ForeignKey(PaymentGroups, on_delete=models.CASCADE, related_name='targets', null=True, blank=True)
+    target_item = models.ForeignKey(PaymentItem, on_delete=models.SET_NULL, null=True, blank=True)
+    target_product = models.ForeignKey(Product, on_delete=models.SET_NULL, null=True, blank=True) # Link to Shop Product
+    
+    name = models.CharField(max_length=255, default='Piggy Bank')
+    target_amount = models.DecimalField(decimal_places=2, max_digits=12)
+    current_amount = models.DecimalField(decimal_places=2, max_digits=12, default=0.00)
+    description = models.TextField(blank=True)
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='active')
+    
+    # Savings type — determines withdrawal rules and interest
+    savings_type = models.CharField(max_length=20, choices=SAVINGS_TYPE_CHOICES, default='normal')
+    
+    # Fixed deposit configuration
+    interest_rate = models.DecimalField(
+        decimal_places=2, max_digits=6, default=0.00,
+        help_text='Annual interest rate % (for fixed_deposit type)'
+    )
+    penalty_rate = models.DecimalField(
+        decimal_places=2, max_digits=6, default=2.00,
+        help_text='Early withdrawal penalty % (for fixed_deposit type)'
+    )
+    accrued_interest = models.DecimalField(
+        decimal_places=2, max_digits=12, default=0.00,
+        help_text='Total interest earned so far'
+    )
+    last_interest_date = models.DateTimeField(null=True, blank=True)
+    
+    # Contribution mode for group piggy banks
+    contribution_mode = models.CharField(
+        max_length=20, choices=CONTRIBUTION_MODE_CHOICES, default='equal',
+        help_text='How group members contribute (equal or proportional)'
+    )
+    
+    # Piggy Bank Logic
+    locking_status = models.CharField(max_length=20, choices=LOCK_OPTIONS, default='unlocked')
+    maturity_date = models.DateTimeField(null=True, blank=True)
+    is_sharable = models.BooleanField(default=True) # If false, funds are segregated per user
+    
+    # Visibility settings
+    VISIBILITY_CHOICES = (
+        ('public', 'Public - Visible to everyone'),
+        ('group', 'Group - Visible to group members only'),
+        ('private', 'Private - Visible to owner only'),
+    )
+    visibility = models.CharField(max_length=20, choices=VISIBILITY_CHOICES, default='group', help_text='Who can see this piggy bank')
+    
+    # Automation settings - what happens when piggy bank matures or is withdrawn
+    AUTOMATION_TRIGGER_CHOICES = (
+        ('none', 'No Automation'),
+        ('maturity', 'On Maturity Date'),
+        ('withdrawal', 'On Withdrawal'),
+        ('goal_achieved', 'When Goal is Achieved'),
+        ('manual', 'Manual Trigger Only'),
+    )
+    automation_trigger = models.CharField(max_length=20, choices=AUTOMATION_TRIGGER_CHOICES, default='manual')
+    
+    AUTOMATION_ACTION_CHOICES = (
+        ('none', 'Do Nothing'),
+        ('wallet', 'Transfer to My Wallet'),
+        ('group_fund', 'Add to Group Fund'),
+        ('product', 'Purchase a Product'),
+        ('service', 'Purchase a Service'),
+        ('investment', 'Invest in Opportunity'),
+        ('course', 'Buy Course/Masterclass'),
+        ('group_join', 'Join Group (Pay Fee)'),
+        ('donation', 'Make Donation'),
+        ('custom', 'Custom Automation'),
+    )
+    automation_action = models.CharField(max_length=20, choices=AUTOMATION_ACTION_CHOICES, default='wallet')
+    
+    # Automation targets - for product/service/investment/course/group
+    automation_target_type = models.CharField(max_length=50, blank=True, null=True, help_text='Type of target (product, service, investment, course, group)')
+    automation_target_id = models.CharField(max_length=100, blank=True, null=True, help_text='ID of the target item')
+    automation_target_name = models.CharField(max_length=255, blank=True, null=True, help_text='Name of target for display')
+    automation_amount = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True, help_text='Amount to use for automation (default: full balance)')
+    automation_executed = models.BooleanField(default=False, help_text='Whether automation has been executed')
+    automation_executed_at = models.DateTimeField(null=True, blank=True)
+    
+    is_bid = models.BooleanField(default=False) # Is this a bid?
+    bid_status = models.CharField(max_length=20, default='pending') # pending, accumulated, confirmed
+    
+    # Withdrawal rules
+    withdrawal_mode = models.CharField(max_length=20, choices=WITHDRAWAL_MODE_CHOICES, default='free')
+    flexible_max_amount = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True)
+    flexible_min_gap_days = models.IntegerField(default=0)
+    last_withdrawal_date = models.DateTimeField(null=True, blank=True)
+    
+    # Additional withdrawal constraints
+    min_withdrawal_amount = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True, help_text='Minimum amount that can be withdrawn at once')
+    max_withdrawal_amount = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True, help_text='Maximum amount that can be withdrawn at once')
+    max_withdrawals_per_day = models.IntegerField(default=0, help_text='Maximum number of withdrawals per day (0 = unlimited)')
+    require_min_balance = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True, help_text='Minimum balance that must remain in piggy bank')
+    require_min_savings_period_days = models.IntegerField(default=0, help_text='Must save for this many days before first withdrawal')
+    require_min_member_age_days = models.IntegerField(default=0, help_text='Member must be in group for this many days before withdrawing')
+    require_min_contribution_amount = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True, help_text='Must have contributed at least this amount total')
+    
+    achieved = models.BooleanField(default=False)
+    achieved_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(default=timezone.now)
+    
+    MAX_INDIVIDUAL_PIGGY_BANKS = 3
+    MAX_GROUP_PIGGY_MEMBERSHIPS = 3
+    
+    class Meta:
+        ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['payment_group', 'achieved']),
+            models.Index(fields=['owner', 'achieved']),
+            models.Index(fields=['savings_type']),
+        ]
+    
+    def is_individual(self):
+        return self.payment_group is None and self.owner is not None
+    
+    @property
+    def is_matured(self):
+        """Check if the piggy bank has reached its maturity date."""
+        if self.maturity_date and timezone.now() >= self.maturity_date:
+            return True
+        return False
+    
+    def can_withdraw(self):
+        """Check withdrawal eligibility based on savings_type."""
+        if self.savings_type == 'locked':
+            # Locked: no withdrawals until maturity
+            return self.is_matured, 'Locked savings cannot be withdrawn until maturity date.'
+        elif self.savings_type == 'fixed_deposit':
+            # Fixed deposit: can withdraw anytime but penalty applies before maturity
+            return True, None
+        else:
+            # Normal: anytime
+            return True, None
+    
+    def calculate_withdrawal_penalty(self, amount):
+        """Calculate penalty for early withdrawal on fixed_deposit type."""
+        if self.savings_type == 'fixed_deposit' and not self.is_matured:
+            penalty = amount * (self.penalty_rate / 100)
+            return penalty
+        return 0
 # Individual Savings within a Group Target (for non-sharable)
 class IndividualShare(models.Model):
     target = models.ForeignKey(GroupTarget, on_delete=models.CASCADE, related_name='shares')
@@ -805,7 +1395,6 @@ class IndividualShare(models.Model):
     current_amount = models.DecimalField(decimal_places=2, max_digits=12, default=0.00)
     quantity = models.IntegerField(default=1) # Target quantity of item
     achieved = models.BooleanField(default=False)
-
 class PiggyBankActionRequest(models.Model):
     STATUS_CHOICES = (
         ('pending', 'Pending Approval'),
@@ -819,11 +1408,8 @@ class PiggyBankActionRequest(models.Model):
         ('extend_maturity', 'Extend Maturity Date'),
         ('withdraw', 'Withdraw Amount'),
         ('dissolve', 'Dissolve Piggy Bank'),
-        ('merge', 'Merge Piggy Banks'),
-        ('leave', 'Leave Piggy Bank'),
     )
     
-    import uuid
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     piggy_bank = models.ForeignKey(GroupTarget, on_delete=models.CASCADE, related_name='action_requests')
     requested_by = models.ForeignKey(PaymentProfile, on_delete=models.CASCADE)
@@ -835,15 +1421,8 @@ class PiggyBankActionRequest(models.Model):
     new_maturity_date = models.DateTimeField(null=True, blank=True)
     reason = models.TextField(blank=True)
     
-    # Merge-specific: target piggy banks to merge into this one
-    target_piggy_banks = models.ManyToManyField(
-        'GroupTarget', blank=True, related_name='merge_requests',
-        help_text='Piggy banks to be merged into this one'
-    )
-    
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
-
 class PiggyBankActionRequestVote(models.Model):
     VOTE_CHOICES = (
         ('approve', 'Approve'),
@@ -905,49 +1484,6 @@ class PiggyBankConversionRequest(models.Model):
 
     def __str__(self):
         return f"Conversion Request for {self.piggy_bank.name} by {self.proposed_by.payment_profile.user.user.username}"
-
-
-
-class PiggyBankTransaction(models.Model):
-    """
-    Dedicated audit log for every piggy bank event.
-    Used exclusively for analytics — avoids scanning the full TransactionToken table
-    and prevents accidental exposure of unrelated financial history.
-    """
-    EVENT_CHOICES = (
-        ('contribution', 'Contribution'),
-        ('withdrawal', 'Withdrawal'),
-        ('member_joined', 'Member Joined'),
-        ('member_left', 'Member Left'),
-        ('approval_requested', 'Approval Requested'),
-        ('approval_approved', 'Approval Approved'),
-        ('approval_rejected', 'Approval Rejected'),
-        ('conversion', 'Conversion'),
-    )
-
-    import uuid
-    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    piggy_bank = models.ForeignKey(
-        'GroupTarget', on_delete=models.CASCADE, related_name='piggy_events'
-    )
-    event_type = models.CharField(max_length=30, choices=EVENT_CHOICES)
-    amount = models.DecimalField(max_digits=12, decimal_places=2, default=0)
-    performed_by = models.ForeignKey(
-        PaymentProfile, on_delete=models.SET_NULL, null=True, blank=True
-    )
-    balance_after = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True)
-    note = models.TextField(blank=True)
-    created_at = models.DateTimeField(default=timezone.now)
-
-    class Meta:
-        ordering = ['-created_at']
-        indexes = [
-            models.Index(fields=['piggy_bank', 'event_type']),
-            models.Index(fields=['piggy_bank', '-created_at']),
-        ]
-
-    def __str__(self):
-        return f"{self.event_type} | {self.piggy_bank_id} | {self.amount}"
 
 
 # ============================================================================
@@ -1528,7 +2064,6 @@ class Establishment(models.Model):
     def __str__(self):
         return f"{self.name} ({self.get_establishment_type_display()})"
 
-
 class EstablishmentBranch(models.Model):
     """Branch/location of an establishment."""
     establishment = models.ForeignKey(Establishment, on_delete=models.CASCADE, related_name='branches')
@@ -2083,7 +2618,6 @@ class UserPricingFeature(models.Model):
     
     def __str__(self):
         return f"Features for {self.user} (tier={self.tier}, student={self.is_student})"
-
 
 # ============================================================================
 # GROUP DISCOURSE: Public join requests & portfolio display
@@ -2681,8 +3215,6 @@ class BillStandingOrder(models.Model):
     amount = models.DecimalField(max_digits=12, decimal_places=2)
     frequency = models.CharField(max_length=20, choices=STANDING_ORDER_FREQ, default='monthly')
     start_date = models.DateField()
-    next_run_date = models.DateField(null=True, blank=True)
-    consecutive_failures = models.IntegerField(default=0)
     end_date = models.DateField(null=True, blank=True)
     status = models.CharField(max_length=20, choices=STANDING_ORDER_STATUS, default='active')
     created_at = models.DateTimeField(default=timezone.now)
@@ -2693,6 +3225,8 @@ class BillStandingOrder(models.Model):
         indexes = [
             models.Index(fields=['user', 'status']),
             models.Index(fields=['start_date']),
+        ]
+        models.Index(fields=['start_date']),
         ]
         
     def __str__(self):
@@ -3187,7 +3721,6 @@ class ProviderRegistration(models.Model):
             self.kitty_name = f"{self.business_name} Operations Kit"
         super().save(*args, **kwargs)
 
-
 class ProviderDocument(models.Model):
     DOCUMENT_TYPES = (
         ('business_license', 'Business License'),
@@ -3563,3 +4096,5 @@ class ProviderRating(models.Model):
 
     def __str__(self):
         return f"{self.provider.business_name} - {self.overall_rating} stars by {self.user.user.email}"
+
+

@@ -16,7 +16,7 @@ from Payment.models import (
     GroupCertificate,
     RoundContribution, RoundMemberContribution, BenefitDistributionRule,
     WithdrawalRequest, GroupSettingsChangeRequest, RoundPosition,
-    PiggyBankConversionRequest,
+    PiggyBankConversionRequest, PiggyBankMember,
     ProviderRegistration, ProviderDocument, ProviderStaff, ServiceProduct,
     ProviderTransaction, ProviderQuery, ProviderApplication, ProviderNotification,
     ProviderRating
@@ -339,6 +339,8 @@ class GroupTargetSerializer(serializers.ModelSerializer):
     group_name = serializers.CharField(source='payment_group.name', read_only=True)
     group_is_public = serializers.BooleanField(source='payment_group.is_public', read_only=True)
     is_group_member = serializers.SerializerMethodField()
+    is_member = serializers.SerializerMethodField()
+    member_count = serializers.SerializerMethodField()
     type = serializers.SerializerMethodField()
     can_withdraw = serializers.SerializerMethodField()
     withdrawal_message = serializers.SerializerMethodField()
@@ -386,6 +388,45 @@ class GroupTargetSerializer(serializers.ModelSerializer):
             ).exists()
         return False
 
+    def get_is_member(self, obj):
+        request = self.context.get('request')
+        if not request or not request.user.is_authenticated:
+            return False
+        try:
+            profile = PaymentProfile.objects.get(user__user=request.user)
+            return PiggyBankMember.objects.filter(
+                piggy_bank=obj, payment_profile=profile, is_active=True
+            ).exists()
+        except PaymentProfile.DoesNotExist:
+            return False
+
+    def get_member_count(self, obj):
+        return PiggyBankMember.objects.filter(piggy_bank=obj, is_active=True).count()
+
+class PiggyBankMemberSerializer(serializers.ModelSerializer):
+    user_name = serializers.SerializerMethodField()
+    user_email = serializers.EmailField(source='payment_profile.user.user.email', read_only=True)
+    profile_picture = serializers.SerializerMethodField()
+
+    class Meta:
+        model = PiggyBankMember
+        fields = ['id', 'user_name', 'user_email', 'profile_picture', 'is_admin',
+                  'joined_at', 'total_contributed', 'total_withdrawn', 'is_active']
+
+    def get_user_name(self, obj):
+        try:
+            u = obj.payment_profile.user.user
+            return f"{u.first_name} {u.last_name}".strip() or u.username
+        except Exception:
+            return 'Unknown'
+
+    def get_profile_picture(self, obj):
+        try:
+            return obj.payment_profile.user.profile_picture.url
+        except Exception:
+            return None
+
+
 class GroupInvitationSerializer(serializers.ModelSerializer):
     invited_user_email = serializers.EmailField(source='invited_profile.user.user.email', read_only=True)
     invited_by_name = serializers.SerializerMethodField()
@@ -401,15 +442,18 @@ class GroupInvitationSerializer(serializers.ModelSerializer):
 
 class PiggyBankActionRequestSerializer(serializers.ModelSerializer):
     requested_by_name = serializers.SerializerMethodField()
+    requested_by_profile_picture = serializers.SerializerMethodField()
     piggy_bank_name = serializers.CharField(source='piggy_bank.name', read_only=True)
     approvals_count = serializers.SerializerMethodField()
     rejections_count = serializers.SerializerMethodField()
     total_members = serializers.SerializerMethodField()
+    voter_details = serializers.SerializerMethodField()
+    pending_voter_details = serializers.SerializerMethodField()
     
     class Meta:
         from Payment.models import PiggyBankActionRequest
         model = PiggyBankActionRequest
-        fields = '__all__'
+        fields = ['id', 'piggy_bank', 'requested_by', 'action_type', 'status', 'amount', 'new_maturity_date', 'reason', 'created_at', 'updated_at', 'requested_by_name', 'requested_by_profile_picture', 'piggy_bank_name', 'approvals_count', 'rejections_count', 'total_members', 'voter_details', 'pending_voter_details']
         read_only_fields = ['created_at', 'updated_at', 'status']
         
     def get_requested_by_name(self, obj):
@@ -417,6 +461,18 @@ class PiggyBankActionRequestSerializer(serializers.ModelSerializer):
             return f"{obj.requested_by.user.user.first_name} {obj.requested_by.user.user.last_name}"
         except Exception:
             return 'Unknown'
+
+    def get_requested_by_profile_picture(self, obj):
+        try:
+            pic = obj.requested_by.user.profile_picture
+            if pic:
+                request = self.context.get('request')
+                if request:
+                    return request.build_absolute_uri(pic.url)
+                return pic.url
+        except Exception:
+            pass
+        return ''
         
     def get_approvals_count(self, obj):
         return obj.votes.filter(vote='approve').count()
@@ -428,6 +484,63 @@ class PiggyBankActionRequestSerializer(serializers.ModelSerializer):
         if obj.piggy_bank.payment_group:
             return obj.piggy_bank.payment_group.members.count()
         return 1
+
+    def get_voter_details(self, obj):
+        details = []
+        for vote in obj.votes.select_related('voter__user__user').all():
+            try:
+                profile = vote.voter.user
+                auth_user = profile.user
+                name = f"{auth_user.first_name} {auth_user.last_name}".strip() or auth_user.email
+                pic_url = ''
+                if profile.profile_picture:
+                    request = self.context.get('request')
+                    if request:
+                        pic_url = request.build_absolute_uri(profile.profile_picture.url)
+                    else:
+                        pic_url = profile.profile_picture.url
+                details.append({
+                    'member_id': str(vote.voter_id),
+                    'member_name': name,
+                    'profile_picture': pic_url,
+                    'vote': vote.vote,
+                })
+            except Exception:
+                details.append({
+                    'member_id': str(vote.voter_id),
+                    'member_name': 'Unknown',
+                    'profile_picture': '',
+                    'vote': vote.vote,
+                })
+        return details
+
+    def get_pending_voter_details(self, obj):
+        pending = []
+        voted_ids = set(obj.votes.values_list('voter_id', flat=True))
+        group = obj.piggy_bank.payment_group
+        if group:
+            for member in group.members.filter(is_active=True).select_related('payment_profile__user__user').all():
+                if member.payment_profile_id in voted_ids:
+                    continue
+                try:
+                    profile = member.payment_profile.user
+                    auth_user = profile.user
+                    name = f"{auth_user.first_name} {auth_user.last_name}".strip() or auth_user.email
+                    pic_url = ''
+                    if profile.profile_picture:
+                        request = self.context.get('request')
+                        if request:
+                            pic_url = request.build_absolute_uri(profile.profile_picture.url)
+                        else:
+                            pic_url = profile.profile_picture.url
+                    pending.append({
+                        'member_id': str(member.id),
+                        'member_name': name,
+                        'profile_picture': pic_url,
+                    })
+                except Exception:
+                    pass
+        return pending
 
 # ── Group Phase / Post serializers ─────────────────────────────
 class GroupPhaseSerializer(serializers.ModelSerializer):

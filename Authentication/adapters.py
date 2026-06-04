@@ -1,5 +1,31 @@
 from allauth.account.adapter import DefaultAccountAdapter
 from allauth.socialaccount.adapter import DefaultSocialAccountAdapter
+
+# Map Google locale → ISO country code
+GOOGLE_LOCALE_TO_COUNTRY = {
+    'af': 'ZA', 'am': 'ET', 'ar': 'SA', 'az': 'AZ', 'be': 'BY',
+    'bg': 'BG', 'bn': 'BD', 'bs': 'BA', 'ca': 'ES', 'ce': 'RU',
+    'co': 'FR', 'cs': 'CZ', 'cy': 'GB', 'da': 'DK', 'de': 'DE',
+    'el': 'GR', 'en': 'US', 'eo': 'US', 'es': 'ES', 'et': 'EE',
+    'eu': 'ES', 'fa': 'IR', 'fi': 'FI', 'fr': 'FR', 'fy': 'NL',
+    'ga': 'IE', 'gd': 'GB', 'gl': 'ES', 'gu': 'IN', 'ha': 'NG',
+    'he': 'IL', 'hi': 'IN', 'hr': 'HR', 'ht': 'HT', 'hu': 'HU',
+    'hy': 'AM', 'id': 'ID', 'ig': 'NG', 'is': 'IS', 'it': 'IT',
+    'iw': 'IL', 'ja': 'JP', 'jv': 'ID', 'ka': 'GE', 'kk': 'KZ',
+    'km': 'KH', 'kn': 'IN', 'ko': 'KR', 'ku': 'IQ', 'ky': 'KG',
+    'la': 'VA', 'lb': 'LU', 'lo': 'LA', 'lt': 'LT', 'lv': 'LV',
+    'mg': 'MG', 'mi': 'NZ', 'mk': 'MK', 'ml': 'IN', 'mn': 'MN',
+    'mr': 'IN', 'ms': 'MY', 'mt': 'MT', 'my': 'MM', 'nb': 'NO',
+    'ne': 'NP', 'nl': 'NL', 'nn': 'NO', 'no': 'NO', 'ny': 'MW',
+    'or': 'IN', 'pa': 'IN', 'pl': 'PL', 'ps': 'AF', 'pt': 'PT',
+    'ro': 'RO', 'ru': 'RU', 'rw': 'RW', 'sd': 'PK', 'si': 'LK',
+    'sk': 'SK', 'sl': 'SI', 'sm': 'WS', 'sn': 'ZW', 'so': 'SO',
+    'sq': 'AL', 'sr': 'RS', 'st': 'ZA', 'su': 'ID', 'sv': 'SE',
+    'sw': 'KE', 'ta': 'IN', 'te': 'IN', 'tg': 'TJ', 'th': 'TH',
+    'tk': 'TM', 'tl': 'PH', 'tr': 'TR', 'tt': 'RU', 'ug': 'CN',
+    'uk': 'UA', 'ur': 'PK', 'uz': 'UZ', 'vi': 'VN', 'xh': 'ZA',
+    'yi': 'US', 'yo': 'NG', 'zh': 'CN', 'zu': 'ZA',
+}
 from allauth.socialaccount.models import EmailAddress
 from django.conf import settings
 import logging
@@ -76,6 +102,16 @@ class MySocialAccountAdapter(DefaultSocialAccountAdapter):
         """Populate user from social data without username"""
         user = super().populate_user(request, sociallogin, data)
         user.username = None  # No username needed
+
+        # Map locale to country_of_origin (Google, Apple, etc.)
+        extra = sociallogin.account.extra_data or {}
+        raw_locale = extra.get('locale', '') or data.get('locale', '')
+        if raw_locale:
+            lang_part = raw_locale.split('-')[0].split('_')[0].lower()
+            mapped = GOOGLE_LOCALE_TO_COUNTRY.get(lang_part)
+            if mapped:
+                user.country_of_origin = mapped
+
         return user
     
     def save_user(self, request, sociallogin, form=None):

@@ -19,11 +19,13 @@ class BaseUserSerializer(serializers.ModelSerializer):
         fields = [
             'first_name', 'last_name', 'other_names', 'email',
             'password', 'confirm_password', 'phone_number', 'user_type',
-            'date_of_birth', 'preferred_currency', 'preferred_language',
+            'date_of_birth', 'country_of_origin',
+            'preferred_currency', 'preferred_language',
             'browser_locale',
         ]
         extra_kwargs = {
             'date_of_birth': {'required': False},
+            'country_of_origin': {'required': False},
             'preferred_currency': {'required': False},
             'preferred_language': {'required': False},
         }

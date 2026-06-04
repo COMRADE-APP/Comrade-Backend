@@ -6,9 +6,10 @@ from rest_framework import viewsets, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated, IsAuthenticatedOrReadOnly, AllowAny
+from rest_framework.filters import SearchFilter, OrderingFilter
 from django.utils import timezone
 from django.db import transaction, models
-from Events.models import Event, EventTicket
+from Events.models import Event, EventTicket, EventCategoryAssignment
 from Events.enhanced_models import (
     EventRoom, EventResourceAccess, EventResourcePurchase,
     EventInterest, EventReaction, EventComment, EventPin,
@@ -37,6 +38,7 @@ from Events.enhanced_serializers import (
 )
 from Announcements.models import Announcements
 from Rooms.models import Room
+from Organisation.models import Organisation
 import secrets
 
 
@@ -47,6 +49,14 @@ class EventEnhancedViewSet(viewsets.ModelViewSet):
     queryset = Event.objects.all()
     serializer_class = EventDetailSerializer
     permission_classes = [IsAuthenticatedOrReadOnly]
+    filter_backends = [SearchFilter, OrderingFilter]
+    search_fields = [
+        'name', 'description', 'location',
+        'created_by__first_name', 'created_by__last_name', 'created_by__email',
+        'eventcategoryassignment__category__name',
+    ]
+    ordering_fields = ['event_date', 'time_stamp']
+    ordering = ['-event_date']
     
     def get_queryset(self):
         queryset = Event.objects.all()
@@ -66,6 +76,12 @@ class EventEnhancedViewSet(viewsets.ModelViewSet):
         if self.request.query_params.get('interested') == 'true' and user.is_authenticated:
             interested_ids = EventInterest.objects.filter(user=user, interested=True).values_list('event_id', flat=True)
             queryset = queryset.filter(id__in=interested_ids)
+        
+        # Category filter
+        category_id = self.request.query_params.get('category')
+        if category_id:
+            event_ids = EventCategoryAssignment.objects.filter(category_id=category_id).values_list('event_id', flat=True)
+            queryset = queryset.filter(id__in=event_ids)
         
         return queryset.select_related('created_by').prefetch_related('event_reactions', 'event_comments', 'interests')
     
@@ -835,6 +851,86 @@ class EventEnhancedViewSet(viewsets.ModelViewSet):
         
         feedbacks = EventFeedback.objects.filter(event=event, viewable=True).order_by('-submitted_on')
         serializer = EventFeedbackSerializer(feedbacks, many=True)
+        return Response(serializer.data)
+
+    @action(detail=True, methods=['post'], permission_classes=[IsAuthenticated])
+    def respond_to_review(self, request, pk=None):
+        """Organizer responds to a review"""
+        event = self.get_object()
+        if event.created_by != request.user and not request.user.is_staff:
+            return Response({'error': 'Only the event organizer can respond to reviews'}, status=status.HTTP_403_FORBIDDEN)
+
+        feedback_id = request.data.get('feedback_id')
+        response_message = request.data.get('response_message', '')
+
+        if not feedback_id or not response_message.strip():
+            return Response({'error': 'feedback_id and response_message are required'}, status=status.HTTP_400_BAD_REQUEST)
+
+        from Events.models import EventFeedback, EventFeedbackResponse
+        from Events.serializers import EventFeedbackResponseSerializer
+
+        try:
+            feedback = EventFeedback.objects.get(pk=feedback_id, event=event)
+        except EventFeedback.DoesNotExist:
+            return Response({'error': 'Review not found'}, status=status.HTTP_404_NOT_FOUND)
+
+        response_obj, created = EventFeedbackResponse.objects.update_or_create(
+            feedback=feedback,
+            defaults={'response_message': response_message.strip()}
+        )
+        serializer = EventFeedbackResponseSerializer(response_obj)
+        return Response(serializer.data, status=status.HTTP_201_CREATED)
+
+    @action(detail=True, methods=['post'], permission_classes=[IsAuthenticated])
+    def send_sponsor_request(self, request, pk=None):
+        """Organizer sends sponsor requests to organizations"""
+        event = self.get_object()
+        if event.created_by != request.user and not request.user.is_staff:
+            return Response({'error': 'Only the event organizer can send sponsor requests'}, status=status.HTTP_403_FORBIDDEN)
+
+        from Events.models import SponsorRequest
+        from Events.serializers import SponsorRequestSerializer
+
+        organization_ids = request.data.get('organization_ids', [])
+        recipient_email = request.data.get('recipient_email', '')
+        message = request.data.get('message', '')
+
+        if not organization_ids and not recipient_email:
+            return Response({'error': 'At least one organization or recipient email is required'}, status=status.HTTP_400_BAD_REQUEST)
+
+        created = []
+        for org_id in organization_ids:
+            try:
+                org = Organisation.objects.get(pk=org_id)
+                req = SponsorRequest.objects.create(
+                    event=event, organization=org,
+                    message=message, created_by=request.user
+                )
+                created.append(SponsorRequestSerializer(req).data)
+            except Organisation.DoesNotExist:
+                continue
+
+        if recipient_email:
+            req = SponsorRequest.objects.create(
+                event=event, recipient_email=recipient_email,
+                message=message, created_by=request.user
+            )
+            created.append(SponsorRequestSerializer(req).data)
+
+        return Response({'sponsor_requests': created}, status=status.HTTP_201_CREATED)
+
+    @action(detail=True, methods=['get'], permission_classes=[IsAuthenticated])
+    def sponsor_requests(self, request, pk=None):
+        """Get sponsor requests for this event (organizer only)"""
+        event = self.get_object()
+        if event.created_by != request.user and not request.user.is_staff:
+            return Response({'error': 'Only the event organizer can view sponsor requests'}, status=status.HTTP_403_FORBIDDEN)
+
+        from Events.models import SponsorRequest
+        from Events.serializers import SponsorRequestSerializer
+
+        requests_qs = SponsorRequest.objects.filter(event=event).order_by('-sent_date')
+        serializer = SponsorRequestSerializer(requests_qs, many=True)
         return Response(serializer.data)
 
     # ANALYTICS

@@ -5,6 +5,7 @@ from rest_framework.response import Response
 from rest_framework import status
 from rest_framework.decorators import action
 from rest_framework.permissions import IsAuthenticatedOrReadOnly, AllowAny, IsAuthenticated
+from rest_framework.filters import SearchFilter
 from Organisation.serializers import OrganisationSerializer, OrgBranchSerializer, DivisionSerializer, DepartmentSerializer, SectionSerializer, TeamSerializer, ProjectSerializer, CentreSerializer, CommitteeSerializer, BoardSerializer, UnitSerializer, InstituteSerializer, ProgramSerializer, OtherOrgUnitSerializer, OrganisationMemberSerializer
 
 
@@ -13,6 +14,8 @@ class OrganisationViewSet(ModelViewSet):
     queryset = Organisation.objects.all()
     permission_classes = [IsAuthenticatedOrReadOnly]
     serializer_class = OrganisationSerializer
+    filter_backends = [SearchFilter]
+    search_fields = ['name', 'abbreviation', 'city', 'industry']
 
     def get_queryset(self):
         queryset = super().get_queryset()

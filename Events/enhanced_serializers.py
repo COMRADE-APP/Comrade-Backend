@@ -3,7 +3,7 @@ Enhanced serializers for Events system
 Includes ticketing, resources, sharing, reactions, and permissions
 """
 from rest_framework import serializers
-from Events.models import Event, EventTicket, EventFeedback
+from Events.models import Event, EventTicket, EventFeedback, EventCategoryAssignment
 from Events.enhanced_models import (
     EventRoom, EventResourceAccess, EventResourcePurchase,
     EventInterest, EventReaction, EventComment, EventPin,
@@ -22,6 +22,7 @@ from Authentication.models import CustomUser
 class EventRoomSerializer(serializers.ModelSerializer):
     event_name = serializers.CharField(source='event.name', read_only=True)
     room_name = serializers.CharField(source='room.name', read_only=True)
+    participant_count = serializers.SerializerMethodField()
     
     class Meta:
         model = EventRoom
@@ -31,9 +32,12 @@ class EventRoomSerializer(serializers.ModelSerializer):
             'auto_expire', 'expires_at', 'grace_period_hours',
             'requires_ticket', 'allowed_before_event_hours',
             'enable_chat', 'enable_file_sharing', 'enable_voice_chat',
-            'enable_video_chat', 'created_at'
+            'enable_video_chat', 'created_at', 'participant_count'
         ]
         read_only_fields = ['id', 'activated_at', 'deactivated_at', 'created_at']
+    
+    def get_participant_count(self, obj):
+        return obj.room.members.count() if obj.room else 0
 
 
 class EventResourceAccessSerializer(serializers.ModelSerializer):
@@ -299,6 +303,7 @@ class EventDetailSerializer(serializers.ModelSerializer):
     speakers = serializers.SerializerMethodField()
     materials = serializers.SerializerMethodField()
     status = serializers.SerializerMethodField()
+    category_name = serializers.SerializerMethodField()
     
     class Meta:
         model = Event
@@ -314,7 +319,7 @@ class EventDetailSerializer(serializers.ModelSerializer):
             'room', 'reactions_count', 'reactions_breakdown',
             'comments_count', 'interested_count',
             'user_reaction', 'user_reminder',
-            'schedule_items', 'speakers', 'materials'
+            'schedule_items', 'speakers', 'materials', 'category_name'
         ]
         read_only_fields = ['id', 'time_stamp']
     
@@ -391,6 +396,9 @@ class EventDetailSerializer(serializers.ModelSerializer):
         except Exception:
             return obj.status # Fallback
 
+    def get_category_name(self, obj):
+        assignment = EventCategoryAssignment.objects.filter(event=obj).select_related('category').first()
+        return assignment.category.name if assignment else None
 
 
 # ===== LOGISTICS SERIALIZERS =====

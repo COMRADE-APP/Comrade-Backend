@@ -1,3 +1,5 @@
+import uuid
+
 from django.db import models
 from Authentication.models import Student, StudentAdmin, OrgAdmin, OrgStaff, InstAdmin, InstStaff, Lecturer, CustomUser, Profile
 from Organisation.models import Organisation, OrgBranch, Division, Department, Section, Team, Project, Centre, Committee, Board, Unit, Institute, Program, OtherOrgUnit
@@ -141,6 +143,8 @@ class Event(models.Model):
     # Advanced Settings
     seeking_sponsors = models.BooleanField(default=False)
     seeking_partners = models.BooleanField(default=False)
+    is_ticketed = models.BooleanField(default=False)
+    uuid = models.UUIDField(default=uuid.uuid4, editable=False, unique=True)
 
     def __str__(self):
         return self.name
@@ -267,10 +271,12 @@ class EventReport(models.Model):
     
 class EventSponsor(models.Model):
     event = models.ForeignKey(Event, on_delete=models.DO_NOTHING)
-    organisation = models.ForeignKey(Organisation, on_delete=models.DO_NOTHING)
-    sponsor_rep = models.ForeignKey(CustomUser, on_delete=models.DO_NOTHING)
+    organisation = models.ForeignKey(Organisation, on_delete=models.DO_NOTHING, null=True, blank=True)
+    sponsor_rep = models.ForeignKey(CustomUser, on_delete=models.DO_NOTHING, null=True, blank=True)
     sponsor_name = models.CharField(max_length=200)
     sponsor_details = models.TextField(max_length=1000)
+    sponsorship_level = models.CharField(max_length=200, blank=True, default='')
+    contribution_amount = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
     established_on = models.DateField(auto_now_add=True)
 
     def __str__(self):
@@ -320,6 +326,19 @@ class EventTicket(models.Model):
         return f"{self.ticket_type} - {self.event.name}"
 
 
+TICKET_CATEGORY = (
+    ('individual', 'Individual'),
+    ('couple', 'Couple'),
+    ('group', 'Group'),
+)
+
+TIER_TYPE = (
+    ('regular', 'Regular'),
+    ('early_bird', 'Early Bird'),
+    ('vip', 'VIP'),
+    ('vvip', 'VVIP'),
+)
+
 class TicketTier(models.Model):
     """
     Advanced ticketing model allowing custom groupings (e.g., Couple, Group of 5),
@@ -328,6 +347,8 @@ class TicketTier(models.Model):
     event = models.ForeignKey(Event, on_delete=models.CASCADE, related_name='ticket_tiers')
     name = models.CharField(max_length=200, help_text="e.g. VIP Couple, Group of 10, Student Individual")
     description = models.TextField(blank=True, null=True)
+    category = models.CharField(max_length=20, choices=TICKET_CATEGORY, default='individual')
+    tier = models.CharField(max_length=20, choices=TIER_TYPE, default='regular')
     price = models.DecimalField(max_digits=10, decimal_places=2, default=0.00)
     capacity = models.IntegerField(help_text="Total number of tickets available in this tier")
     group_size = models.IntegerField(default=1, help_text="Number of people this ticket admits (e.g., 2 for couple)")
@@ -375,36 +396,50 @@ BOOKING_STATUS = (
 )
 
 class EventSlotBooking(models.Model):
-    """Individual slot booking for an event"""
+    """Booking record for an event. One record per ticket (individual=1 person, couple=2, group=N)."""
     event = models.ForeignKey(Event, on_delete=models.CASCADE, related_name='slot_bookings')
     user = models.ForeignKey(CustomUser, on_delete=models.CASCADE, related_name='event_bookings')
     ticket = models.ForeignKey(EventTicket, on_delete=models.SET_NULL, null=True, blank=True, related_name='bookings')
     ticket_tier = models.ForeignKey(TicketTier, on_delete=models.SET_NULL, null=True, blank=True, related_name='tier_bookings')
-    quantity = models.IntegerField(default=1, help_text="Number of units purchased of this ticket/tier")
+    quantity = models.IntegerField(default=1, help_text="Number of people this ticket admits (e.g., 2 for couple)")
     booking_status = models.CharField(max_length=50, choices=BOOKING_STATUS, default='pending')
     qr_code_data = models.TextField(blank=True, default='')
     ticket_number = models.CharField(max_length=100, unique=True, blank=True)
     amount_paid = models.DecimalField(max_digits=10, decimal_places=2, default=0.00)
+    attendee_name = models.CharField(max_length=200, blank=True, default='', help_text="Ticket holder name")
+    attendee_email = models.EmailField(blank=True, default='')
+    attendee_phone = models.CharField(max_length=20, blank=True, default='')
+    attendee_age = models.IntegerField(null=True, blank=True)
+    group_name = models.CharField(max_length=200, blank=True, default='', help_text="Group name (for group tickets)")
+    attendees = models.JSONField(default=list, blank=True, help_text="Array of {name, email, phone} for all people admitted")
+    shared_with = models.JSONField(default=list, blank=True, help_text="Array of user IDs this ticket is shared with")
+    uuid = models.UUIDField(default=uuid.uuid4, editable=False, unique=True)
     booked_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
-        unique_together = ['event', 'user']
         indexes = [
             models.Index(fields=['event', 'booking_status']),
         ]
 
     def save(self, *args, **kwargs):
         if not self.ticket_number:
-            import uuid
             self.ticket_number = f"QMR-{uuid.uuid4().hex[:8].upper()}"
         if not self.qr_code_data:
             import json
-            self.qr_code_data = json.dumps({
+            data = {
                 'ticket_number': self.ticket_number,
                 'event_id': self.event_id,
                 'user_id': self.user_id,
                 'event_name': self.event.name if self.event else '',
-            })
+                'attendee_name': self.attendee_name,
+                'attendee_email': self.attendee_email,
+                'attendee_phone': self.attendee_phone,
+                'quantity': self.quantity,
+                'group_name': self.group_name,
+            }
+            if self.attendees:
+                data['attendees'] = self.attendees
+            self.qr_code_data = json.dumps(data)
         super().save(*args, **kwargs)
 
     def __str__(self):
@@ -723,7 +758,7 @@ class EventSponsorshipLevel(models.Model):
     
 class EventSponsorshipApplication(models.Model):
     event = models.ForeignKey(Event, on_delete=models.DO_NOTHING)
-    organisation = models.ForeignKey(Organisation, on_delete=models.DO_NOTHING)
+    organisation = models.ForeignKey(Organisation, on_delete=models.DO_NOTHING, null=True, blank=True)
     user = models.ForeignKey(CustomUser, on_delete=models.DO_NOTHING)
     applicant_name = models.CharField(max_length=200)
     applicant_contact = models.CharField(max_length=200)
@@ -935,6 +970,24 @@ class EventSponsorshipLetter(models.Model):
 
 #     def __str__(self):#         return f"Role {self.role_name} for {self.contact_person.contact_name}"
 
+
+class SponsorRequest(models.Model):
+    SPONSOR_REQUEST_STATUS = [
+        ('pending', 'Pending'),
+        ('accepted', 'Accepted'),
+        ('declined', 'Declined'),
+    ]
+    event = models.ForeignKey(Event, on_delete=models.DO_NOTHING, related_name='sponsor_requests')
+    organization = models.ForeignKey('Organisation.Organisation', on_delete=models.DO_NOTHING, null=True, blank=True)
+    recipient_email = models.EmailField(null=True, blank=True)
+    message = models.TextField(max_length=2000)
+    status = models.CharField(max_length=20, choices=SPONSOR_REQUEST_STATUS, default='pending')
+    sent_date = models.DateTimeField(auto_now_add=True)
+    created_by = models.ForeignKey(CustomUser, on_delete=models.DO_NOTHING)
+
+    def __str__(self):
+        org_name = self.organization.name if self.organization else self.recipient_email or 'Unknown'
+        return f"Sponsor request for {self.event.name} to {org_name}"
 
 # Import enhanced models to register them with Django
 from .enhanced_models import *

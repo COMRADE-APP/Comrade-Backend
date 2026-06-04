@@ -117,6 +117,7 @@ class CustomUser(AbstractUser):
 
     # User Preferences
     date_of_birth = models.DateField(null=True, blank=True)
+    country_of_origin = models.CharField(max_length=2, blank=True, help_text="ISO 3166-1 alpha-2 country code")
     preferred_currency = models.CharField(max_length=3, default='USD')  # ISO 4217
     preferred_language = models.CharField(max_length=10, default='en')  # BCP 47 (e.g. 'en', 'sw', 'fr')
 

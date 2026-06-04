@@ -411,6 +411,7 @@ class ProcessPaymentView(APIView):
                 payment_profile=payment_profile,
                 transaction_token=transaction_token,
                 status=txn_status,
+                balance_after=payment_profile.wallet_balance
             )
             
             serializer = TransactionTokenSerializer(transaction_token)
@@ -486,6 +487,7 @@ class RefundPaymentView(APIView):
                     payment_profile=transaction.payment_profile,
                     transaction_token=transaction,
                     status='refunded',
+                    balance_after=transaction.payment_profile.wallet_balance
                 )
                 
                 return Response({
@@ -592,20 +594,20 @@ class StripeWebhookView(APIView):
                 logger.info(f'Stripe webhook: PI {payment_intent["id"]} already processed')
                 return
             
-            TransactionHistory.objects.create(
-                payment_profile=transaction.payment_profile,
-                transaction_token=transaction,
-                status='completed',
-            )
-            transaction.status = 'completed'
-            transaction.save()
-            
-            # Credit wallet if this is a deposit
             if transaction.transaction_type == 'deposit':
                 pp = transaction.payment_profile
                 pp.comrade_balance += float(transaction.amount)
                 pp.save()
                 logger.info(f'Stripe deposit completed: {payment_intent["id"]} — credited {transaction.amount}')
+                
+            TransactionHistory.objects.create(
+                payment_profile=transaction.payment_profile,
+                transaction_token=transaction,
+                status='completed',
+                balance_after=transaction.payment_profile.comrade_balance
+            )
+            transaction.status = 'completed'
+            transaction.save()
         except TransactionToken.DoesNotExist:
             logger.debug(f'Stripe webhook: no matching token for PI {payment_intent["id"]}')
     
@@ -616,6 +618,7 @@ class StripeWebhookView(APIView):
                 payment_profile=transaction.payment_profile,
                 transaction_token=transaction,
                 status='failed',
+                balance_after=transaction.payment_profile.comrade_balance
             )
         except TransactionToken.DoesNotExist:
             pass
@@ -630,18 +633,19 @@ class StripeWebhookView(APIView):
                 logger.info(f'Stripe checkout: session {session["id"]} already processed')
                 return
             
-            TransactionHistory.objects.create(
-                payment_profile=transaction.payment_profile,
-                transaction_token=transaction,
-                status='completed',
-            )
-            transaction.status = 'completed'
-            transaction.save()
-            
             if transaction.transaction_type == 'deposit':
                 pp = transaction.payment_profile
                 pp.comrade_balance += float(transaction.amount)
                 pp.save()
+                
+            TransactionHistory.objects.create(
+                payment_profile=transaction.payment_profile,
+                transaction_token=transaction,
+                status='completed',
+                balance_after=transaction.payment_profile.comrade_balance
+            )
+            transaction.status = 'completed'
+            transaction.save()
         except TransactionToken.DoesNotExist:
             logger.debug(f'Stripe checkout session webhook: no token for {session["id"]}')
     
@@ -981,6 +985,7 @@ class MpesaCallbackView(APIView):
                     payment_profile=transaction.payment_profile,
                     transaction_token=transaction,
                     status='completed',
+                    balance_after=transaction.payment_profile.comrade_balance
                 )
                 # Credit wallet for deposits
                 if transaction.transaction_type == 'deposit':

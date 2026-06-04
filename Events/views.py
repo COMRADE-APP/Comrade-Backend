@@ -1,5 +1,6 @@
 from django.shortcuts import render
 from django.http import HttpResponse
+from django.db import models, IntegrityError
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework import status
@@ -59,12 +60,14 @@ class EventViewSet(ModelViewSet):
                 TicketTier.objects.create(
                     event=event,
                     name=tier_data.get('name'),
+                    category=tier_data.get('category', 'individual'),
+                    tier=tier_data.get('tier', 'regular'),
                     price=tier_data.get('price', 0.00),
                     capacity=tier_data.get('capacity', 0),
                     min_age=tier_data.get('min_age'),
                     max_age=tier_data.get('max_age'),
                     custom_criteria=tier_data.get('custom_criteria', ''),
-                    group_size_allowed=tier_data.get('group_size_allowed', 1)
+                    group_size=tier_data.get('group_size', 1),
                 )
 
         # Process Materials via IDs
@@ -76,6 +79,39 @@ class EventViewSet(ModelViewSet):
                 event.materials.add(*mats)
             except Exception:
                 pass
+
+        # Process Categories
+        categories_data = request_data.get('categories', [])
+        if isinstance(categories_data, str):
+            try:
+                categories_data = json.loads(categories_data)
+            except json.JSONDecodeError:
+                categories_data = []
+        if categories_data:
+            EventCategoryAssignment.objects.filter(event=event).delete()
+            for cat_id in categories_data:
+                try:
+                    cat = EventCategory.objects.get(pk=int(cat_id))
+                    EventCategoryAssignment.objects.create(event=event, category=cat)
+                except (EventCategory.DoesNotExist, ValueError):
+                    continue
+
+        # Process Sponsorship Levels
+        sponsorship_levels_data = request_data.get('sponsorship_levels', [])
+        if isinstance(sponsorship_levels_data, str):
+            try:
+                sponsorship_levels_data = json.loads(sponsorship_levels_data)
+            except json.JSONDecodeError:
+                sponsorship_levels_data = []
+        if sponsorship_levels_data:
+            EventSponsorshipLevel.objects.filter(event=event).delete()
+            for level_data in sponsorship_levels_data:
+                EventSponsorshipLevel.objects.create(
+                    event=event,
+                    level_name=level_data.get('level_name', ''),
+                    level_benefits=level_data.get('level_benefits', ''),
+                    level_price=level_data.get('level_price', 0),
+                )
 
 
     def create(self, request, *args, **kwargs):
@@ -1261,6 +1297,13 @@ class EventSponsorViewSet(ModelViewSet):
     queryset = EventSponsor.objects.all()
     permission_classes = [IsAuthenticatedOrReadOnly]
 
+    def get_queryset(self):
+        qs = super().get_queryset()
+        event_id = self.request.query_params.get('event')
+        if event_id:
+            qs = qs.filter(event_id=event_id)
+        return qs
+
 class EventSponsorAgreementViewSet(ModelViewSet):
     serializer_class = EventSponsorAgreementSerializer
     queryset = EventSponsorAgreement.objects.all()
@@ -1490,6 +1533,13 @@ class EventSponsorshipLevelViewSet(ModelViewSet):
     queryset = EventSponsorshipLevel.objects.all()
     permission_classes = [IsAuthenticatedOrReadOnly]
 
+    def get_queryset(self):
+        qs = super().get_queryset()
+        event_id = self.request.query_params.get('event')
+        if event_id:
+            qs = qs.filter(event_id=event_id)
+        return qs
+
 class EventSponsorshipRecognitionViewSet(ModelViewSet):
     serializer_class = EventSponsorshipRecognitionSerializer
     queryset = EventSponsorshipRecognition.objects.all()
@@ -1498,11 +1548,6 @@ class EventSponsorshipRecognitionViewSet(ModelViewSet):
 class EventSponsorshipRejectionViewSet(ModelViewSet):
     serializer_class = EventSponsorshipRejectionSerializer
     queryset = EventSponsorshipRejection.objects.all()
-    permission_classes = [IsAuthenticatedOrReadOnly]
-
-class EventSponsorshipRenewalViewSet(ModelViewSet):
-    serializer_class = EventSponsorshipRenewalSerializer
-    queryset = EventSponsorshipRenewal.objects.all()
     permission_classes = [IsAuthenticatedOrReadOnly]
 
 class EventSponsorshipRenewalViewSet(ModelViewSet):
@@ -1571,129 +1616,140 @@ class EventSlotBookingViewSet(ModelViewSet):
     serializer_class = EventSlotBookingSerializer
     queryset = EventSlotBooking.objects.all()
     permission_classes = [IsAuthenticatedOrReadOnly]
+    lookup_field = 'uuid'
     filterset_fields = ['event', 'user', 'booking_status']
 
     @action(detail=False, methods=['post'])
     def book_slot(self, request):
-        """Book a slot for an event. Auto-generates ticket if capacity available. Supports bulk."""
+        """Book a slot for an event. Accepts attendees array with per-person info."""
+        event_uuid = request.data.get('event_uuid')
         event_id = request.data.get('event_id')
-        tickets_data = request.data.get('tickets_data', [])
-
-        # Fallback for old single ticket flow
-        if not tickets_data:
-            ticket_id = request.data.get('ticket_id')
-            ticket_tier_id = request.data.get('ticket_tier_id')
-            quantity = int(request.data.get('quantity', 1))
-            if ticket_id or ticket_tier_id or quantity > 0:
-                tickets_data = [{'ticket_id': ticket_id, 'ticket_tier_id': ticket_tier_id, 'quantity': quantity}]
-        
-        if not tickets_data:
-            return Response({'error': 'No tickets selected for purchase'}, status=status.HTTP_400_BAD_REQUEST)
+        ticket_tier_id = request.data.get('ticket_tier_id')
+        ticket_id = request.data.get('ticket_id')
+        attendees = request.data.get('attendees', [])
+        group_name = request.data.get('group_name', '')
+        quantity = int(request.data.get('quantity', 1))
 
         try:
-            event = Event.objects.get(pk=event_id)
+            if event_uuid:
+                event = Event.objects.get(uuid=event_uuid)
+            else:
+                event = Event.objects.get(pk=event_id)
         except Event.DoesNotExist:
             return Response({'error': 'Event not found'}, status=status.HTTP_404_NOT_FOUND)
 
-        # Optional Profile Fetch for age validation
         user_profile = getattr(request.user, 'profile', None)
         user_age = None
-        if user_profile and user_profile.date_of_birth:
+        if user_profile and user_profile.birth_date:
             today = datetime.today()
-            dob = user_profile.date_of_birth
+            dob = user_profile.birth_date
             user_age = today.year - dob.year - ((today.month, today.day) < (dob.month, dob.day))
-        
-        # Check overall capacity
+
+        tier = None
+        ticket = None
+
+        if ticket_tier_id:
+            try:
+                tier = TicketTier.objects.get(pk=ticket_tier_id, event=event)
+                if not tier.is_active:
+                    return Response({'error': 'This ticket tier is no longer available.'}, status=status.HTTP_400_BAD_REQUEST)
+            except TicketTier.DoesNotExist:
+                return Response({'error': 'Ticket tier not found'}, status=status.HTTP_404_NOT_FOUND)
+        elif ticket_id:
+            try:
+                ticket = EventTicket.objects.get(pk=ticket_id, event=event)
+            except EventTicket.DoesNotExist:
+                return Response({'error': 'Ticket not found'}, status=status.HTTP_404_NOT_FOUND)
+        else:
+            ticket = event.tickets.first()
+            if not ticket:
+                ticket = EventTicket.objects.create(
+                    event=event, ticket_type='regular', price=0.00,
+                    quantity_available=event.capacity, is_free=True
+                )
+
+        is_free = True
+        unit_price = 0.00
+        if tier:
+            if tier.price and float(tier.price) > 0:
+                is_free = False
+                unit_price = float(tier.price)
+            if tier.min_age and (user_age is None or user_age < tier.min_age):
+                return Response({'error': f'You must be at least {tier.min_age} to buy {tier.name}.'}, status=status.HTTP_403_FORBIDDEN)
+            if tier.max_age and (user_age is None or user_age > tier.max_age):
+                return Response({'error': f'You must be under {tier.max_age} to buy {tier.name}.'}, status=status.HTTP_403_FORBIDDEN)
+            tier_booked = EventSlotBooking.objects.filter(ticket_tier=tier, booking_status__in=['confirmed', 'checked_in']).aggregate(
+                total=models.Sum('quantity')
+            )['total'] or 0
+            requested_people = max(len(attendees), quantity * tier.group_size)
+            if tier_booked + requested_people > tier.capacity:
+                return Response({'error': f'Tier "{tier.name}" capacity exceeded.'}, status=status.HTTP_400_BAD_REQUEST)
+        elif ticket:
+            if not ticket.is_free and float(ticket.price) > 0:
+                is_free = False
+                unit_price = float(ticket.price)
+
+        total_people = max(len(attendees), quantity * (tier.group_size if tier else 1))
+
         confirmed = event.slot_bookings.filter(booking_status__in=['confirmed', 'checked_in']).aggregate(
             total=models.Sum('quantity')
         )['total'] or 0
-        
-        total_quantity_requested = sum([int(t.get('quantity', 1)) for t in tickets_data])
-        if confirmed + total_quantity_requested > event.capacity:
+        if confirmed + total_people > event.capacity:
             return Response({'error': f'Event capacity exceeded. Only {event.capacity - confirmed} slots left.'}, status=status.HTTP_400_BAD_REQUEST)
 
+        # Per-person limit: total people across all user's bookings
+        MAX_FREE_PEOPLE = 1
+        MAX_PAID_PEOPLE = 5
+        max_allowed = MAX_FREE_PEOPLE if is_free else MAX_PAID_PEOPLE
+        existing_people = EventSlotBooking.objects.filter(
+            event=event, user=request.user,
+            booking_status__in=['confirmed', 'checked_in', 'pending']
+        ).aggregate(total=models.Sum('quantity'))['total'] or 0
+        if existing_people + total_people > max_allowed:
+            remaining = max(0, max_allowed - existing_people)
+            return Response({
+                'error': f'Maximum {max_allowed} {"person" if max_allowed == 1 else "people"} per event. You can book for {remaining} more.'
+            }, status=status.HTTP_400_BAD_REQUEST)
+
         bookings_created = []
-        is_free_batch = True
+        category = tier.category if tier else 'individual'
+        amount = unit_price * total_people
 
-        for item in tickets_data:
-            ticket_id = item.get('ticket_id')
-            ticket_tier_id = item.get('ticket_tier_id')
-            quantity = int(item.get('quantity', 1))
-
-            if quantity < 1:
-                continue
-
-            ticket = None
-            tier = None
-            amount = 0.00
-            is_free = True
-
-            # if it's sending ticket_id but the model expects ticket tiers to be fetched by that ID because of frontend mixup:
-            # Let's try matching TicketTier first if we think it came from the new UI
-            if ticket_id and not ticket_tier_id:
-                try:
-                    tier = TicketTier.objects.get(pk=ticket_id, event=event)
-                    ticket_tier_id = tier.id
-                    ticket_id = None
-                except TicketTier.DoesNotExist:
-                    pass
-
-            if ticket_tier_id:
-                try:
-                    tier = TicketTier.objects.get(pk=ticket_tier_id, event=event)
-                    if tier.min_age and (user_age is None or user_age < tier.min_age):
-                        return Response({'error': f'You must be at least {tier.min_age} to buy {tier.name}.'}, status=status.HTTP_403_FORBIDDEN)
-                    if tier.max_age and (user_age is None or user_age > tier.max_age):
-                        return Response({'error': f'You must be under {tier.max_age} to buy {tier.name}.'}, status=status.HTTP_403_FORBIDDEN)
-                    
-                    tier_booked = EventSlotBooking.objects.filter(ticket_tier=tier, booking_status__in=['confirmed', 'checked_in']).aggregate(
-                        total=models.Sum('quantity')
-                    )['total'] or 0
-                    if tier_booked + quantity > tier.capacity:
-                        return Response({'error': f'Tier "{tier.name}" capacity exceeded.'}, status=status.HTTP_400_BAD_REQUEST)
-                    
-                    amount = float(tier.price) * quantity
-                    is_free = (float(tier.price) == 0.00)
-                except TicketTier.DoesNotExist:
-                    return Response({'error': 'Ticket Tier not found'}, status=status.HTTP_404_NOT_FOUND)
-                
-            elif ticket_id:
-                try:
-                    ticket = EventTicket.objects.get(pk=ticket_id, event=event)
-                    amount = float(ticket.price) * quantity
-                    is_free = ticket.is_free
-                except EventTicket.DoesNotExist:
-                    return Response({'error': 'Ticket not found'}, status=status.HTTP_404_NOT_FOUND)
-            else:
-                ticket = event.tickets.first()
-                if not ticket:
-                    ticket = EventTicket.objects.create(
-                        event=event, ticket_type='regular', price=0.00,
-                        quantity_available=event.capacity, is_free=True
-                    )
-                amount = 0 if ticket.is_free else float(ticket.price) * quantity
-                is_free = ticket.is_free
-
-            if not tier:
-                existing = EventSlotBooking.objects.filter(event=event, user=request.user).first()
-                if existing and len(tickets_data) == 1:
-                    return Response({'error': 'You have already booked a slot for this event', 'booking': EventSlotBookingSerializer(existing).data}, status=status.HTTP_400_BAD_REQUEST)
-
-            if not is_free:
-                is_free_batch = False
-
+        if category in ('couple', 'group'):
+            holder = attendees[0] if attendees else {}
             booking = EventSlotBooking.objects.create(
                 event=event,
                 user=request.user,
                 ticket=ticket,
                 ticket_tier=tier,
-                quantity=quantity,
+                quantity=total_people,
                 booking_status='confirmed' if is_free else 'pending',
-                amount_paid=amount
+                amount_paid=amount,
+                attendee_name=holder.get('name', ''),
+                attendee_email=holder.get('email', ''),
+                attendee_phone=holder.get('phone', ''),
+                attendee_age=user_age,
+                group_name=group_name,
+                attendees=attendees,
             )
             bookings_created.append(booking)
+        else:
+            for attendee in attendees:
+                booking = EventSlotBooking.objects.create(
+                    event=event,
+                    user=request.user,
+                    ticket=ticket,
+                    ticket_tier=tier,
+                    quantity=1,
+                    booking_status='confirmed' if is_free else 'pending',
+                    amount_paid=unit_price,
+                    attendee_name=attendee.get('name', ''),
+                    attendee_email=attendee.get('email', ''),
+                    attendee_phone=attendee.get('phone', ''),
+                    attendee_age=user_age,
+                )
+                bookings_created.append(booking)
 
-        # Analytics Logging
         EventInteractionAnalytics.objects.create(
             event=event, user=request.user, interaction_type='ticket_click',
             viewer_age=user_age
@@ -1701,19 +1757,79 @@ class EventSlotBookingViewSet(ModelViewSet):
 
         serializer = EventSlotBookingSerializer(bookings_created, many=True)
         return Response({
-            'message': 'Slots booked successfully!' if is_free_batch else 'Booking created. Please complete payment.',
+            'message': 'Tickets booked successfully!' if is_free else 'Booking created. Please complete payment.',
             'purchases': serializer.data,
-            'is_free': is_free_batch,
-            'quantity': total_quantity_requested,
-            'requires_payment': not is_free_batch
+            'is_free': is_free,
+            'quantity': total_people,
+            'requires_payment': not is_free,
+            'category': category,
         }, status=status.HTTP_201_CREATED)
 
     @action(detail=False, methods=['get'])
     def my_bookings(self, request):
-        """Get all bookings for the current user"""
-        bookings = EventSlotBooking.objects.filter(user=request.user).order_by('-booked_at')
+        """Get all bookings for the current user, including tickets shared with them"""
+        owned = EventSlotBooking.objects.filter(user=request.user)
+        shared_ids = []
+        for booking in EventSlotBooking.objects.exclude(user=request.user).exclude(shared_with=[]):
+            if str(request.user.id) in (booking.shared_with or []):
+                shared_ids.append(booking.id)
+        shared = EventSlotBooking.objects.filter(id__in=shared_ids) if shared_ids else EventSlotBooking.objects.none()
+        bookings = (owned | shared).distinct().order_by('-booked_at')
         serializer = EventSlotBookingSerializer(bookings, many=True)
         return Response(serializer.data)
+
+    @action(detail=True, methods=['post'])
+    def share_ticket(self, request, pk=None):
+        """Share a ticket with another user by ID or email"""
+        booking = self.get_object()
+        if booking.user != request.user:
+            return Response({'error': 'You can only share your own tickets'}, status=status.HTTP_403_FORBIDDEN)
+
+        target_user_id = request.data.get('user_id')
+        target_email = request.data.get('email')
+
+        if not target_user_id and not target_email:
+            return Response({'error': 'Provide user_id or email of the user to share with'}, status=status.HTTP_400_BAD_REQUEST)
+
+        if target_user_id:
+            try:
+                target = CustomUser.objects.get(pk=target_user_id)
+            except CustomUser.DoesNotExist:
+                return Response({'error': 'User not found'}, status=status.HTTP_404_NOT_FOUND)
+        else:
+            try:
+                target = CustomUser.objects.get(email=target_email)
+            except CustomUser.DoesNotExist:
+                return Response({'error': 'User not found'}, status=status.HTTP_404_NOT_FOUND)
+
+        shared = booking.shared_with or []
+        target_id_str = str(target.id)
+        if target_id_str not in shared:
+            shared.append(target_id_str)
+            booking.shared_with = shared
+            booking.save()
+
+        return Response({'message': f'Ticket shared with {target.email}'})
+
+    @action(detail=True, methods=['post'])
+    def unshare_ticket(self, request, pk=None):
+        """Remove a user from shared access"""
+        booking = self.get_object()
+        if booking.user != request.user:
+            return Response({'error': 'You can only manage your own tickets'}, status=status.HTTP_403_FORBIDDEN)
+
+        target_user_id = request.data.get('user_id')
+        if not target_user_id:
+            return Response({'error': 'user_id is required'}, status=status.HTTP_400_BAD_REQUEST)
+
+        shared = booking.shared_with or []
+        target_id_str = str(target_user_id)
+        if target_id_str in shared:
+            shared.remove(target_id_str)
+            booking.shared_with = shared
+            booking.save()
+
+        return Response({'message': 'User removed from shared ticket'})
 
     @action(detail=False, methods=['get'], url_path='availability/(?P<event_id>[^/.]+)')
     def availability(self, request, event_id=None):
@@ -1747,6 +1863,8 @@ class EventSlotBookingViewSet(ModelViewSet):
             'tiers': [{
                 'id': tier.id,
                 'name': tier.name,
+                'category': tier.category,
+                'tier': tier.tier,
                 'price': str(tier.price),
                 'capacity': tier.capacity,
                 'group_size': tier.group_size,
@@ -1805,9 +1923,9 @@ class EventInteractionAnalyticsViewSet(ModelViewSet):
         # Basic cached demographics extraction
         user_profile = getattr(request.user, 'profile', None)
         user_age = None
-        if user_profile and user_profile.date_of_birth:
+        if user_profile and user_profile.birth_date:
             today = datetime.today()
-            dob = user_profile.date_of_birth
+            dob = user_profile.birth_date
             user_age = today.year - dob.year - ((today.month, today.day) < (dob.month, dob.day))
 
         EventInteractionAnalytics.objects.create(

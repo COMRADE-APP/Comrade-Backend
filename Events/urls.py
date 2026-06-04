@@ -50,6 +50,7 @@ router.register(r'event_sponsorship_history', EventSponsorshipHistoryViewSet, ba
 router.register(r'event_sponsorship_invoice', EventSponsorshipInvoiceViewSet, basename='event_sponsorship_invoice')
 router.register(r'event_sponsorship_letter', EventSponsorshipLetterViewSet, basename='event_sponsorship_letter')
 router.register(r'event_sponsorship_level', EventSponsorshipLevelViewSet, basename='event_sponsorship_level')
+router.register(r'sponsors', EventSponsorViewSet, basename='sponsor')
 router.register(r'event_sponsorship_recognition', EventSponsorshipRecognitionViewSet, basename='event_sponsorship_recognition')
 router.register(r'event_sponsorship_rejection', EventSponsorshipRejectionViewSet, basename='event_sponsorship_rejection')
 router.register(r'event_sponsorship_renewal', EventSponsorshipRenewalViewSet, basename='event_sponsorship_renewal')

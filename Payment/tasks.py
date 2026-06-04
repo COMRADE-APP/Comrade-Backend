@@ -165,6 +165,16 @@ def process_standing_orders():
                         status='completed',
                         description=f"Standing order: {order.provider.name}",
                     )
+                    
+                    from Payment.models import TransactionHistory
+                    TransactionHistory.objects.create(
+                        payment_profile=payment_profile,
+                        transaction_token=txn,
+                        amount=order.amount,
+                        transaction_category='bill_payment',
+                        status='completed',
+                        balance_after=payment_profile.wallet_balance
+                    )
 
                     # Create bill payment record
                     BillPayment.objects.create(
@@ -211,7 +221,7 @@ def _advance_bill_order_date(order):
     elif order.frequency == 'quarterly':
         order.next_run_date += relativedelta(months=3)
 
-
+def _is_order_due(order, today):
     if not order.next_run_date:
         order.next_run_date = order.start_date
         
@@ -766,13 +776,23 @@ def _process_automation_withdraw(order, group, amount, payment_profile):
         for m in active_members:
             m.payment_profile.comrade_balance += split_amount
             m.payment_profile.save()
-            TransactionToken.objects.create(
+            txn = TransactionToken.objects.create(
                 payment_profile=m.payment_profile,
                 transaction_code=uuid.uuid4(),
                 amount=split_amount,
                 transaction_type='transfer',
                 description=f"Group automation: Equal withdrawal split from {group.name}",
-                payment_group=group
+                payment_group=group,
+                balance_after=group.current_amount
+            )
+            from Payment.models import TransactionHistory
+            TransactionHistory.objects.create(
+                payment_profile=m.payment_profile,
+                transaction_token=txn,
+                amount=split_amount,
+                transaction_category='withdrawal',
+                status='completed',
+                balance_after=m.payment_profile.comrade_balance
             )
             
     elif mode == 'sequential':
@@ -794,13 +814,24 @@ def _process_automation_withdraw(order, group, amount, payment_profile):
         target_member.payment_profile.comrade_balance += amount
         target_member.payment_profile.save()
         
-        TransactionToken.objects.create(
+        txn = TransactionToken.objects.create(
             payment_profile=target_member.payment_profile,
             transaction_code=uuid.uuid4(),
             amount=amount,
             transaction_type='transfer',
             description=f"Group automation: Sequential withdrawal from {group.name}",
-            payment_group=group
+            payment_group=group,
+            balance_after=group.current_amount
+        )
+        
+        from Payment.models import TransactionHistory
+        TransactionHistory.objects.create(
+            payment_profile=target_member.payment_profile,
+            transaction_token=txn,
+            amount=amount,
+            transaction_category='withdrawal',
+            status='completed',
+            balance_after=target_member.payment_profile.comrade_balance
         )
         
         order.withdrawal_current_index = (index + 1) % len(seq)
@@ -823,13 +854,24 @@ def _process_automation_withdraw(order, group, amount, payment_profile):
         for m in members:
             m.payment_profile.comrade_balance += split_amount
             m.payment_profile.save()
-            TransactionToken.objects.create(
+            txn = TransactionToken.objects.create(
                 payment_profile=m.payment_profile,
                 transaction_code=uuid.uuid4(),
                 amount=split_amount,
                 transaction_type='transfer',
                 description=f"Group automation: Selected withdrawal from {group.name}",
-                payment_group=group
+                payment_group=group,
+                balance_after=group.current_amount
+            )
+            
+            from Payment.models import TransactionHistory
+            TransactionHistory.objects.create(
+                payment_profile=m.payment_profile,
+                transaction_token=txn,
+                amount=split_amount,
+                transaction_category='withdrawal',
+                status='completed',
+                balance_after=m.payment_profile.comrade_balance
             )
 
 def _process_automation_contribute(order, group, amount, payment_profile):
@@ -862,13 +904,26 @@ def _process_automation_contribute(order, group, amount, payment_profile):
     order.member.total_contributed += amount
     order.member.save()
     
+    group_balance = kitty.current_amount if (order.target_type == 'kitty' and order.target_id) else group.current_amount
+    
     txn = TransactionToken.objects.create(
         payment_profile=payment_profile,
         transaction_code=uuid.uuid4(),
         amount=amount,
         transaction_type='transfer',
         description=desc,
-        payment_group=group
+        payment_group=group,
+        balance_after=group_balance
+    )
+    
+    from Payment.models import TransactionHistory
+    TransactionHistory.objects.create(
+        payment_profile=payment_profile,
+        transaction_token=txn,
+        amount=amount,
+        transaction_category='contribution',
+        status='completed',
+        balance_after=payment_profile.wallet_balance
     )
     
     Contribution.objects.create(
@@ -902,7 +957,18 @@ def _process_automation_save(order, group, amount, payment_profile):
         amount=amount,
         transaction_type='transfer',
         description=f"Group automation: Savings to {target.name}",
-        payment_group=group
+        payment_group=group,
+        balance_after=target.current_amount
+    )
+    
+    from Payment.models import TransactionHistory
+    TransactionHistory.objects.create(
+        payment_profile=payment_profile,
+        transaction_token=txn,
+        amount=amount,
+        transaction_category='savings_contribution',
+        status='completed',
+        balance_after=payment_profile.wallet_balance
     )
     
     Contribution.objects.create(
@@ -923,13 +989,23 @@ def _process_automation_purchase(order, group, amount, payment_profile):
     payment_profile.wallet_balance -= amount
     payment_profile.save()
     
-    TransactionToken.objects.create(
+    txn = TransactionToken.objects.create(
         payment_profile=payment_profile,
         transaction_code=uuid.uuid4(),
         amount=amount,
         transaction_type='payment',
         description=f"Group automation: Auto-purchase {order.target_name}",
         payment_group=group
+    )
+    
+    from Payment.models import TransactionHistory
+    TransactionHistory.objects.create(
+        payment_profile=payment_profile,
+        transaction_token=txn,
+        amount=amount,
+        transaction_category='purchase',
+        status='completed',
+        balance_after=payment_profile.wallet_balance
     )
 
 def _process_automation_loan_repayment(order, group, amount, payment_profile):
@@ -942,13 +1018,23 @@ def _process_automation_loan_repayment(order, group, amount, payment_profile):
     payment_profile.wallet_balance -= amount
     payment_profile.save()
     
-    TransactionToken.objects.create(
+    txn = TransactionToken.objects.create(
         payment_profile=payment_profile,
         transaction_code=uuid.uuid4(),
         amount=amount,
         transaction_type='loan_repayment',
         description=f"Group automation: Loan Repayment for {order.target_name}",
         payment_group=group
+    )
+    
+    from Payment.models import TransactionHistory
+    TransactionHistory.objects.create(
+        payment_profile=payment_profile,
+        transaction_token=txn,
+        amount=amount,
+        transaction_category='loan_repayment',
+        status='completed',
+        balance_after=payment_profile.wallet_balance
     )
 
 
@@ -1072,3 +1158,88 @@ def send_daily_notification_digest():
             logger.info(f"Sent digest to {user.email}")
         except Exception as e:
             logger.error(f"Failed to send digest to {user.email}: {e}")
+
+
+# ============================================================================
+# CREDIT SCORE MONITORING (Phase 4 — ongoing)
+# ============================================================================
+
+@shared_task
+def monitor_credit_score_health():
+    """
+    Periodic check of credit score distribution health.
+
+    Detects:
+    - Distribution drift (PSI)
+    - Default rate exceeding threshold
+    - Empty risk-level bins
+    """
+    from Payment.models import CreditScore, LoanApplication
+    import json
+    import os
+    import math
+
+    logger.info("Running monitor_credit_score_health")
+
+    scores = list(CreditScore.objects.values_list('score', flat=True))
+    n = len(scores)
+    if n == 0:
+        logger.warning("No credit scores to monitor")
+        return
+
+    # PSI: compare current distribution to baseline deciles
+    baseline_path = os.path.join(
+        os.path.dirname(__file__), '..', 'credit_score_baseline.json'
+    )
+    psi = None
+    if os.path.exists(baseline_path):
+        with open(baseline_path) as f:
+            baseline = json.load(f)
+        b_dist = baseline.get('distribution', {})
+        b_mean = b_dist.get('mean', 500)
+        b_std = b_dist.get('stdev', 100)
+
+        if b_std > 0:
+            import statistics
+            c_mean = statistics.mean(scores)
+            c_std = statistics.stdev(scores) if len(scores) > 1 else 0
+
+            # Simplified PSI: compare mean/std shift
+            mean_shift = abs(c_mean - b_mean) / b_std
+            std_shift = abs(c_std - b_std) / b_std if b_std > 0 else 0
+            psi = mean_shift + std_shift
+
+            if psi > 0.25:
+                logger.warning(
+                    f"Credit score distribution shifted (PSI={psi:.3f}): "
+                    f"mean {b_mean:.0f}→{c_mean:.0f}, std {b_std:.0f}→{c_std:.0f}"
+                )
+
+    # Default rate on recent loans
+    from django.utils import timezone
+    from datetime import timedelta
+    recent = LoanApplication.objects.filter(
+        created_at__gte=timezone.now() - timedelta(days=90)
+    )
+    if recent.exists():
+        total = recent.count()
+        defaulted = recent.filter(status='defaulted').count()
+        rate = defaulted / total * 100
+        if rate > 15:
+            logger.warning(f"Default rate on recent loans: {rate:.1f}% (threshold: 15%)")
+        else:
+            logger.info(f"Default rate on recent loans: {rate:.1f}%")
+
+    # Empty risk-level bins
+    bins = {
+        'very_low': CreditScore.objects.filter(score__gt=700).count(),
+        'low': CreditScore.objects.filter(score__range=(601, 700)).count(),
+        'moderate': CreditScore.objects.filter(score__range=(451, 600)).count(),
+        'high': CreditScore.objects.filter(score__range=(301, 450)).count(),
+        'very_high': CreditScore.objects.filter(score__lte=300).count(),
+    }
+    empty = [k for k, v in bins.items() if v == 0]
+    if empty:
+        logger.warning(f"Empty risk-level bins: {empty}")
+
+    logger.info("Credit score health check complete")
