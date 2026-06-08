@@ -299,6 +299,7 @@ class EventDetailSerializer(serializers.ModelSerializer):
     interested_count = serializers.SerializerMethodField()
     user_reaction = serializers.SerializerMethodField()
     user_reminder = serializers.SerializerMethodField()
+    event_organizer_detail = serializers.SerializerMethodField()
     schedule_items = serializers.SerializerMethodField()
     speakers = serializers.SerializerMethodField()
     materials = serializers.SerializerMethodField()
@@ -308,18 +309,19 @@ class EventDetailSerializer(serializers.ModelSerializer):
     class Meta:
         model = Event
         fields = [
-            'id', 'name', 'description', 'capacity', 'duration',
+            'id', 'uuid', 'name', 'description', 'capacity', 'duration',
             'event_type', 'event_location', 'event_url',
             'start_time', 'end_time', 'booking_deadline', 'booking_status',
             'attendees', 'attendees_viewable', 'activate_feedback',
             'event_date', 'deadline_reached', 'location', 'status',
             'latitude', 'longitude', 'complexity_level',
             'scheduled_time', 'time_stamp', 'created_by', 'created_by_name',
-            'institution', 'organisation',
+            'institution', 'organisation', 'event_organizer', 'event_organizer_detail',
             'room', 'reactions_count', 'reactions_breakdown',
             'comments_count', 'interested_count',
             'user_reaction', 'user_reminder',
-            'schedule_items', 'speakers', 'materials', 'category_name'
+            'schedule_items', 'speakers', 'materials', 'category_name',
+            'seeking_sponsors', 'seeking_partners', 'is_ticketed', 'cover_image'
         ]
         read_only_fields = ['id', 'time_stamp']
     
@@ -352,6 +354,30 @@ class EventDetailSerializer(serializers.ModelSerializer):
             reminders = obj.user_reminders.filter(user=request.user).values_list('time_before', flat=True)
             return list(reminders)
         return []
+
+    def get_event_organizer_detail(self, obj):
+        if not obj.event_organizer:
+            return None
+        from Events.models import OrganizerProfile
+        try:
+            org = OrganizerProfile.objects.get(pk=obj.event_organizer_id)
+            request = self.context.get('request')
+            avatar_url = None
+            if org.avatar:
+                avatar_url = request.build_absolute_uri(org.avatar.url) if request else org.avatar.url
+            cover_url = None
+            if org.cover_photo:
+                cover_url = request.build_absolute_uri(org.cover_photo.url) if request else org.cover_photo.url
+            return {
+                'id': org.pk,
+                'business_name': org.business_name,
+                'avatar': avatar_url,
+                'cover_photo': cover_url,
+                'location': org.location,
+                'is_open_for_partnership': org.is_open_for_partnership,
+            }
+        except OrganizerProfile.DoesNotExist:
+            return None
     
     def get_schedule_items(self, obj):
         items = EventSchedule.objects.filter(event=obj).order_by('start_time')

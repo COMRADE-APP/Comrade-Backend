@@ -9,7 +9,8 @@ from Authentication.views_totp import (
     TOTPVerifyLoginView, TOTPDisableView, TOTPBackupCodesView
 )
 from Authentication.views import (
-    RegisterView, VerifyView, LoginView, LogoutView, LoginVerifyView,
+    RegisterView, RegisterOrganizerView, RegisterSponsorView,
+    VerifyView, LoginView, LogoutView, LoginVerifyView,
     RegisterVerifyView, HeartbeatView,
     PasswordResetRequestView, PasswordResetConfirmView,
     Setup2FAView, Confirm2FASetupView,
@@ -71,6 +72,8 @@ urlpatterns = [
     
     # Core Authentication
     path('register/', RegisterView.as_view(), name='register'),
+    path('register/organizer/', RegisterOrganizerView.as_view(), name='register-organizer'),
+    path('register/sponsor/', RegisterSponsorView.as_view(), name='register-sponsor'),
     path('register-verify/', RegisterVerifyView.as_view(), name='register-verify'),
     path('verify/', VerifyView.as_view(), name='verify'),
     path('login/', LoginView.as_view(), name='login'),

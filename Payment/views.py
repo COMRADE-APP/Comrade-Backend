@@ -38,7 +38,7 @@ from Payment.models import (
     Donation, DonationContribution, GroupInvestment, InvestmentQuote,
     RoundContribution, RoundMemberContribution, BenefitDistributionRule,
     WithdrawalRequest, GroupSettingsChangeRequest, GroupCertificate, RoundPosition,
-    PiggyBankConversionRequest,
+    PiggyBankConversionRequest, PiggyBankTransaction, PiggyBankMember,
     ProviderRegistration, ProviderDocument, ProviderStaff, ServiceProduct,
     ProviderTransaction, ProviderQuery, ProviderApplication, ProviderNotification,
     ProviderRating
@@ -65,7 +65,7 @@ from Payment.serializers import (
     RoundContributionSerializer, RoundMemberContributionSerializer,
     BenefitDistributionRuleSerializer, WithdrawalRequestSerializer,
     GroupSettingsChangeRequestSerializer, GroupCertificateSerializer, RoundPositionSerializer,
-    PiggyBankConversionRequestSerializer,
+    PiggyBankConversionRequestSerializer, PiggyBankMemberSerializer,
     ProviderRegistrationSerializer, ProviderRegistrationListSerializer, ProviderDocumentSerializer,
     ProviderStaffSerializer, ServiceProductSerializer, ProviderTransactionSerializer,
     ProviderQuerySerializer, ProviderApplicationSerializer, ProviderNotificationSerializer,
@@ -377,7 +377,7 @@ class PaymentProfileViewSet(ModelViewSet):
                         )
                     
                     # Create transaction record
-                    TransactionToken.objects.create(
+                    transaction = TransactionToken.objects.create(
                         payment_profile=payment_profile,
                         transaction_code=uuid.uuid4(),
                         amount=amount,
@@ -385,6 +385,34 @@ class PaymentProfileViewSet(ModelViewSet):
                         description=f'Contribution to Piggy Bank: {target.name}',
                         payment_group=target.payment_group,
                         piggy_bank=target
+                    )
+                    # Create user-facing transaction history
+                    TransactionHistory.objects.create(
+                        payment_profile=payment_profile,
+                        transaction_token=transaction,
+                        authorization_token=PaymentAuthorization.objects.create(
+                            payment_profile=payment_profile,
+                            authorization_code=secrets.token_hex(16)
+                        ),
+                        verification_token=PaymentVerification.objects.create(
+                            payment_profile=payment_profile,
+                            verification_code=secrets.token_hex(16)
+                        ),
+                        amount=amount,
+                        status='completed',
+                        transaction_category='piggy_bank_contribution',
+                        payment_type='group' if target.payment_group else 'individual',
+                        balance_after=payment_profile.comrade_balance,
+                        group_member_balance_after=member.total_contributed if member else None
+                    )
+                    # Log to dedicated piggy bank event log
+                    PiggyBankTransaction.objects.create(
+                        piggy_bank=target,
+                        event_type='contribution',
+                        amount=amount,
+                        performed_by=payment_profile,
+                        balance_after=target.current_amount,
+                        note=item.get('notes', ''),
                     )
                 except Exception as e:
                     logger.error(f"Error processing piggy bank contribution in checkout: {str(e)}")
@@ -639,6 +667,48 @@ class PaymentProfileViewSet(ModelViewSet):
                     "total_members": req.member.payment_group.members.count() if req.member.payment_group else 0,
                     "metadata": {
                         "frequency": req.frequency,
+                    }
+                })
+
+        # 8. Piggy Bank Action Requests (Merge, Extend, Dissolve, Leave needing votes)
+        from Payment.models import PiggyBankActionRequest
+        piggy_action_requests = PiggyBankActionRequest.objects.filter(
+            status='pending'
+        ).exclude(
+            action_type='withdraw'
+        ).filter(
+            Q(piggy_bank__payment_group__members__payment_profile=payment_profile) |
+            Q(piggy_bank__owner=payment_profile) |
+            Q(piggy_bank__piggy_members__payment_profile=payment_profile)
+        ).distinct()
+
+        for req in piggy_action_requests:
+            has_voted = req.votes.filter(voter=payment_profile).exists()
+            if not has_voted:
+                initiator_name = 'Unknown'
+                try:
+                    initiator_name = req.requested_by.user.user.first_name if (req.requested_by and hasattr(req.requested_by, 'user') and hasattr(req.requested_by.user, 'user')) else 'Member'
+                except Exception:
+                    pass
+                unified_list.append({
+                    "id": str(req.id),
+                    "request_type": "piggy_bank_action",
+                    "title": f"Piggy Bank {req.get_action_type_display()} Request",
+                    "amount": str(req.amount or 0),
+                    "status": req.status,
+                    "created_at": req.created_at.isoformat() if req.created_at else None,
+                    "initiator_name": initiator_name,
+                    "group_name": req.piggy_bank.payment_group.name if req.piggy_bank and req.piggy_bank.payment_group else None,
+                    "group_id": str(req.piggy_bank.payment_group.id) if req.piggy_bank and req.piggy_bank.payment_group else None,
+                    "target_id": str(req.piggy_bank.id) if req.piggy_bank else None,
+                    "approvals_count": req.votes.filter(vote='approve').count(),
+                    "rejections_count": req.votes.filter(vote='reject').count(),
+                    "total_members": PiggyBankMember.objects.filter(piggy_bank=req.piggy_bank, is_active=True).count() if req.piggy_bank else 1,
+                    "metadata": {
+                        "action_type": req.action_type,
+                        "piggy_bank_name": req.piggy_bank.name if req.piggy_bank else None,
+                        "reason": req.reason,
+                        "new_maturity_date": req.new_maturity_date.isoformat() if req.new_maturity_date else None,
                     }
                 })
 
@@ -1550,6 +1620,68 @@ class PaymentGroupsViewSet(ModelViewSet):
         return Response(PaymentGroupMemberSerializer(member).data, status=status.HTTP_201_CREATED)
     
     @action(detail=True, methods=['post'])
+    @db_transaction.atomic
+    def leave(self, request, pk=None):
+        """Leave a payment group. Processes financial exit and deactivates membership."""
+        group = self.get_object()
+        user = request.user
+        payment_profile = get_or_create_payment_profile(user)
+        if not payment_profile:
+            return Response({'error': 'Payment profile not found'}, status=status.HTTP_400_BAD_REQUEST)
+
+        member = PaymentGroupMember.objects.filter(
+            payment_group=group, payment_profile=payment_profile, is_active=True
+        ).first()
+        if not member:
+            return Response({'error': 'You are not an active member of this group'}, status=status.HTTP_403_FORBIDDEN)
+
+        # Calculate financial stake
+        balance = float(member.total_contributed or 0)
+
+        if balance > 0:
+            # Process withdrawal back to wallet
+            penalty_rate = group.immature_exit_penalty_rate if not group.is_matured else 0
+            penalty_amount = balance * (float(penalty_rate) / 100) if penalty_rate > 0 else 0
+            payout_amount = balance - penalty_amount
+
+            if payout_amount > 0:
+                payment_profile.comrade_balance += Decimal(str(payout_amount))
+                payment_profile.save()
+
+                TransactionToken.objects.create(
+                    payment_profile=payment_profile,
+                    transaction_type='withdrawal',
+                    amount=Decimal(str(payout_amount)),
+                    pay_from='internal',
+                    payment_option='comrade_balance',
+                    description=f'Exit payout from group: {group.name}',
+                    payment_group=group,
+                    status='completed',
+                )
+
+            if penalty_amount > 0:
+                TransactionToken.objects.create(
+                    payment_profile=payment_profile,
+                    transaction_type='fee',
+                    amount=Decimal(str(penalty_amount)),
+                    pay_from='internal',
+                    payment_option='comrade_balance',
+                    description=f'Early exit penalty ({penalty_rate}%) from group: {group.name}',
+                    payment_group=group,
+                    status='completed',
+                )
+
+        member.is_active = False
+        member.save()
+
+        return Response({
+            'status': 'Successfully left the group',
+            'balance_withdrawn': balance,
+            'penalty_applied': penalty_amount if balance > 0 else 0,
+            'payout_amount': payout_amount if balance > 0 else 0,
+        })
+    
+    @action(detail=True, methods=['post'])
     def start_round(self, request, pk=None):
         round_obj = self.get_object()
         
@@ -1621,35 +1753,6 @@ class PaymentGroupsViewSet(ModelViewSet):
             # Deduct from wallet
             payment_profile.comrade_balance -= amount
             payment_profile.save()
-            
-            # Create wallet transaction
-            import secrets
-            transaction = TransactionToken.objects.create(
-                payment_profile=payment_profile,
-                transaction_type='contribution',
-                amount=amount,
-                payment_option='comrade_balance',
-                description=f'Group contribution to {group.name}',
-                payment_group=group,
-                balance_after=payment_profile.comrade_balance
-            )
-            TransactionHistory.objects.create(
-                payment_profile=payment_profile,
-                transaction_token=transaction,
-                authorization_token=PaymentAuthorization.objects.create(
-                    payment_profile=payment_profile,
-                    authorization_code=secrets.token_hex(16)
-                ),
-                verification_token=PaymentVerification.objects.create(
-                    payment_profile=payment_profile,
-                    verification_code=secrets.token_hex(16)
-                ),
-                amount=amount,
-                status='completed',
-                transaction_category='contribution',
-                payment_type='group',
-                balance_after=payment_profile.comrade_balance
-            )
         elif payment_method == 'stripe':
             # Create Stripe PaymentIntent - return client_secret for frontend to complete
             result = StripeProvider.create_payment_intent(
@@ -1710,14 +1813,36 @@ class PaymentGroupsViewSet(ModelViewSet):
             notes=request.data.get('notes', '')
         )
         
-        # Create audit trail
-        TransactionToken.objects.create(
+        # Create audit trail with dual-recording
+        import secrets
+        transaction = TransactionToken.objects.create(
             payment_profile=payment_profile,
             transaction_code=uuid.uuid4(),
             amount=amount,
             transaction_type='contribution',
             description=f'Contribution to group: {group.name}',
-            payment_group=group
+            payment_group=group,
+            payment_option='comrade_balance' if payment_method == 'wallet' else payment_method,
+            balance_after=group.current_amount
+        )
+        
+        TransactionHistory.objects.create(
+            payment_profile=payment_profile,
+            transaction_token=transaction,
+            authorization_token=PaymentAuthorization.objects.create(
+                payment_profile=payment_profile,
+                authorization_code=secrets.token_hex(16)
+            ),
+            verification_token=PaymentVerification.objects.create(
+                payment_profile=payment_profile,
+                verification_code=secrets.token_hex(16)
+            ),
+            amount=amount,
+            status='completed',
+            transaction_category='contribution',
+            payment_type='group',
+            balance_after=payment_profile.comrade_balance,
+            group_member_balance_after=target_member.total_contributed
         )
         
         # Check if target reached
@@ -2534,7 +2659,7 @@ class PaymentGroupsViewSet(ModelViewSet):
 
     @action(detail=True, methods=['post'], url_path='change_capacity')
     def change_capacity(self, request, pk=None):
-        """Manually override capacity_category. Admin/creator only."""
+        """Manually override max_capacity. Admin/creator only."""
         group = self.get_object()
         payment_profile = get_or_create_payment_profile(request.user)
         if not payment_profile:
@@ -2547,13 +2672,12 @@ class PaymentGroupsViewSet(ModelViewSet):
         if not is_creator and not is_admin:
             return Response({'error': 'Only admins can change capacity'}, status=status.HTTP_403_FORBIDDEN)
 
-        new_capacity = request.data.get('capacity_category')
-        valid_categories = dict(PaymentGroups._meta.get_field('capacity_category').choices)
-        if not new_capacity or new_capacity not in valid_categories:
-            return Response({'error': f'capacity_category must be one of {list(valid_categories.keys())}'}, status=status.HTTP_400_BAD_REQUEST)
+        new_capacity = request.data.get('max_capacity')
+        if not new_capacity or not str(new_capacity).isdigit() or int(new_capacity) < 1:
+            return Response({'error': 'max_capacity must be a positive integer'}, status=status.HTTP_400_BAD_REQUEST)
 
-        group.capacity_category = new_capacity
-        group.save(update_fields=['capacity_category', 'updated_at'])
+        group.max_capacity = int(new_capacity)
+        group.save(update_fields=['max_capacity', 'updated_at'])
         serializer = self.get_serializer(group)
         return Response({
             'message': f'Capacity changed to {new_capacity}',
@@ -2990,17 +3114,41 @@ class PaymentGroupsViewSet(ModelViewSet):
         group.save()
         
         # Log group purchase
-        from Payment.models import TransactionToken, Order, OrderItem, Product
+        from Payment.models import TransactionToken, TransactionHistory, PaymentAuthorization, PaymentVerification, PaymentGroupMember, Order, OrderItem, Product
         from Authentication.models import Profile
         
-        TransactionToken.objects.create(
+        member = PaymentGroupMember.objects.filter(payment_group=group, payment_profile=payment_profile).first()
+        
+        import secrets
+        import uuid
+        transaction = TransactionToken.objects.create(
             payment_profile=payment_profile,
+            transaction_code=uuid.uuid4(),
             amount=amount,
             transaction_type='purchase',
             pay_from='group_wallet',
             payment_option='group_wallet',
             description=f'Group checkout for {group.name}',
-            payment_group=group
+            payment_group=group,
+            balance_after=group.current_amount
+        )
+        TransactionHistory.objects.create(
+            payment_profile=payment_profile,
+            transaction_token=transaction,
+            authorization_token=PaymentAuthorization.objects.create(
+                payment_profile=payment_profile,
+                authorization_code=secrets.token_hex(16)
+            ),
+            verification_token=PaymentVerification.objects.create(
+                payment_profile=payment_profile,
+                verification_code=secrets.token_hex(16)
+            ),
+            amount=amount,
+            status='completed',
+            transaction_category='purchase',
+            payment_type='group',
+            balance_after=payment_profile.comrade_balance,
+            group_member_balance_after=member.total_contributed if member else None
         )
         
         try:
@@ -3748,8 +3896,32 @@ class GroupTargetViewSet(ModelViewSet):
         # Get both individual piggy banks and group piggy banks
         return GroupTarget.objects.filter(
             Q(owner=payment_profile) |  # Individual piggy banks
-            Q(payment_group__members__payment_profile=payment_profile)  # Group piggy banks
+            Q(payment_group__members__payment_profile=payment_profile) |  # Group piggy banks
+            Q(visibility='public', status='active')  # Public piggy banks for non-member discovery
         ).distinct()
+
+    @action(detail=False, methods=['get'])
+    def discover(self, request):
+        """Return public, active piggy banks the user is not already a member of."""
+        payment_profile = get_or_create_payment_profile(request.user)
+        if not payment_profile:
+            return Response({'results': []})
+
+        member_piggy_ids = PiggyBankMember.objects.filter(
+            payment_profile=payment_profile, is_active=True
+        ).values_list('piggy_bank_id', flat=True)
+
+        queryset = GroupTarget.objects.filter(
+            visibility='public', status='active', owner__isnull=True
+        ).exclude(id__in=list(member_piggy_ids))
+
+        page = self.paginate_queryset(queryset)
+        if page is not None:
+            serializer = GroupTargetSerializer(page, many=True, context={'request': request})
+            return self.get_paginated_response(serializer.data)
+
+        serializer = GroupTargetSerializer(queryset, many=True, context={'request': request})
+        return Response({'results': serializer.data})
 
     def perform_create(self, serializer):
         user = self.request.user
@@ -3761,11 +3933,10 @@ class GroupTargetViewSet(ModelViewSet):
         payment_group_id = self.request.data.get('payment_group')
         
         if payment_group_id:
-            # Group piggy bank — check 3-group-piggy-membership limit
-            member_group_piggy_count = GroupTarget.objects.filter(
-                payment_group__members__payment_profile=payment_profile,
-                status='active'
-            ).distinct().count()
+            member_group_piggy_count = PiggyBankMember.objects.filter(
+                payment_profile=payment_profile,
+                is_active=True
+            ).count()
             if member_group_piggy_count >= GroupTarget.MAX_GROUP_PIGGY_MEMBERSHIPS:
                 raise serializers.ValidationError(
                     f"You can be a member of at most {GroupTarget.MAX_GROUP_PIGGY_MEMBERSHIPS} group piggy banks."
@@ -3780,7 +3951,7 @@ class GroupTargetViewSet(ModelViewSet):
                 raise serializers.ValidationError(
                     f"You can own at most {GroupTarget.MAX_INDIVIDUAL_PIGGY_BANKS} individual piggy banks."
                 )
-            serializer.save(owner=payment_profile)
+            serializer.save(owner=payment_profile, visibility='private')
 
     @action(detail=True, methods=['post'])
     def start_round(self, request, pk=None):
@@ -3847,15 +4018,34 @@ class GroupTargetViewSet(ModelViewSet):
         if payment_profile.comrade_balance < amount:
             return Response({'error': 'Insufficient balance'}, status=status.HTTP_400_BAD_REQUEST)
         
-        # Check locking for contributions (usually only withdrawals should be blocked)
-        if target.locking_status in ['locked', 'locked_time', 'locked_goal']:
-            # Allow contributions but notify about locked status
-            pass
-            
+        # Check membership — only PiggyBankMembers can contribute
+        piggy_member = PiggyBankMember.objects.filter(
+            piggy_bank=target, payment_profile=payment_profile, is_active=True
+        ).first()
+        if not piggy_member:
+            return Response({'error': 'You must be a member of this piggy bank to contribute'}, status=status.HTTP_403_FORBIDDEN)
+
+        # Check for pending leave vote — block contributions during leave voting
+        if PiggyBankActionRequest.objects.filter(
+            piggy_bank=target, requested_by=payment_profile,
+            action_type='leave', status='pending'
+        ).exists():
+            return Response({'error': 'You have a pending leave request. Cannot contribute until resolved.'}, status=status.HTTP_403_FORBIDDEN)
+
         # Deduct from user balance
         payment_profile.comrade_balance -= Decimal(str(amount))
         payment_profile.save()
         
+        # Create wallet transaction
+        # Add to piggy bank balance atomically
+        target = GroupTarget.objects.select_for_update().get(id=target.id)
+        target.current_amount += Decimal(str(amount))
+        target.save()
+
+        # Update PiggyBankMember total contribution
+        piggy_member.total_contributed += Decimal(str(amount))
+        piggy_member.save()
+
         # Create wallet transaction
         import secrets
         transaction = TransactionToken.objects.create(
@@ -3866,7 +4056,7 @@ class GroupTargetViewSet(ModelViewSet):
             description=f'Piggy bank contribution to {target.name}',
             payment_group=target.payment_group if target.payment_group else None,
             piggy_bank=target,
-            balance_after=payment_profile.comrade_balance
+            balance_after=target.current_amount
         )
         TransactionHistory.objects.create(
             payment_profile=payment_profile,
@@ -3883,34 +4073,28 @@ class GroupTargetViewSet(ModelViewSet):
             status='completed',
             transaction_category='piggy_bank_contribution',
             payment_type='group' if target.payment_group else 'individual',
-            balance_after=payment_profile.comrade_balance
+            balance_after=payment_profile.comrade_balance,
+            group_member_balance_after=float(piggy_member.total_contributed)
         )
-        
-        # Add to piggy bank balance atomically
-        target = GroupTarget.objects.select_for_update().get(id=target.id)
-        target.current_amount += Decimal(str(amount))
-        target.save()
-
-        # Update member total contribution if group piggy bank
-        member = None
-        if target.payment_group:
-            try:
-                member = PaymentGroupMember.objects.get(
-                    payment_group=target.payment_group, payment_profile=payment_profile
-                )
-                member.total_contributed += Decimal(str(amount))
-                member.save()
-            except PaymentGroupMember.DoesNotExist:
-                pass
 
         # Record contribution history
         from Payment.models import Contribution
         Contribution.objects.create(
             payment_group=target.payment_group,
             target=target,
-            member=member or PaymentGroupMember.objects.filter(payment_profile=payment_profile).first(), # Fallback for individual
+            member=PaymentGroupMember.objects.filter(payment_profile=payment_profile).first(),
             amount=amount,
             notes=request.data.get('notes', '')
+        )
+
+        # Log to dedicated piggy bank event log
+        PiggyBankTransaction.objects.create(
+            piggy_bank=target,
+            event_type='contribution',
+            amount=amount,
+            performed_by=payment_profile,
+            balance_after=target.current_amount,
+            note=request.data.get('notes', ''),
         )
 
         # Create audit trail with piggy bank reference
@@ -3973,12 +4157,27 @@ class GroupTargetViewSet(ModelViewSet):
              return Response({'error': 'Could not create payment profile'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
         if target.payment_group:
-            # Group Piggy Bank -> requires approval
-            from Payment.models import PiggyBankActionRequest, PaymentGroupMember
-            # check if member
-            if not PaymentGroupMember.objects.filter(payment_group=target.payment_group, payment_profile=payment_profile).exists():
-                return Response({'error': 'Not a member of this group'}, status=status.HTTP_403_FORBIDDEN)
-            
+            from Payment.models import PiggyBankActionRequest
+            # Check membership via PiggyBankMember
+            piggy_member = PiggyBankMember.objects.filter(
+                piggy_bank=target, payment_profile=payment_profile, is_active=True
+            ).first()
+            if not piggy_member:
+                return Response({'error': 'Not a member of this piggy bank'}, status=status.HTTP_403_FORBIDDEN)
+
+            # If sole member → 100% consensus is already met, execute immediately
+            total_members = PiggyBankMember.objects.filter(piggy_bank=target, is_active=True).count()
+            if total_members <= 1:
+                PiggyBankTransaction.objects.create(
+                    piggy_bank=target,
+                    event_type='approval_approved',
+                    amount=amount,
+                    performed_by=payment_profile,
+                    note='Sole member withdrawal — auto-approved',
+                )
+                return self._execute_withdraw_internal(target, amount, payment_profile, request)
+
+            # Multi-member group → create approval request
             req = PiggyBankActionRequest.objects.create(
                 piggy_bank=target,
                 requested_by=payment_profile,
@@ -3986,9 +4185,23 @@ class GroupTargetViewSet(ModelViewSet):
                 amount=amount,
                 reason=request.data.get('reason', '')
             )
+            PiggyBankTransaction.objects.create(
+                piggy_bank=target,
+                event_type='approval_requested',
+                amount=amount,
+                performed_by=payment_profile,
+                note=f"Withdrawal approval requested: {request.data.get('reason', '')}",
+            )
             return Response({'status': 'Withdrawal request created, pending group approval', 'request_id': str(req.id)})
         else:
-            # Individual Piggy Bank -> execute immediately
+            # Individual Piggy Bank → execute immediately
+            PiggyBankTransaction.objects.create(
+                piggy_bank=target,
+                event_type='approval_approved',
+                amount=amount,
+                performed_by=payment_profile,
+                note='Individual piggy bank withdrawal — auto-approved',
+            )
             return self._execute_withdraw_internal(target, amount, payment_profile, request)
 
     def _execute_withdraw_internal(self, target, amount, payment_profile, request):
@@ -4042,16 +4255,10 @@ class GroupTargetViewSet(ModelViewSet):
         
         # Check minimum contribution amount
         if target.require_min_contribution_amount:
-            member_total = 0
-            if target.payment_group:
-                try:
-                    member = PaymentGroupMember.objects.get(payment_group=target.payment_group, payment_profile=payment_profile)
-                    member_total = float(member.total_contributed)
-                except:
-                    pass
-            else:
-                member_total = sum(float(c.amount) for c in target.contributions.filter(payment_profile=payment_profile))
-            
+            piggy_member = PiggyBankMember.objects.filter(
+                piggy_bank=target, payment_profile=payment_profile, is_active=True
+            ).first()
+            member_total = float(piggy_member.total_contributed) if piggy_member else 0
             if member_total < float(target.require_min_contribution_amount):
                 return Response({'error': f'Must have contributed at least ${float(target.require_min_contribution_amount):.2f}. You have contributed ${member_total:.2f}'}, status=status.HTTP_400_BAD_REQUEST)
         
@@ -4064,14 +4271,14 @@ class GroupTargetViewSet(ModelViewSet):
                     pass
         
         # Check member age requirement
-        if target.require_min_member_age_days and target.payment_group:
-            try:
-                member = PaymentGroupMember.objects.get(payment_group=target.payment_group, payment_profile=payment_profile)
-                days_since_joined = (timezone.now() - member.joined_at).days
+        if target.require_min_member_age_days:
+            piggy_member = PiggyBankMember.objects.filter(
+                piggy_bank=target, payment_profile=payment_profile, is_active=True
+            ).first()
+            if piggy_member:
+                days_since_joined = (timezone.now() - piggy_member.joined_at).days
                 if days_since_joined < target.require_min_member_age_days:
                     return Response({'error': f'Must be a member for at least {target.require_min_member_age_days} days before withdrawing. You have been a member for {days_since_joined} days.'}, status=status.HTTP_400_BAD_REQUEST)
-            except PaymentGroupMember.DoesNotExist:
-                pass
         
         # ── Fixed-deposit penalty calculation ──
         penalty = target.calculate_withdrawal_penalty(amount)
@@ -4105,11 +4312,14 @@ class GroupTargetViewSet(ModelViewSet):
         t1 = TransactionToken.objects.create(
             payment_profile=payment_profile,
             transaction_code=uuid.uuid4(),
-            amount=Decimal(str(net_amount)),
+            amount=Decimal(str(amount)),
             transaction_type='piggy_bank_withdrawal',
             description=description,
             payment_group=target.payment_group,
-            piggy_bank=target
+            piggy_bank=target,
+            balance_after=target.current_amount,
+            pay_from='internal',
+            payment_option='wallet'
         )
         
         TransactionHistory.objects.create(
@@ -4124,37 +4334,22 @@ class GroupTargetViewSet(ModelViewSet):
                 verification_code=secrets.token_hex(16)
             ),
             amount=Decimal(str(net_amount)),
-            status='completed'
+            status='completed',
+            transaction_category='piggy_bank_withdrawal',
+            payment_type='group' if target.payment_group else 'individual',
+            balance_after=payment_profile.comrade_balance
         )
-        
-        # Also record the deduction from piggy bank as savings withdrawal
-        withdrawal_type = 'savings_withdrawal' if penalty == 0 else 'savings_withdrawal_penalty'
-        penalty_info = f' (Penalty: ${penalty:.2f}, Forfeited interest: ${forfeited_interest:.2f})' if penalty > 0 else ''
-        t2 = TransactionToken.objects.create(
-            payment_profile=payment_profile,
-            transaction_code=uuid.uuid4(),
+
+        # Log to dedicated piggy bank event log
+        PiggyBankTransaction.objects.create(
+            piggy_bank=target,
+            event_type='withdrawal',
             amount=Decimal(str(amount)),
-            transaction_type=withdrawal_type,
-            description=f'Savings withdrawal from "{target.name}". Original amount: ${float(amount):.2f}{penalty_info}. Net transferred to wallet: ${net_amount:.2f}. Remaining balance: ${float(target.current_amount):.2f}',
-            payment_group=target.payment_group,
-            piggy_bank=target
+            performed_by=payment_profile,
+            balance_after=target.current_amount,
+            note=description,
         )
-        
-        TransactionHistory.objects.create(
-            payment_profile=payment_profile,
-            transaction_token=t2,
-            authorization_token=PaymentAuthorization.objects.create(
-                payment_profile=payment_profile,
-                authorization_code=secrets.token_hex(16)
-            ),
-            verification_token=PaymentVerification.objects.create(
-                payment_profile=payment_profile,
-                verification_code=secrets.token_hex(16)
-            ),
-            amount=Decimal(str(amount)),
-            status='completed'
-        )
-        
+
         response_data = {
             'status': 'Withdrawal successful',
             'amount_withdrawn': amount,
@@ -4187,9 +4382,9 @@ class GroupTargetViewSet(ModelViewSet):
         payment_profile = get_or_create_payment_profile(user)
         
         if target.payment_group:
-            from Payment.models import PiggyBankActionRequest, PaymentGroupMember
-            if not PaymentGroupMember.objects.filter(payment_group=target.payment_group, payment_profile=payment_profile).exists():
-                return Response({'error': 'Not a member of this group'}, status=status.HTTP_403_FORBIDDEN)
+            from Payment.models import PiggyBankActionRequest
+            if not PiggyBankMember.objects.filter(piggy_bank=target, payment_profile=payment_profile, is_active=True).exists():
+                return Response({'error': 'Not a member of this piggy bank'}, status=status.HTTP_403_FORBIDDEN)
             req = PiggyBankActionRequest.objects.create(
                 piggy_bank=target,
                 requested_by=payment_profile,
@@ -4213,9 +4408,9 @@ class GroupTargetViewSet(ModelViewSet):
         payment_profile = get_or_create_payment_profile(user)
         
         if target.payment_group:
-            from Payment.models import PiggyBankActionRequest, PaymentGroupMember
-            if not PaymentGroupMember.objects.filter(payment_group=target.payment_group, payment_profile=payment_profile).exists():
-                return Response({'error': 'Not a member of this group'}, status=status.HTTP_403_FORBIDDEN)
+            from Payment.models import PiggyBankActionRequest
+            if not PiggyBankMember.objects.filter(piggy_bank=target, payment_profile=payment_profile, is_active=True).exists():
+                return Response({'error': 'Not a member of this piggy bank'}, status=status.HTTP_403_FORBIDDEN)
             req = PiggyBankActionRequest.objects.create(
                 piggy_bank=target,
                 requested_by=payment_profile,
@@ -4240,19 +4435,25 @@ class GroupTargetViewSet(ModelViewSet):
 
     @action(detail=True, methods=['get'])
     def action_requests(self, request, pk=None):
-        target = self.get_object()
-        from Payment.models import PiggyBankActionRequest, PiggyBankActionRequestVote
-        from Payment.serializers import PiggyBankActionRequestSerializer
-        reqs = PiggyBankActionRequest.objects.filter(piggy_bank=target).order_by('-created_at')
-        data = PiggyBankActionRequestSerializer(reqs, many=True).data
-        
-        # add user vote status
-        payment_profile = get_or_create_payment_profile(request.user)
-        for r in data:
-            vote = PiggyBankActionRequestVote.objects.filter(request_id=r['id'], voter=payment_profile).first()
-            r['current_user_vote'] = vote.vote if vote else None
+        import traceback
+        try:
+            target = self.get_object()
+            from Payment.models import PiggyBankActionRequest, PiggyBankActionRequestVote
+            from Payment.serializers import PiggyBankActionRequestSerializer
+            reqs = PiggyBankActionRequest.objects.filter(piggy_bank=target).order_by('-created_at')
+            data = PiggyBankActionRequestSerializer(reqs, many=True, context={'request': request}).data
             
-        return Response(data)
+            # add user vote status
+            payment_profile = get_or_create_payment_profile(request.user)
+            for r in data:
+                vote = PiggyBankActionRequestVote.objects.filter(request_id=r['id'], voter=payment_profile).first()
+                r['current_user_vote'] = vote.vote if vote else None
+                
+            return Response(data)
+        except Exception as e:
+            print('ERROR in action_requests:', str(e))
+            traceback.print_exc()
+            return Response({'error': str(e)}, status=500)
 
     @action(detail=True, methods=['post'])
     @db_transaction.atomic
@@ -4264,7 +4465,7 @@ class GroupTargetViewSet(ModelViewSet):
         if vote_choice not in ['approve', 'reject']:
             return Response({'error': 'Invalid vote'}, status=status.HTTP_400_BAD_REQUEST)
             
-        from Payment.models import PiggyBankActionRequest, PiggyBankActionRequestVote, PaymentGroupMember
+        from Payment.models import PiggyBankActionRequest, PiggyBankActionRequestVote
         action_req = PiggyBankActionRequest.objects.filter(id=request_id, piggy_bank=target).first()
         if not action_req:
             return Response({'error': 'Request not found'}, status=status.HTTP_404_NOT_FOUND)
@@ -4273,8 +4474,12 @@ class GroupTargetViewSet(ModelViewSet):
             return Response({'error': f'Request already {action_req.status}'}, status=status.HTTP_400_BAD_REQUEST)
             
         payment_profile = get_or_create_payment_profile(request.user)
-        if not PaymentGroupMember.objects.filter(payment_group=target.payment_group, payment_profile=payment_profile).exists():
-            return Response({'error': 'Not a member of this group'}, status=status.HTTP_403_FORBIDDEN)
+        piggy_member = PiggyBankMember.objects.filter(
+            piggy_bank=target, payment_profile=payment_profile, is_active=True
+        ).first()
+        if not piggy_member and target.owner != payment_profile:
+            return Response({'error': 'Not a member of this piggy bank'}, status=status.HTTP_403_FORBIDDEN)
+        total_members = PiggyBankMember.objects.filter(piggy_bank=target, is_active=True).count()
             
         vote_obj, created = PiggyBankActionRequestVote.objects.update_or_create(
             request=action_req,
@@ -4283,42 +4488,502 @@ class GroupTargetViewSet(ModelViewSet):
         )
         
         # check 100% consensus
-        total_members = target.payment_group.members.count()
         approvals = action_req.votes.filter(vote='approve').count()
         rejections = action_req.votes.filter(vote='reject').count()
         
         if approvals == total_members:
             action_req.status = 'approved'
             action_req.save()
-            # execute action
+
+            # Execute the action and surface the real result
             if action_req.action_type == 'withdraw':
-                res = self._execute_withdraw_internal(target, float(action_req.amount), action_req.requested_by, request)
-                if res.status_code == 200:
+                exec_res = self._execute_withdraw_internal(
+                    target, float(action_req.amount), action_req.requested_by, request
+                )
+                if exec_res.status_code == 200:
                     action_req.status = 'executed'
+                    action_req.save()
+                    PiggyBankTransaction.objects.create(
+                        piggy_bank=target,
+                        event_type='approval_approved',
+                        amount=action_req.amount,
+                        performed_by=action_req.requested_by,
+                        note=f"Withdrawal approved by consensus — {action_req.reason or ''}",
+                    )
+                    return Response({
+                        'status': 'Vote recorded and action executed due to 100% consensus',
+                        'executed': True
+                    })
                 else:
                     action_req.status = 'failed'
-                action_req.save()
+                    action_req.save()
+                    error_detail = exec_res.data.get('error', 'Execution failed') if hasattr(exec_res, 'data') else 'Execution failed'
+                    return Response({
+                        'status': 'Vote recorded but execution failed',
+                        'executed': False,
+                        'error': error_detail
+                    }, status=status.HTTP_200_OK)
+
             elif action_req.action_type == 'extend_maturity':
-                res = self._execute_extend_maturity_internal(target, action_req.new_maturity_date)
+                self._execute_extend_maturity_internal(target, action_req.new_maturity_date)
                 action_req.status = 'executed'
                 action_req.save()
             elif action_req.action_type == 'dissolve':
-                res = self._execute_dissolve_internal(target, action_req.requested_by, request)
-                if res.status_code == 200:
+                exec_res = self._execute_dissolve_internal(target, action_req.requested_by, request)
+                action_req.status = 'executed' if exec_res.status_code == 200 else 'failed'
+                action_req.save()
+            elif action_req.action_type == 'merge':
+                from decimal import Decimal
+                source_pbs = action_req.target_piggy_banks.all()
+                total_transferred = Decimal('0')
+                source_names = []
+                for source in source_pbs:
+                    amt = source.current_amount
+                    target.current_amount += amt
+                    source.current_amount = Decimal('0')
+                    source.status = 'inactive'
+                    source.is_active = False
+                    source.save()
+                    total_transferred += amt
+                    source_names.append(source.name)
+                    PiggyBankTransaction.objects.create(
+                        piggy_bank=source,
+                        event_type='transfer_out',
+                        amount=float(amt),
+                        performed_by=action_req.requested_by,
+                        note=f'Merged into {target.name}'
+                    )
+                    PiggyBankTransaction.objects.create(
+                        piggy_bank=target,
+                        event_type='transfer_in',
+                        amount=float(amt),
+                        performed_by=action_req.requested_by,
+                        note=f'Merged from {source.name}'
+                    )
+                    # Re-parent source PiggyBankMember records to target
+                    source.piggy_members.all().update(piggy_bank=target)
+                target.save()
+                action_req.status = 'executed'
+                action_req.save()
+                PiggyBankTransaction.objects.create(
+                    piggy_bank=target,
+                    event_type='approval_approved',
+                    amount=float(total_transferred),
+                    performed_by=action_req.requested_by,
+                    note=f'Merge approved by consensus — {action_req.reason or ""}',
+                )
+                try:
+                    requester_user = action_req.requested_by.user.user
+                    src_list = ', '.join(source_names)
+                    create_notification(
+                        recipient=requester_user,
+                        actor=request.user,
+                        notification_type='system',
+                        title='Merge Approved',
+                        message=f'Your merge request to combine into "{target.name}" was approved and executed. ${float(total_transferred):.2f} transferred from: {src_list}',
+                        action_url=f'/payments/piggy-banks/{target.id}',
+                    )
+                    for m in PiggyBankMember.objects.filter(piggy_bank=target, is_active=True).exclude(payment_profile=action_req.requested_by).exclude(payment_profile=payment_profile).select_related('payment_profile__user__user'):
+                        cu = m.payment_profile.user.user
+                        if cu.id != requester_user.id and cu.id != request.user.id:
+                            create_notification(
+                                recipient=cu,
+                                actor=request.user,
+                                notification_type='system',
+                                title='Merge Approved',
+                                message=f'The merge into "{target.name}" was approved by consensus. ${float(total_transferred):.2f} transferred.',
+                                action_url=f'/payments/piggy-banks/{target.id}',
+                            )
+                except Exception:
+                    pass
+
+            elif action_req.action_type == 'leave':
+                from decimal import Decimal
+                exec_res = self._execute_leave_internal(target, action_req, request)
+                if exec_res.status_code == 200:
                     action_req.status = 'executed'
+                    action_req.save()
+                    PiggyBankTransaction.objects.create(
+                        piggy_bank=target,
+                        event_type='approval_approved',
+                        amount=action_req.amount,
+                        performed_by=action_req.requested_by,
+                        note=f'Leave approved by consensus — {action_req.reason or ""}',
+                    )
                 else:
                     action_req.status = 'failed'
-                action_req.save()
-                
-            return Response({'status': 'Vote recorded and action executed due to 100% consensus'})
+                    action_req.save()
+
+            return Response({'status': 'Vote recorded and action executed due to 100% consensus', 'executed': True})
         
         if rejections > 0:
-            # 100% consensus failed
+            # Any rejection kills consensus
             action_req.status = 'rejected'
             action_req.save()
+            PiggyBankTransaction.objects.create(
+                piggy_bank=target,
+                event_type='approval_rejected',
+                amount=action_req.amount,
+                performed_by=payment_profile,
+                note=f"{action_req.get_action_type_display()} rejected — {action_req.reason or ''}",
+            )
+            try:
+                requester_user = action_req.requested_by.user.user
+                create_notification(
+                    recipient=requester_user,
+                    actor=request.user,
+                    notification_type='system',
+                    title=f'{action_req.get_action_type_display()} Rejected',
+                    message=f'Your {action_req.get_action_type_display().lower()} request for "{target.name}" was rejected by a group member.',
+                    action_url=f'/payments/piggy-banks/{target.id}',
+                )
+                for m in PiggyBankMember.objects.filter(piggy_bank=target, is_active=True).exclude(payment_profile=action_req.requested_by).exclude(payment_profile=payment_profile).select_related('payment_profile__user__user'):
+                    cu = m.payment_profile.user.user
+                    if cu.id != requester_user.id and cu.id != request.user.id:
+                        create_notification(
+                            recipient=cu,
+                            actor=request.user,
+                            notification_type='system',
+                            title=f'{action_req.get_action_type_display()} Rejected',
+                            message=f'A {action_req.get_action_type_display().lower()} request for "{target.name}" was rejected.',
+                            action_url=f'/payments/piggy-banks/{target.id}',
+                        )
+            except Exception:
+                pass
             return Response({'status': 'Vote recorded. Action rejected because 100% consensus is required.'})
             
         return Response({'status': 'Vote recorded successfully', 'approvals': approvals, 'total': total_members})
+
+    @action(detail=True, methods=['post'])
+    def join(self, request, pk=None):
+        """Join a piggy bank as a member."""
+        target = self.get_object()
+        user = request.user
+        payment_profile = get_or_create_payment_profile(user)
+
+        if PiggyBankMember.objects.filter(piggy_bank=target, payment_profile=payment_profile, is_active=True).exists():
+            return Response({'error': 'Already a member of this piggy bank'}, status=status.HTTP_400_BAD_REQUEST)
+
+        # Check 3-group-piggy-membership cap
+        current_memberships = PiggyBankMember.objects.filter(payment_profile=payment_profile, is_active=True).count()
+        if current_memberships >= GroupTarget.MAX_GROUP_PIGGY_MEMBERSHIPS:
+            return Response({'error': f'You can be a member of at most {GroupTarget.MAX_GROUP_PIGGY_MEMBERSHIPS} piggy banks.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        member = PiggyBankMember.objects.create(
+            piggy_bank=target,
+            payment_profile=payment_profile,
+            is_admin=False,
+            is_active=True,
+        )
+
+        PiggyBankTransaction.objects.create(
+            piggy_bank=target,
+            event_type='member_joined',
+            performed_by=payment_profile,
+            note=f'{payment_profile.user.user.get_full_name() or payment_profile.user.user.username} joined this piggy bank',
+        )
+
+        from Payment.serializers import PiggyBankMemberSerializer
+        return Response(PiggyBankMemberSerializer(member).data, status=status.HTTP_201_CREATED)
+
+    @action(detail=True, methods=['post'])
+    @db_transaction.atomic
+    def leave(self, request, pk=None):
+        """Leave a piggy bank. Triggers withdrawal of total_contributed."""
+        target = self.get_object()
+        user = request.user
+        payment_profile = get_or_create_payment_profile(user)
+
+        piggy_member = PiggyBankMember.objects.filter(
+            piggy_bank=target, payment_profile=payment_profile, is_active=True
+        ).first()
+        if not piggy_member:
+            return Response({'error': 'Not a member of this piggy bank'}, status=status.HTTP_403_FORBIDDEN)
+
+        withdraw_amount = float(piggy_member.total_contributed - piggy_member.total_withdrawn)
+        if withdraw_amount <= 0:
+            return Response({'error': 'You have no balance to withdraw. Leave request denied.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        if target.leave_requires_vote and PiggyBankMember.objects.filter(piggy_bank=target, is_active=True).count() > 1:
+            from Payment.models import PiggyBankActionRequest
+            req = PiggyBankActionRequest.objects.create(
+                piggy_bank=target,
+                requested_by=payment_profile,
+                action_type='leave',
+                amount=withdraw_amount,
+                reason=request.data.get('reason', '')
+            )
+            PiggyBankTransaction.objects.create(
+                piggy_bank=target,
+                event_type='approval_requested',
+                amount=withdraw_amount,
+                performed_by=payment_profile,
+                note=f'Leave request created: {request.data.get("reason", "")}',
+            )
+            return Response({'status': 'Leave request created, pending group approval', 'request_id': str(req.id)})
+        else:
+            return self._execute_leave_internal(target, piggy_member, request)
+
+    def _execute_leave_internal(self, target, piggy_member_or_req, request):
+        """Execute leave: withdraw total_contributed - total_withdrawn, apply fee, mark member inactive."""
+        if isinstance(piggy_member_or_req, PiggyBankActionRequest):
+            action_req = piggy_member_or_req
+            payment_profile = action_req.requested_by
+            piggy_member = PiggyBankMember.objects.filter(
+                piggy_bank=target, payment_profile=payment_profile, is_active=True
+            ).first()
+            if not piggy_member:
+                return Response({'error': 'Member not found'}, status=status.HTTP_404_NOT_FOUND)
+            waive_penalty = target.leave_vote_waives_penalty
+        else:
+            piggy_member = piggy_member_or_req
+            payment_profile = piggy_member.payment_profile
+            waive_penalty = False
+            action_req = None
+
+        withdraw_amount = float(piggy_member.total_contributed - piggy_member.total_withdrawn)
+        if withdraw_amount <= 0:
+            piggy_member.is_active = False
+            piggy_member.save()
+            PiggyBankTransaction.objects.create(
+                piggy_bank=target,
+                event_type='member_left',
+                performed_by=payment_profile,
+                note=f'{payment_profile.user.user.get_full_name() or payment_profile.user.user.username} left (no balance to withdraw)',
+            )
+            return Response({'status': 'Left piggy bank (no balance to withdraw)', 'amount_withdrawn': 0})
+
+        # If voting waived penalty, temporarily override savings_type for this withdrawal
+        original_penalty_rate = None
+        if waive_penalty and target.savings_type == 'fixed_deposit' and not target.is_matured:
+            original_penalty_rate = target.penalty_rate
+            target.penalty_rate = Decimal('0')
+
+        # Execute the withdrawal
+        exec_res = self._execute_withdraw_internal(target, withdraw_amount, payment_profile, request)
+
+        # Restore penalty rate if we overrode it
+        if original_penalty_rate is not None:
+            target.penalty_rate = original_penalty_rate
+            target.save()
+
+        if exec_res.status_code != 200:
+            return exec_res
+
+        # Apply inconvenience fee (stays in piggy bank)
+        if target.leave_inconvenience_fee_percentage > 0 and not waive_penalty:
+            fee_amount = withdraw_amount * (float(target.leave_inconvenience_fee_percentage) / 100)
+            if fee_amount > 0:
+                # Fee stays in piggy bank: re-deduct from user balance, add to target
+                payment_profile.comrade_balance -= Decimal(str(fee_amount))
+                payment_profile.save()
+                target.current_amount += Decimal(str(fee_amount))
+                target.save()
+                PiggyBankTransaction.objects.create(
+                    piggy_bank=target,
+                    event_type='withdrawal',
+                    amount=fee_amount,
+                    performed_by=payment_profile,
+                    note=f'Inconvenience fee ({target.leave_inconvenience_fee_percentage}%) for leaving — stays in piggy bank',
+                )
+
+        # Update member totals
+        piggy_member.total_withdrawn += Decimal(str(withdraw_amount))
+        piggy_member.is_active = False
+        piggy_member.save()
+
+        PiggyBankTransaction.objects.create(
+            piggy_bank=target,
+            event_type='member_left',
+            performed_by=payment_profile,
+            note=f'{payment_profile.user.user.get_full_name() or payment_profile.user.user.username} left the piggy bank',
+        )
+
+        return Response({
+            'status': 'Successfully left piggy bank',
+            'amount_withdrawn': withdraw_amount,
+            'fee_applied': target.leave_inconvenience_fee_percentage if not waive_penalty else 0,
+            'penalty_waived': waive_penalty,
+        })
+
+    @action(detail=True, methods=['post'])
+    @db_transaction.atomic
+    def transfer(self, request, pk=None):
+        """Transfer funds between two piggy banks."""
+        source = self.get_object()
+        target_id = request.data.get('target_id')
+        amount = request.data.get('amount')
+        if not target_id or not amount:
+            return Response({'error': 'target_id and amount are required'}, status=status.HTTP_400_BAD_REQUEST)
+        try:
+            amount = float(amount)
+        except ValueError:
+            return Response({'error': 'Invalid amount'}, status=status.HTTP_400_BAD_REQUEST)
+        if amount <= 0:
+            return Response({'error': 'Amount must be positive'}, status=status.HTTP_400_BAD_REQUEST)
+        from Payment.models import GroupTarget, PaymentGroupMember
+        target_pb = GroupTarget.objects.filter(id=target_id).first()
+        if not target_pb:
+            return Response({'error': 'Target piggy bank not found'}, status=status.HTTP_404_NOT_FOUND)
+        if source.id == target_pb.id:
+            return Response({'error': 'Cannot transfer to the same piggy bank'}, status=status.HTTP_400_BAD_REQUEST)
+        user = request.user
+        payment_profile = get_or_create_payment_profile(user)
+        if not payment_profile:
+            return Response({'error': 'Could not create payment profile'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        def user_can_access(pb):
+            if not pb.payment_group:
+                return pb.owner == payment_profile
+            return PiggyBankMember.objects.filter(piggy_bank=pb, payment_profile=payment_profile, is_active=True).exists()
+        if not user_can_access(source):
+            return Response({'error': 'Not authorized to access source piggy bank'}, status=status.HTTP_403_FORBIDDEN)
+        if not user_can_access(target_pb):
+            return Response({'error': 'Not authorized to access target piggy bank'}, status=status.HTTP_403_FORBIDDEN)
+        if source.current_amount < amount:
+            return Response({'error': 'Insufficient funds in source piggy bank'}, status=status.HTTP_400_BAD_REQUEST)
+        if source.locking_status in ('locked', 'locked_time', 'locked_goal'):
+            can_wd, wd_message = source.can_withdraw()
+            if not can_wd:
+                return Response({'error': f'Source piggy bank is locked: {wd_message}'}, status=status.HTTP_403_FORBIDDEN)
+        from decimal import Decimal
+        from Payment.models import PiggyBankTransaction
+        source.current_amount -= Decimal(str(amount))
+        source.save()
+        target_pb.current_amount += Decimal(str(amount))
+        target_pb.save()
+        PiggyBankTransaction.objects.create(piggy_bank=source, event_type='transfer_out', amount=amount, performed_by=payment_profile, note=f'Transferred ${amount:.2f} to {target_pb.name}')
+        PiggyBankTransaction.objects.create(piggy_bank=target_pb, event_type='transfer_in', amount=amount, performed_by=payment_profile, note=f'Received ${amount:.2f} from {source.name}')
+        return Response({'status': 'Transfer successful', 'source_balance': float(source.current_amount), 'target_balance': float(target_pb.current_amount)})
+
+    @action(detail=True, methods=['get'])
+    def available_for_merge(self, request, pk=None):
+        try:
+            target = self.get_object()
+            user = request.user
+            payment_profile = get_or_create_payment_profile(user)
+            from Payment.models import GroupTarget
+            if target.payment_group:
+                if not PiggyBankMember.objects.filter(piggy_bank=target, payment_profile=payment_profile, is_active=True).exists():
+                    return Response({'error': 'Not a member of this piggy bank'}, status=status.HTTP_403_FORBIDDEN)
+                available = GroupTarget.objects.filter(payment_group=target.payment_group, status='active').exclude(id=target.id).exclude(locking_status__in=['locked', 'locked_time', 'locked_goal'])
+            else:
+                if target.owner != payment_profile:
+                    return Response({'error': 'Not the owner of this piggy bank'}, status=status.HTTP_403_FORBIDDEN)
+                own_pbs = GroupTarget.objects.filter(owner=payment_profile, status='active').exclude(id=target.id).exclude(locking_status__in=['locked', 'locked_time', 'locked_goal'])
+                member_piggy_ids = PiggyBankMember.objects.filter(payment_profile=payment_profile, is_active=True).values_list('piggy_bank_id', flat=True)
+                group_pbs = GroupTarget.objects.filter(id__in=list(member_piggy_ids), status='active').exclude(locking_status__in=['locked', 'locked_time', 'locked_goal'])
+                available = own_pbs | group_pbs
+            from Payment.serializers import GroupTargetSerializer
+            data = GroupTargetSerializer(available.distinct(), many=True, context={'request': request}).data
+            return Response(data)
+        except Exception as e:
+            self.logger.error(f"available_for_merge failed: {str(e)}", exc_info=True)
+            return Response({'error': f'available_for_merge: {str(e)}'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+    @action(detail=True, methods=['post'])
+    @db_transaction.atomic
+    def request_merge(self, request, pk=None):
+        target = self.get_object()
+        user = request.user
+        payment_profile = get_or_create_payment_profile(user)
+        from Payment.models import GroupTarget, PiggyBankActionRequest
+        source_ids = request.data.get('source_ids', [])
+        reason = request.data.get('reason', '')
+        if not source_ids or not isinstance(source_ids, list):
+            return Response({'error': 'source_ids list is required'}, status=status.HTTP_400_BAD_REQUEST)
+        if target.payment_group:
+            if not PiggyBankMember.objects.filter(piggy_bank=target, payment_profile=payment_profile, is_active=True).exists():
+                return Response({'error': 'Not a member of this piggy bank'}, status=status.HTTP_403_FORBIDDEN)
+            source_pbs = GroupTarget.objects.filter(id__in=source_ids, payment_group=target.payment_group, status='active')
+        else:
+            if target.owner != payment_profile:
+                return Response({'error': 'Not the owner of this piggy bank'}, status=status.HTTP_403_FORBIDDEN)
+            own_member_ids = PiggyBankMember.objects.filter(payment_profile=payment_profile, is_active=True).values_list('piggy_bank_id', flat=True)
+            source_pbs = GroupTarget.objects.filter(id__in=source_ids, status='active').filter(
+                Q(owner=payment_profile) | Q(id__in=list(own_member_ids))
+            )
+        if len(source_pbs) != len(source_ids):
+            return Response({'error': 'One or more source piggy banks not found or not available for merge'}, status=status.HTTP_400_BAD_REQUEST)
+        for pb in source_pbs:
+            if pb.locking_status in ('locked', 'locked_time', 'locked_goal'):
+                return Response({'error': f'Piggy bank "{pb.name}" is locked and cannot be merged'}, status=status.HTTP_400_BAD_REQUEST)
+        merge_req = PiggyBankActionRequest.objects.create(piggy_bank=target, requested_by=payment_profile, action_type='merge', reason=reason, amount=sum(pb.current_amount for pb in source_pbs))
+        merge_req.target_piggy_banks.set(source_pbs)
+        from Payment.models import PiggyBankTransaction
+        approval_needed = PiggyBankMember.objects.filter(piggy_bank=target, is_active=True).count() > 1
+        source_names = ', '.join(pb.name for pb in source_pbs)
+        PiggyBankTransaction.objects.create(piggy_bank=target, event_type='approval_requested', amount=float(merge_req.amount) if merge_req.amount else 0, performed_by=payment_profile, note=f'Merge request created: merge {len(source_pbs)} piggy bank(s) into {target.name}')
+        if not approval_needed:
+            from Payment.models import PiggyBankActionRequestVote
+            PiggyBankActionRequestVote.objects.create(request=merge_req, voter=payment_profile, vote='approve')
+            merge_req.status = 'approved'
+            merge_req.save()
+            from decimal import Decimal
+            total_transferred = Decimal('0')
+            for source in source_pbs:
+                amt = source.current_amount
+                target.current_amount += amt
+                source.current_amount = Decimal('0')
+                source.status = 'inactive'
+                source.is_active = False
+                source.save()
+                total_transferred += amt
+                source.piggy_members.all().update(piggy_bank=target)
+                PiggyBankTransaction.objects.create(piggy_bank=source, event_type='transfer_out', amount=float(amt), performed_by=payment_profile, note=f'Merged into {target.name}')
+                PiggyBankTransaction.objects.create(piggy_bank=target, event_type='transfer_in', amount=float(amt), performed_by=payment_profile, note=f'Merged from {source.name}')
+            target.save()
+            merge_req.status = 'executed'
+            merge_req.save()
+            PiggyBankTransaction.objects.create(piggy_bank=target, event_type='approval_approved', amount=float(total_transferred), performed_by=payment_profile, note=f'Merge auto-approved — {reason or ""}')
+            try:
+                create_notification(
+                    recipient=payment_profile.user.user,
+                    actor=request.user,
+                    notification_type='system',
+                    title='Merge Completed',
+                    message=f'Your merge request to combine {len(source_pbs)} piggy bank(s) into "{target.name}" was auto-approved and executed. ${float(total_transferred):.2f} transferred.',
+                    action_url=f'/payments/piggy-banks/{target.id}',
+                )
+            except Exception:
+                pass
+            return Response({'status': 'Merge executed successfully (auto-approved)', 'request_id': str(merge_req.id), 'total_amount': float(total_transferred)})
+        # Notify other piggy bank members about the pending vote
+        try:
+            other_members = PiggyBankMember.objects.filter(piggy_bank=target, is_active=True).exclude(payment_profile=payment_profile).select_related('payment_profile__user__user')
+            for m in other_members:
+                custom_user = m.payment_profile.user.user
+                if custom_user.id != request.user.id:
+                    create_notification(
+                        recipient=custom_user,
+                        actor=request.user,
+                        notification_type='system',
+                        title='Merge Vote Required',
+                        message=f'A merge request to combine {len(source_pbs)} piggy bank(s) into "{target.name}" needs your approval. Source(s): {source_names}',
+                        action_url=f'/payments/piggy-banks/{target.id}',
+                    )
+        except Exception:
+            pass
+        return Response({'status': 'Merge request created, pending group approval', 'request_id': str(merge_req.id), 'total_amount': float(merge_req.amount) if merge_req.amount else 0})
+
+    @action(detail=True, methods=['get'])
+    def my_merge_requests(self, request, pk=None):
+        try:
+            target = self.get_object()
+            user = request.user
+            payment_profile = get_or_create_payment_profile(user)
+            from Payment.models import PiggyBankActionRequest, PiggyBankActionRequestVote
+            from Payment.serializers import PiggyBankActionRequestSerializer
+            reqs = PiggyBankActionRequest.objects.filter(action_type='merge').filter(Q(piggy_bank=target) | Q(target_piggy_banks=target)).order_by('-created_at').distinct()
+            data = PiggyBankActionRequestSerializer(reqs, many=True, context={'request': request}).data
+            for r in data:
+                vote = PiggyBankActionRequestVote.objects.filter(request_id=r['id'], voter=payment_profile).first()
+                r['current_user_vote'] = vote.vote if vote else None
+            return Response(data)
+        except Exception as e:
+            self.logger.error(f"my_merge_requests failed: {str(e)}", exc_info=True)
+            return Response({'error': f'my_merge_requests: {str(e)}'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+    @action(detail=True, methods=['post'])
     def lock(self, request, pk=None):
         """Lock a piggy bank with validation"""
         target = self.get_object()
@@ -4351,56 +5016,256 @@ class GroupTargetViewSet(ModelViewSet):
         for c in contributions:
             mid = str(c.member.id)
             if mid not in member_map:
+                user_obj = c.member.payment_profile.user.user
+                profile_obj = c.member.payment_profile.user
                 member_map[mid] = {
                     'id': mid,
-                    'name': c.member.anonymous_alias if c.member.is_anonymous else c.member.payment_profile.user.user.get_full_name(),
-                    'total_contributed': 0,
+                    'name': user_obj.get_full_name() or user_obj.username or user_obj.email,
+                    'email': user_obj.email,
+                    'profile_picture': profile_obj.profile_picture.url if profile_obj.profile_picture else '',
                     'is_anonymous': c.member.is_anonymous,
-                    'role': c.member.role
+                    'anonymous_alias': c.member.anonymous_alias,
+                    'total_contributed': str(c.amount),
+                    'last_contributed_at': c.contributed_at.isoformat(),
+                    'contribution_count': 1,
                 }
-            member_map[mid]['total_contributed'] += float(c.amount)
-        
+            else:
+                member_map[mid]['total_contributed'] = str(
+                    Decimal(member_map[mid]['total_contributed']) + Decimal(str(c.amount))
+                )
+                member_map[mid]['contribution_count'] += 1
+                if c.contributed_at.isoformat() > member_map[mid]['last_contributed_at']:
+                    member_map[mid]['last_contributed_at'] = c.contributed_at.isoformat()
+
         return Response(list(member_map.values()))
 
     @action(detail=True, methods=['get'])
-    def piggy_analytics(self, request, pk=None):
-        """Rich analytics and contribution trends for this piggy bank."""
+    def member_stats(self, request, pk=None):
+        """Aggregate stats about this piggy bank's members for non-member discovery."""
         target = self.get_object()
+
+        from Payment.models import PiggyBankTransaction, PiggyBankConversionRequest
+        from django.db.models import Sum, Max
+        from django.utils import timezone
+        from decimal import Decimal
+
+        members = PiggyBankMember.objects.filter(piggy_bank=target, is_active=True)
+        member_count = members.count()
+
+        avg_contribution = 0
+        if member_count > 0:
+            total = target.current_amount
+            avg_contribution = round(float(total) / member_count, 2)
+
+        # Nationalities from CustomUser.country_of_origin
+        nationalities = []
+        for m in members.select_related('payment_profile__user__user').iterator():
+            try:
+                code = m.payment_profile.user.user.country_of_origin
+            except AttributeError:
+                code = None
+            if code:
+                nationalities.append(code)
+        unique_nationalities = list(dict.fromkeys(nationalities))
+
+        # Top/bottom contributors from transactions
+        txns = PiggyBankTransaction.objects.filter(
+            piggy_bank=target, event_type='contribution'
+        ).values('performed_by__user__user__first_name',
+                 'performed_by__user__user__last_name')\
+         .annotate(total=Sum('amount')).order_by('-total')
+
+        top = None
+        bottom = None
+        if txns:
+            first = txns.first()
+            top = {'name': f"{first['performed_by__user__user__first_name']} {first['performed_by__user__user__last_name']}".strip(),
+                   'amount': float(first['total'])}
+            last = txns.last()
+            bottom = {'name': f"{last['performed_by__user__user__first_name']} {last['performed_by__user__user__last_name']}".strip(),
+                      'amount': float(last['total'])}
+
+        # Aggregate contribution stats for discovery
+        contrib_agg = PiggyBankTransaction.objects.filter(
+            piggy_bank=target, event_type='contribution'
+        ).aggregate(
+            total_contributions=Sum('amount'),
+            contribution_count=Sum('amount'),  # count placeholder — recount properly
+            last_contribution_date=Max('created_at')
+        )
+        total_contributions = float(contrib_agg['total_contributions'] or 0)
+        contribution_count = PiggyBankTransaction.objects.filter(
+            piggy_bank=target, event_type='contribution'
+        ).count()
+        last_contribution_date = contrib_agg['last_contribution_date']
+        created_days_ago = (timezone.now() - target.created_at).days if target.created_at else 0
+
+        # Group conversion status
+        conversion_status = None
+        conv = PiggyBankConversionRequest.objects.filter(
+            piggy_bank=target, status='pending'
+        ).first()
+        if conv:
+            conversion_status = conv.status
+        elif PiggyBankConversionRequest.objects.filter(piggy_bank=target, status='approved').exists():
+            conversion_status = 'approved'
+
+        return Response({
+            'member_count': member_count,
+            'average_contribution': avg_contribution,
+            'member_nationalities': unique_nationalities,
+            'top_contributor': top,
+            'bottom_contributor': bottom,
+            'group_conversion_status': conversion_status,
+            'total_contributions': total_contributions,
+            'contribution_count': contribution_count,
+            'last_contribution_date': last_contribution_date.isoformat() if last_contribution_date else None,
+            'created_days_ago': created_days_ago,
+        })
+
+    @action(detail=True, methods=['get'])
+    def piggy_analytics(self, request, pk=None):
+        """Rich analytics and contribution trends for this piggy bank using PiggyBankTransaction."""
+        target = self.get_object()
+        profile = get_or_create_payment_profile(request.user)
+        if not PiggyBankMember.objects.filter(piggy_bank=target, payment_profile=profile, is_active=True).exists():
+            return Response({'error': 'Only members can view analytics'}, status=403)
         now = timezone.now()
         thirty_days_ago = now - timedelta(days=30)
-        
-        # Growth and Trends
-        all_contributions = target.contributions.all()
-        recent_contributions = all_contributions.filter(contributed_at__gte=thirty_days_ago)
-        
-        growth_30d = sum(float(c.amount) for c in recent_contributions)
-        
-        # Monthly trends (last 6 months)
+        from Payment.models import PiggyBankTransaction
+
+        # Growth and Trends from events
+        all_events = target.piggy_events.all()
+        recent_events = all_events.filter(created_at__gte=thirty_days_ago, event_type='contribution')
+        growth_30d = sum(float(e.amount) for e in recent_events)
+
+        # Build month buckets (last 6 months)
+        month_buckets = []
+        for i in range(5, -1, -1):
+            month_start = (now.replace(day=1) - timedelta(days=i * 30)).replace(day=1)
+            next_month = (month_start + timedelta(days=32)).replace(day=1)
+            month_buckets.append((month_start.strftime('%b'), month_start, next_month))
+
+        # Monthly trends: contributions + withdrawals + conversions side-by-side
         monthly_trends = []
         max_monthly = 0
-        for i in range(5, -1, -1):
-            month_start = (now.replace(day=1) - timedelta(days=i*30)).replace(day=1)
-            next_month = (month_start + timedelta(days=32)).replace(day=1)
-            month_amount = sum(float(c.amount) for c in all_contributions.filter(contributed_at__gte=month_start, contributed_at__lt=next_month))
-            month_label = month_start.strftime('%b')
-            monthly_trends.append({'month': month_label, 'amount': month_amount})
+        for label, m_start, m_end in month_buckets:
+            month_contribs = all_events.filter(event_type='contribution', created_at__gte=m_start, created_at__lt=m_end)
+            month_amount = sum(float(e.amount) for e in month_contribs)
+            month_wd_txns = all_events.filter(event_type='withdrawal', created_at__gte=m_start, created_at__lt=m_end)
+            month_withdrawals = sum(float(e.amount) for e in month_wd_txns)
+            month_conv_txns = all_events.filter(event_type='conversion', created_at__gte=m_start, created_at__lt=m_end)
+            month_conversions = sum(float(e.amount) for e in month_conv_txns)
+            monthly_trends.append({
+                'month': label,
+                'amount': month_amount,
+                'withdrawals': month_withdrawals,
+                'conversions': month_conversions,
+                'contribution_count': month_contribs.count(),
+                'withdrawal_count': month_wd_txns.count(),
+                'conversion_count': month_conv_txns.count(),
+            })
             if month_amount > max_monthly:
                 max_monthly = month_amount
 
-        # Top Stakers
+        # Top Stakers — keyed by performed_by (PaymentProfile)
         member_contributions = {}
-        for c in all_contributions:
-            if not c.member: continue
-            mid = str(c.member.id)
-            if mid not in member_contributions:
-                member_contributions[mid] = {
-                    'user_name': c.member.anonymous_alias if c.member.is_anonymous else (c.member.payment_profile.user.user.get_full_name() if c.member.payment_profile else "Unknown User"),
-                    'total_contributed': 0
-                }
-            member_contributions[mid]['total_contributed'] += float(c.amount)
-            
+        for e in all_events.filter(event_type='contribution').select_related('performed_by__user__user'):
+            if not e.performed_by:
+                continue
+            pid = str(e.performed_by_id)
+            if pid not in member_contributions:
+                try:
+                    name = e.performed_by.user.user.get_full_name() or e.performed_by.user.user.username
+                except Exception:
+                    name = 'Unknown User'
+                profile_obj = e.performed_by.user
+                pic_url = profile_obj.profile_picture.url if profile_obj.profile_picture else ''
+                member_contributions[pid] = {'user_name': name, 'total_contributed': 0, 'profile_picture': pic_url}
+            member_contributions[pid]['total_contributed'] += float(e.amount)
         top_stakers = sorted(member_contributions.values(), key=lambda x: x['total_contributed'], reverse=True)[:5]
+
+        # Stats from events (conversions count as withdrawals but tracked separately)
+        total_withdrawn = sum(float(e.amount) for e in all_events.filter(event_type__in=['withdrawal', 'conversion']))
+        withdrawal_count = all_events.filter(event_type__in=['withdrawal', 'conversion']).count()
+        total_converted = sum(float(e.amount) for e in all_events.filter(event_type='conversion'))
+        conversion_count = all_events.filter(event_type='conversion').count()
+
+        # Approval request stats — combine PiggyBankActionRequest (voting) with
+        # PiggyBankTransaction (auto-approvals for sole-member + vote outcomes)
+        from Payment.models import PiggyBankActionRequest
+        action_reqs = PiggyBankActionRequest.objects.filter(piggy_bank=target)
+        pbt_approved = PiggyBankTransaction.objects.filter(
+            piggy_bank=target, event_type='approval_approved'
+        ).count()
+        pbt_rejected = PiggyBankTransaction.objects.filter(
+            piggy_bank=target, event_type='approval_rejected'
+        ).count()
+        # Non-withdraw action requests (extend_maturity, dissolve) don't log to PBT
+        ar_approved = action_reqs.filter(
+            status__in=['approved', 'executed']
+        ).exclude(action_type='withdraw').count()
+        ar_rejected = action_reqs.filter(
+            status='rejected'
+        ).exclude(action_type='withdraw').count()
         
+        # Member activity
+        members_joined = 0
+        members_left = 0
+        member_join_trend = []
+        if target.payment_group:
+            group_members = target.payment_group.members.all()
+            members_joined = group_members.count()
+            members_left = group_members.filter(is_active=False).count()
+            for label, m_start, m_end in month_buckets:
+                joined_this_month = group_members.filter(joined_at__gte=m_start, joined_at__lt=m_end).count()
+                member_join_trend.append({'month': label, 'joined': joined_this_month})
+
+        active_contrib_months = [m for m in monthly_trends if m['amount'] > 0]
+        avg_monthly_contribution = (sum(m['amount'] for m in active_contrib_months) / len(active_contrib_months)) if active_contrib_months else 0
+        active_wd_months = [m for m in monthly_trends if m['withdrawals'] > 0]
+        avg_monthly_withdrawal = (sum(m['withdrawals'] for m in active_wd_months) / len(active_wd_months)) if active_wd_months else 0
+        active_conv_months = [m for m in monthly_trends if m['conversions'] > 0]
+        avg_monthly_conversion = (sum(m['conversions'] for m in active_conv_months) / len(active_conv_months)) if active_conv_months else 0
+
+        # Merge analytics — was this piggy bank merged into another?
+        merged_into_target = None
+        merge_as_source_req = target.merge_requests.filter(status__in=['executed', 'approved']).first()
+        if merge_as_source_req:
+            merged_into_target = {
+                'target_id': str(merge_as_source_req.piggy_bank.id),
+                'target_name': merge_as_source_req.piggy_bank.name,
+                'amount': float(merge_as_source_req.amount or 0),
+                'executed_at': merge_as_source_req.updated_at.isoformat() if merge_as_source_req.updated_at else None,
+            }
+
+        # Merge analytics — was this piggy bank a merge target that absorbed sources?
+        merged_sources = []
+        merge_as_target_reqs = action_reqs.filter(action_type='merge', status__in=['executed', 'approved'])
+        for m_req in merge_as_target_reqs:
+            for src in m_req.target_piggy_banks.all():
+                src_member_count = 0
+                if src.payment_group:
+                    src_member_count = src.payment_group.members.count()
+                else:
+                    src_member_count = 1 if src.owner else 0
+                src_contrib_total = sum(float(e.amount) for e in PiggyBankTransaction.objects.filter(piggy_bank=src, event_type='contribution'))
+                src_wd_total = sum(float(e.amount) for e in PiggyBankTransaction.objects.filter(piggy_bank=src, event_type__in=['withdrawal', 'conversion']))
+                out_event = PiggyBankTransaction.objects.filter(
+                    piggy_bank=src,
+                    event_type='transfer_out',
+                    note__startswith='Merged into'
+                ).first()
+                merged_sources.append({
+                    'source_id': str(src.id),
+                    'source_name': src.name,
+                    'amount_transferred': float(out_event.amount) if out_event else 0,
+                    'member_count': src_member_count,
+                    'total_contributions': round(src_contrib_total, 2),
+                    'total_withdrawals': round(src_wd_total, 2),
+                    'merged_at': m_req.updated_at.isoformat() if m_req.updated_at else None,
+                })
+
         return Response({
             'total_saved': float(target.current_amount),
             'target_amount': float(target.target_amount),
@@ -4409,8 +5274,92 @@ class GroupTargetViewSet(ModelViewSet):
             'is_mature': target.is_matured,
             'total_contributors': len(member_contributions),
             'monthly_trends': monthly_trends,
-            'top_stakers': top_stakers
-})
+            'top_stakers': top_stakers,
+            'total_withdrawn': total_withdrawn,
+            'withdrawal_count': withdrawal_count,
+            'total_converted': total_converted,
+            'conversion_count': conversion_count,
+            'avg_monthly_contribution': round(avg_monthly_contribution, 2),
+            'avg_monthly_withdrawal': round(avg_monthly_withdrawal, 2),
+            'avg_monthly_conversion': round(avg_monthly_conversion, 2),
+            'total_approval_requests': action_reqs.count() + pbt_approved + pbt_rejected,
+            'approvals_approved': ar_approved + pbt_approved,
+            'approvals_rejected': ar_rejected + pbt_rejected,
+            'approvals_pending': action_reqs.filter(status='pending').count(),
+            'members_joined': members_joined,
+            'members_left': members_left,
+            'member_join_trend': member_join_trend,
+            'merged_into_target': merged_into_target,
+            'merged_sources': merged_sources,
+            'total_merged_sources': len(merged_sources),
+            'total_merged_amount': sum(s['amount_transferred'] for s in merged_sources),
+        })
+
+    @action(detail=True, methods=['post'])
+    def backfill_piggy_events(self, request, pk=None):
+        """
+        One-time backfill: migrate existing TransactionToken records for this piggy bank
+        into PiggyBankTransaction so historical data appears in analytics.
+        Safe to call repeatedly — skips records already imported.
+        """
+        target = self.get_object()
+        payment_profile = get_or_create_payment_profile(request.user)
+
+        # Permission: owner of individual piggy or group admin
+        is_owner = (not target.payment_group) and getattr(target, 'creator', None) == payment_profile
+        is_admin = target.payment_group and target.payment_group.creator == payment_profile
+        if not (is_owner or is_admin):
+            return Response({'error': 'Only the owner or group admin can trigger a backfill.'}, status=403)
+
+        contrib_created = 0
+        wd_created = 0
+        transfer_created = 0
+
+        for txn in target.transactions.filter(transaction_type='piggy_bank_contribution'):
+            if not PiggyBankTransaction.objects.filter(
+                piggy_bank=target, event_type='contribution',
+                performed_by=txn.payment_profile, created_at=txn.created_at
+            ).exists():
+                PiggyBankTransaction.objects.create(
+                    piggy_bank=target, event_type='contribution',
+                    amount=txn.amount, performed_by=txn.payment_profile,
+                    balance_after=txn.balance_after, note=txn.description or '',
+                    created_at=txn.created_at,
+                )
+                contrib_created += 1
+
+        for txn in target.transactions.filter(transaction_type='piggy_bank_withdrawal'):
+            if not PiggyBankTransaction.objects.filter(
+                piggy_bank=target, event_type='withdrawal',
+                performed_by=txn.payment_profile, created_at=txn.created_at
+            ).exists():
+                PiggyBankTransaction.objects.create(
+                    piggy_bank=target, event_type='withdrawal',
+                    amount=txn.amount, performed_by=txn.payment_profile,
+                    balance_after=txn.balance_after, note=txn.description or '',
+                    created_at=txn.created_at,
+                )
+                wd_created += 1
+
+        for txn in target.transactions.filter(transaction_type='transfer'):
+            if not PiggyBankTransaction.objects.filter(
+                piggy_bank=target, event_type='withdrawal',
+                performed_by=txn.payment_profile, created_at=txn.created_at
+            ).exists():
+                PiggyBankTransaction.objects.create(
+                    piggy_bank=target, event_type='withdrawal',
+                    amount=txn.amount, performed_by=txn.payment_profile,
+                    balance_after=txn.balance_after, note=txn.description or '',
+                    created_at=txn.created_at,
+                )
+                transfer_created += 1
+
+        return Response({
+            'status': 'Backfill complete',
+            'contributions_imported': contrib_created,
+            'withdrawals_imported': wd_created,
+            'transfers_imported': transfer_created,
+        })
 
     @action(detail=True, methods=['post'])
     def request_conversion(self, request, pk=None):
@@ -4464,6 +5413,9 @@ class GroupTargetViewSet(ModelViewSet):
     def conversion_status(self, request, pk=None):
         """Get all conversion requests for this piggy bank."""
         target = self.get_object()
+        profile = get_or_create_payment_profile(request.user)
+        if not PiggyBankMember.objects.filter(piggy_bank=target, payment_profile=profile, is_active=True).exists():
+            return Response({'error': 'Only members can view conversion status'}, status=403)
         requests = PiggyBankConversionRequest.objects.filter(piggy_bank=target).order_by('-created_at')
         
         # Enhance response with member approval status
@@ -4659,13 +5611,39 @@ class GroupTargetViewSet(ModelViewSet):
         conv_req.save()
         
         # Audit log
-        TransactionToken.objects.create(
+        import secrets
+        txn_token = TransactionToken.objects.create(
             payment_profile=conv_req.proposed_by.payment_profile,
             transaction_code=uuid.uuid4(),
             amount=amount_to_move,
             transaction_type='transfer',
             description=f"Conversion: Piggy Bank '{target.name}' - {conv_req.conversion_type} type",
             payment_group=target.payment_group
+        )
+        TransactionHistory.objects.create(
+            payment_profile=conv_req.proposed_by.payment_profile,
+            transaction_token=txn_token,
+            authorization_token=PaymentAuthorization.objects.create(
+                payment_profile=conv_req.proposed_by.payment_profile,
+                authorization_code=secrets.token_hex(16)
+            ),
+            verification_token=PaymentVerification.objects.create(
+                payment_profile=conv_req.proposed_by.payment_profile,
+                verification_code=secrets.token_hex(16)
+            ),
+            amount=amount_to_move,
+            status='completed',
+            transaction_category='transfer',
+            payment_type='group' if target.payment_group else 'individual',
+            balance_after=conv_req.proposed_by.payment_profile.comrade_balance,
+        )
+        PiggyBankTransaction.objects.create(
+            piggy_bank=target,
+            event_type='conversion',
+            amount=amount_to_move,
+            performed_by=conv_req.proposed_by.payment_profile,
+            balance_after=target.current_amount,
+            note=f"Conversion: {conv_req.conversion_type} type - {conv_req.reason or ''}",
         )
         
         return Response({
@@ -4716,12 +5694,38 @@ class GroupTargetViewSet(ModelViewSet):
         conv_req.save()
         
         # Audit log
-        TransactionToken.objects.create(
+        import secrets
+        txn_token = TransactionToken.objects.create(
             payment_profile=payment_profile,
             amount=amount_to_move,
             transaction_type='transfer',
             description=f"Conversion: Piggy Bank '{target.name}' funds moved to group balance.",
             payment_group=target.payment_group
+        )
+        TransactionHistory.objects.create(
+            payment_profile=payment_profile,
+            transaction_token=txn_token,
+            authorization_token=PaymentAuthorization.objects.create(
+                payment_profile=payment_profile,
+                authorization_code=secrets.token_hex(16)
+            ),
+            verification_token=PaymentVerification.objects.create(
+                payment_profile=payment_profile,
+                verification_code=secrets.token_hex(16)
+            ),
+            amount=amount_to_move,
+            status='completed',
+            transaction_category='transfer',
+            payment_type='group' if target.payment_group else 'individual',
+            balance_after=payment_profile.comrade_balance,
+        )
+        PiggyBankTransaction.objects.create(
+            piggy_bank=target,
+            event_type='conversion',
+            amount=amount_to_move,
+            performed_by=payment_profile,
+            balance_after=target.current_amount,
+            note=f"Conversion approved by admin",
         )
         
         return Response({
@@ -4754,15 +5758,48 @@ class GroupTargetViewSet(ModelViewSet):
             payment_profile.comrade_balance += Decimal(str(automation_amount))
             payment_profile.save()
             target.current_amount -= Decimal(str(automation_amount))
+            target.save()
             
-            TransactionToken.objects.create(
+            import secrets
+            member = None
+            if target.payment_group:
+                member = PaymentGroupMember.objects.filter(payment_group=target.payment_group, payment_profile=payment_profile).first()
+                
+            transaction = TransactionToken.objects.create(
                 payment_profile=payment_profile,
                 transaction_code=uuid.uuid4(),
                 amount=Decimal(str(automation_amount)),
                 transaction_type='transfer',
                 description=f'Automation: Transferred from {target.name} to wallet',
                 payment_group=target.payment_group,
-                piggy_bank=target
+                piggy_bank=target,
+                balance_after=target.current_amount
+            )
+            TransactionHistory.objects.create(
+                payment_profile=payment_profile,
+                transaction_token=transaction,
+                authorization_token=PaymentAuthorization.objects.create(
+                    payment_profile=payment_profile,
+                    authorization_code=secrets.token_hex(16)
+                ),
+                verification_token=PaymentVerification.objects.create(
+                    payment_profile=payment_profile,
+                    verification_code=secrets.token_hex(16)
+                ),
+                amount=Decimal(str(automation_amount)),
+                status='completed',
+                transaction_category='transfer',
+                payment_type='group' if target.payment_group else 'individual',
+                balance_after=payment_profile.comrade_balance,
+                group_member_balance_after=member.total_contributed if member else None
+            )
+            PiggyBankTransaction.objects.create(
+                piggy_bank=target,
+                event_type='withdrawal',
+                amount=automation_amount,
+                performed_by=payment_profile,
+                balance_after=target.current_amount,
+                note=f'Automation: Transferred to wallet',
             )
             
         elif action == 'group_fund':
@@ -4773,15 +5810,46 @@ class GroupTargetViewSet(ModelViewSet):
             target.payment_group.current_amount += Decimal(str(automation_amount))
             target.payment_group.save()
             target.current_amount -= Decimal(str(automation_amount))
+            target.save()
             
-            TransactionToken.objects.create(
+            import secrets
+            member = PaymentGroupMember.objects.filter(payment_group=target.payment_group, payment_profile=payment_profile).first()
+            
+            transaction = TransactionToken.objects.create(
                 payment_profile=payment_profile,
                 transaction_code=uuid.uuid4(),
                 amount=Decimal(str(automation_amount)),
                 transaction_type='transfer',
                 description=f'Automation: Added to group fund from {target.name}',
                 payment_group=target.payment_group,
-                piggy_bank=target
+                piggy_bank=target,
+                balance_after=target.payment_group.current_amount
+            )
+            TransactionHistory.objects.create(
+                payment_profile=payment_profile,
+                transaction_token=transaction,
+                authorization_token=PaymentAuthorization.objects.create(
+                    payment_profile=payment_profile,
+                    authorization_code=secrets.token_hex(16)
+                ),
+                verification_token=PaymentVerification.objects.create(
+                    payment_profile=payment_profile,
+                    verification_code=secrets.token_hex(16)
+                ),
+                amount=Decimal(str(automation_amount)),
+                status='completed',
+                transaction_category='transfer',
+                payment_type='group',
+                balance_after=payment_profile.comrade_balance,
+                group_member_balance_after=member.total_contributed if member else None
+            )
+            PiggyBankTransaction.objects.create(
+                piggy_bank=target,
+                event_type='withdrawal',
+                amount=automation_amount,
+                performed_by=payment_profile,
+                balance_after=target.current_amount,
+                note=f'Automation: Transferred to group fund',
             )
             
         elif action == 'product':
@@ -4844,6 +5912,9 @@ class GroupTargetViewSet(ModelViewSet):
         # Update fields - only update if value is provided and handle null for empty strings
         if 'name' in request.data and request.data['name'] is not None:
             target.name = request.data['name']
+        if 'description' in request.data:
+            val = request.data['description']
+            target.description = val if val else ''
         if 'visibility' in request.data and request.data['visibility'] is not None:
             target.visibility = request.data['visibility']
         if 'automation_trigger' in request.data and request.data['automation_trigger'] is not None:
@@ -4892,12 +5963,21 @@ class GroupTargetViewSet(ModelViewSet):
         elif 'require_min_contribution_amount' in request.data and request.data['require_min_contribution_amount'] is None:
             target.require_min_contribution_amount = None
         
+        # Leave rules
+        if 'leave_requires_vote' in request.data:
+            target.leave_requires_vote = bool(request.data['leave_requires_vote'])
+        if 'leave_inconvenience_fee_percentage' in request.data and request.data['leave_inconvenience_fee_percentage'] is not None:
+            target.leave_inconvenience_fee_percentage = Decimal(str(request.data['leave_inconvenience_fee_percentage']))
+        if 'leave_vote_waives_penalty' in request.data:
+            target.leave_vote_waives_penalty = bool(request.data['leave_vote_waives_penalty'])
+        
         target.save()
         
         return Response({
             'status': 'Settings updated',
             'data': {
                 'name': target.name,
+                'description': target.description,
                 'visibility': target.visibility,
                 'automation_trigger': target.automation_trigger,
                 'automation_action': target.automation_action,
@@ -4909,7 +5989,10 @@ class GroupTargetViewSet(ModelViewSet):
                 'require_min_balance': float(target.require_min_balance) if target.require_min_balance else None,
                 'require_min_savings_period_days': target.require_min_savings_period_days,
                 'require_min_member_age_days': target.require_min_member_age_days,
-                'require_min_contribution_amount': float(target.require_min_contribution_amount) if target.require_min_contribution_amount else None
+                'require_min_contribution_amount': float(target.require_min_contribution_amount) if target.require_min_contribution_amount else None,
+                'leave_requires_vote': target.leave_requires_vote,
+                'leave_inconvenience_fee_percentage': float(target.leave_inconvenience_fee_percentage),
+                'leave_vote_waives_penalty': target.leave_vote_waives_penalty
             }
         })
 
@@ -5840,17 +6923,38 @@ class OrderViewSet(ModelViewSet):
             if payment_profile.comrade_balance < total:
                 order.delete()
                 return Response({'error': 'Insufficient balance'}, status=status.HTTP_400_BAD_REQUEST)
-            payment_profile.comrade_balance -= total
+            payment_profile.comrade_balance -= Decimal(str(total))
             payment_profile.save()
             
             # Create a TransactionToken for the purchase
-            TransactionToken.objects.create(
+            import secrets
+            import uuid
+            transaction = TransactionToken.objects.create(
                 payment_profile=payment_profile,
+                transaction_code=uuid.uuid4(),
                 amount=Decimal(str(total)),
                 transaction_type='purchase',
                 pay_from='wallet',
                 payment_option='comrade_balance',
                 description='Online purchase order'
+            )
+            TransactionHistory.objects.create(
+                payment_profile=payment_profile,
+                transaction_token=transaction,
+                authorization_token=PaymentAuthorization.objects.create(
+                    payment_profile=payment_profile,
+                    authorization_code=secrets.token_hex(16)
+                ),
+                verification_token=PaymentVerification.objects.create(
+                    payment_profile=payment_profile,
+                    verification_code=secrets.token_hex(16)
+                ),
+                amount=Decimal(str(total)),
+                status='completed',
+                transaction_category='purchase',
+                payment_type='individual',
+                balance_after=payment_profile.comrade_balance,
+                group_member_balance_after=None
             )
         
         order.status = 'confirmed'
@@ -6852,32 +7956,28 @@ class CreditScoreViewSet(ModelViewSet):
     def my_score(self, request):
         profile = Profile.objects.get(user=request.user)
         score, created = CreditScore.objects.get_or_create(user=profile)
-        if created:
-            # Compute initial score based on platform activity
-            import random
-            base = 300
-            savings = random.randint(20, 80)
-            repayment = random.randint(30, 90)
-            group_s = random.randint(10, 60)
-            txn = random.randint(20, 70)
-            tenure = random.randint(5, 40)
-            total = base + savings + repayment + group_s + txn + tenure
-            risk = 'very_low' if total > 700 else 'low' if total > 600 else 'moderate' if total > 450 else 'high' if total > 300 else 'very_high'
-            score.score = min(total, 900)
-            score.risk_level = risk
-            score.savings_score = savings
-            score.repayment_score = repayment
-            score.group_score = group_s
-            score.transaction_score = txn
-            score.tenure_score = tenure
-            score.factors = {
-                'savings_consistency': f'{savings}%',
-                'repayment_history': f'{repayment}%',
-                'group_participation': f'{group_s}%',
-                'transaction_volume': f'{txn}%',
-                'platform_tenure': f'{tenure}%',
-            }
-            score.save()
+
+        # Always recompute from real data — scores should be fresh
+        from Payment.services.credit_scoring import compute_credit_score
+        result = compute_credit_score(profile)
+
+        score.score = result['total_score']
+        score.savings_score = result['savings_score']
+        score.repayment_score = result['repayment_score']
+        score.group_score = result['group_score']
+        score.transaction_score = result['transaction_score']
+        score.tenure_score = result['tenure_score']
+        score.factors = result['factors']
+        score.risk_level = (
+            'very_low' if result['total_score'] > 700 else
+            'low' if result['total_score'] > 600 else
+            'moderate' if result['total_score'] > 450 else
+            'high' if result['total_score'] > 300 else
+            'very_high'
+        )
+        score.computed_at = timezone.now()
+        score.save()
+
         return Response(CreditScoreSerializer(score).data)
 
 
@@ -6911,6 +8011,30 @@ class LoanApplicationViewSet(ModelViewSet):
     @action(detail=True, methods=['post'])
     def approve(self, request, pk=None):
         loan = self.get_object()
+        product = loan.loan_product
+
+        min_score = product.min_credit_score
+        if min_score and min_score > 0:
+            credit = getattr(loan.user, 'credit_score', None)
+            if credit is None:
+                return Response(
+                    {'error': 'Credit score not yet computed. Complete more transactions to generate a score.'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            if credit.score < min_score:
+                loan.status = 'rejected'
+                loan.rejection_reason = (
+                    f'Credit score {credit.score} is below the minimum {min_score} '
+                    f'required for {product.name}.'
+                )
+                loan.reviewed_by = request.user
+                loan.reviewed_at = timezone.now()
+                loan.save()
+                return Response(
+                    {'status': 'rejected', 'reason': loan.rejection_reason},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
         loan.status = 'approved'
         loan.reviewed_by = request.user
         loan.reviewed_at = timezone.now()
@@ -7626,16 +8750,41 @@ class DonationViewSet(ModelViewSet):
         payment_profile.comrade_balance -= amount
         payment_profile.save()
         
+        # Update donation total atomically
+        donation = Donation.objects.select_for_update().get(id=donation.id)
+        donation.amount_collected += Decimal(str(amount))
+        donation.save()
+        
+        # Find member if group donation
+        member = None
+        if donation.payment_group:
+            try:
+                member = PaymentGroupMember.objects.get(payment_group=donation.payment_group, payment_profile=payment_profile)
+            except PaymentGroupMember.DoesNotExist:
+                pass
+                
+        # Create contribution
+        contribution = DonationContribution.objects.create(
+            donation=donation,
+            donor_profile=payment_profile,
+            member=member,
+            amount=amount,
+            status='confirmed',
+            confirmed_at=timezone.now()
+        )
+        
         # Create wallet transaction
         import secrets
+        import uuid
         transaction = TransactionToken.objects.create(
             payment_profile=payment_profile,
+            transaction_code=uuid.uuid4(),
             transaction_type='contribution',
             amount=amount,
             payment_option='comrade_balance',
             description=f'Donation contribution to {donation.name}',
             payment_group=donation.payment_group if donation.payment_group else None,
-            balance_after=payment_profile.comrade_balance
+            balance_after=donation.amount_collected
         )
         TransactionHistory.objects.create(
             payment_profile=payment_profile,
@@ -7652,32 +8801,9 @@ class DonationViewSet(ModelViewSet):
             status='completed',
             transaction_category='contribution',
             payment_type='group' if donation.payment_group else 'individual',
-            balance_after=payment_profile.comrade_balance
+            balance_after=payment_profile.comrade_balance,
+            group_member_balance_after=member.total_contributed if member else None
         )
-
-
-        # Find member if group donation
-        member = None
-        if donation.payment_group:
-            try:
-                member = PaymentGroupMember.objects.get(payment_group=donation.payment_group, payment_profile=payment_profile)
-            except PaymentGroupMember.DoesNotExist:
-                pass
-
-        # Create contribution
-        contribution = DonationContribution.objects.create(
-            donation=donation,
-            donor_profile=payment_profile,
-            member=member,
-            amount=amount,
-            status='confirmed',
-            confirmed_at=timezone.now()
-        )
-
-        # Update donation total atomically
-        donation = Donation.objects.select_for_update().get(id=donation.id)
-        donation.amount_collected += Decimal(str(amount))
-        donation.save()
 
         return Response({
             'status': 'Contribution successful',
@@ -9108,8 +10234,12 @@ class WithdrawalRequestViewSet(ModelViewSet):
             withdrawal.destination_wallet.comrade_balance += payout
             withdrawal.destination_wallet.save()
             
+            # Deduct only the payout from the group amount (the group pool retains the penalty)
+            withdrawal.payment_group.current_amount -= payout
+            withdrawal.payment_group.save()
+            
             # Record the net payout transaction
-            TransactionToken.objects.create(
+            transaction = TransactionToken.objects.create(
                 payment_profile=payment_profile, # Platform/Group Admin
                 recipient_profile=withdrawal.destination_wallet,
                 amount=payout,
@@ -9118,7 +10248,28 @@ class WithdrawalRequestViewSet(ModelViewSet):
                 description=f"Withdrawal from {withdrawal.payment_group.name} (Net)",
                 payment_group=withdrawal.payment_group,
                 payment_option='comrade_balance',
-                pay_from='internal'
+                pay_from='internal',
+                balance_after=withdrawal.payment_group.current_amount
+            )
+            
+            from Payment.models import TransactionHistory, PaymentAuthorization, PaymentVerification
+            import secrets
+            TransactionHistory.objects.create(
+                payment_profile=withdrawal.destination_wallet,
+                transaction_token=transaction,
+                authorization_token=PaymentAuthorization.objects.create(
+                    payment_profile=withdrawal.destination_wallet,
+                    authorization_code=secrets.token_hex(16)
+                ),
+                verification_token=PaymentVerification.objects.create(
+                    payment_profile=withdrawal.destination_wallet,
+                    verification_code=secrets.token_hex(16)
+                ),
+                amount=payout,
+                status='completed',
+                transaction_category='withdrawal',
+                payment_type='group',
+                balance_after=withdrawal.destination_wallet.comrade_balance
             )
             
             # Record the penalty deduction transaction if any
@@ -9130,12 +10281,9 @@ class WithdrawalRequestViewSet(ModelViewSet):
                     transaction_type='fee',
                     status='completed',
                     description=f"Immature Exit Penalty for {withdrawal.payment_group.name}",
-                    payment_group=withdrawal.payment_group
+                    payment_group=withdrawal.payment_group,
+                    balance_after=withdrawal.payment_group.current_amount + deduction # Optional
                 )
-            
-            # Deduct only the payout from the group amount (the group pool retains the penalty)
-            withdrawal.payment_group.current_amount -= payout
-            withdrawal.payment_group.save()
             
             withdrawal.processed_at = timezone.now()
             withdrawal.status = 'completed'

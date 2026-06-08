@@ -21,7 +21,8 @@ from Events.enhanced_models import (
     EventAnnouncementLink, EventProductLink, EventPaymentGroupLink,
     EventAnalytics, EventUserReminder
 )
-from Events.models import EventSchedule, EventSpeaker, EventFile
+from Events.models import EventSchedule, EventSpeaker, EventFile, EventAttendance, EventSlotBooking
+from Events.serializers import EventAttendanceSerializer
 from Events.enhanced_serializers import (
     EventRoomSerializer, EventResourceAccessSerializer, EventResourcePurchaseSerializer,
     EventInterestSerializer, EventReactionSerializer, EventCommentSerializer,
@@ -82,6 +83,10 @@ class EventEnhancedViewSet(viewsets.ModelViewSet):
         if category_id:
             event_ids = EventCategoryAssignment.objects.filter(category_id=category_id).values_list('event_id', flat=True)
             queryset = queryset.filter(id__in=event_ids)
+        
+        # Seeking sponsors filter
+        if self.request.query_params.get('seeking_sponsors') == 'true':
+            queryset = queryset.filter(seeking_sponsors=True)
         
         return queryset.select_related('created_by').prefetch_related('event_reactions', 'event_comments', 'interests')
     
@@ -388,6 +393,139 @@ class EventEnhancedViewSet(viewsets.ModelViewSet):
             'event': event.name,
             'ticket_type': purchase.ticket.ticket_type,
             'attendee': purchase.user.email
+        })
+    
+    # ATTENDEE CHECK-IN SYSTEM
+    
+    @action(detail=True, methods=['post'], permission_classes=[IsAuthenticated])
+    def check_in(self, request, pk=None):
+        """Check in attendee at event (by user ID, email, or QR data)"""
+        event = self.get_object()
+        
+        if event.created_by != request.user and not request.user.is_staff:
+            return Response({'error': 'Permission denied'}, status=status.HTTP_403_FORBIDDEN)
+        
+        user_id = request.data.get('user_id')
+        email = request.data.get('email')
+        qr_data = request.data.get('qr_data')
+        
+        target_user = None
+        if user_id:
+            from Authentication.models import CustomUser
+            try:
+                target_user = CustomUser.objects.get(id=user_id)
+            except CustomUser.DoesNotExist:
+                return Response({'error': 'User not found'}, status=status.HTTP_404_NOT_FOUND)
+        elif email:
+            from Authentication.models import CustomUser
+            try:
+                target_user = CustomUser.objects.get(email=email)
+            except CustomUser.DoesNotExist:
+                return Response({'error': 'User not found'}, status=status.HTTP_404_NOT_FOUND)
+        elif qr_data:
+            import json
+            try:
+                data = json.loads(qr_data)
+                booking = EventSlotBooking.objects.filter(
+                    ticket_number=data.get('ticket_number'),
+                    event=event
+                ).first()
+                if not booking:
+                    return Response({'error': 'Invalid QR code'}, status=status.HTTP_400_BAD_REQUEST)
+                if booking.booking_status == 'checked_in':
+                    return Response({'error': 'Already checked in'}, status=status.HTTP_400_BAD_REQUEST)
+                target_user = booking.user
+                booking.booking_status = 'checked_in'
+                booking.save()
+            except (json.JSONDecodeError, KeyError):
+                return Response({'error': 'Invalid QR data format'}, status=status.HTTP_400_BAD_REQUEST)
+        else:
+            return Response({'error': 'Provide user_id, email, or qr_data'}, status=status.HTTP_400_BAD_REQUEST)
+        
+        if EventAttendance.objects.filter(event=event, user=target_user).exists():
+            return Response({'error': 'User already checked in'}, status=status.HTTP_400_BAD_REQUEST)
+        
+        attendance = EventAttendance.objects.create(
+            event=event,
+            user=target_user
+        )
+        
+        serializer = EventAttendanceSerializer(attendance)
+        return Response(serializer.data, status=status.HTTP_201_CREATED)
+    
+    @action(detail=True, methods=['post'], permission_classes=[IsAuthenticated])
+    def check_out(self, request, pk=None):
+        """Check out attendee from event"""
+        event = self.get_object()
+        
+        if event.created_by != request.user and not request.user.is_staff:
+            return Response({'error': 'Permission denied'}, status=status.HTTP_403_FORBIDDEN)
+        
+        attendance_id = request.data.get('attendance_id')
+        if not attendance_id:
+            return Response({'error': 'attendance_id is required'}, status=status.HTTP_400_BAD_REQUEST)
+        
+        try:
+            attendance = EventAttendance.objects.get(id=attendance_id, event=event)
+        except EventAttendance.DoesNotExist:
+            return Response({'error': 'Attendance record not found'}, status=status.HTTP_404_NOT_FOUND)
+        
+        attendance.check_out_time = timezone.now()
+        attendance.save()
+        
+        serializer = EventAttendanceSerializer(attendance)
+        return Response(serializer.data)
+    
+    @action(detail=True, methods=['get'], permission_classes=[IsAuthenticated])
+    def attendance_list(self, request, pk=None):
+        """Get all attendance records for an event (organizer only)"""
+        event = self.get_object()
+        
+        if event.created_by != request.user and not request.user.is_staff:
+            return Response({'error': 'Permission denied'}, status=status.HTTP_403_FORBIDDEN)
+        
+        attendances = EventAttendance.objects.filter(event=event).select_related('user').order_by('-check_in_time')
+        serializer = EventAttendanceSerializer(attendances, many=True)
+        return Response(serializer.data)
+    
+    @action(detail=True, methods=['get'], permission_classes=[IsAuthenticated])
+    def validate_qr(self, request, pk=None):
+        """Validate QR code data from a booking"""
+        event = self.get_object()
+        qr_data = request.query_params.get('qr_data')
+        
+        if not qr_data:
+            return Response({'error': 'qr_data query parameter is required'}, status=status.HTTP_400_BAD_REQUEST)
+        
+        import json
+        try:
+            data = json.loads(qr_data)
+        except json.JSONDecodeError:
+            return Response({'valid': False, 'error': 'Invalid QR data format'})
+        
+        ticket_number = data.get('ticket_number')
+        if not ticket_number:
+            return Response({'valid': False, 'error': 'Missing ticket_number in QR data'})
+        
+        booking = EventSlotBooking.objects.filter(
+            ticket_number=ticket_number,
+            event=event
+        ).select_related('user', 'ticket_tier').first()
+        
+        if not booking:
+            return Response({'valid': False, 'error': 'No booking found for this ticket'})
+        
+        return Response({
+            'valid': True,
+            'booking_id': booking.id,
+            'ticket_number': booking.ticket_number,
+            'attendee_name': booking.attendee_name,
+            'attendee_email': booking.attendee_email,
+            'status': booking.booking_status,
+            'tier': booking.ticket_tier.name if booking.ticket_tier else None,
+            'quantity': booking.quantity,
+            'group_name': booking.group_name,
+            'is_checked_in': booking.booking_status == 'checked_in'
         })
     
     # INTEREST & REACTIONS
@@ -1052,6 +1190,41 @@ class EventEnhancedViewSet(viewsets.ModelViewSet):
         requests = EventHelpRequest.objects.filter(event=event)
         serializer = EventHelpRequestSerializer(requests, many=True)
         return Response(serializer.data)
+    
+    @action(detail=False, methods=['post'], permission_classes=[IsAuthenticated], url_path='help-requests/(?P<request_id>[^/.]+)/respond')
+    def respond_to_help(self, request, request_id=None):
+        """Respond to a help request (organizers only)"""
+        try:
+            help_request = EventHelpRequest.objects.get(id=request_id)
+        except EventHelpRequest.DoesNotExist:
+            return Response({'error': 'Help request not found'}, status=status.HTTP_404_NOT_FOUND)
+        
+        event = help_request.event
+        if event.created_by != request.user:
+            perm = EventPermission.objects.filter(event=event, user=request.user, can_respond_to_help=True).first()
+            if not perm and not request.user.is_staff:
+                return Response({'error': 'Permission denied'}, status=status.HTTP_403_FORBIDDEN)
+        
+        message = request.data.get('message')
+        is_solution = request.data.get('is_solution', False)
+        
+        if not message:
+            return Response({'error': 'message is required'}, status=status.HTTP_400_BAD_REQUEST)
+        
+        response = EventHelpResponse.objects.create(
+            request=help_request,
+            responder=request.user,
+            message=message,
+            is_solution=is_solution
+        )
+        
+        help_request.status = 'resolved' if is_solution else 'in_progress'
+        if is_solution:
+            help_request.resolved_at = timezone.now()
+        help_request.save()
+        
+        serializer = EventHelpResponseSerializer(response)
+        return Response(serializer.data, status=status.HTTP_201_CREATED)
     
     # ANALYTICS
     

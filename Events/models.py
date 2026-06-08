@@ -104,6 +104,54 @@ EVENT_LOCATION = (
 )
 
 
+class OrganizerProfile(models.Model):
+    user = models.OneToOneField('Authentication.CustomUser', on_delete=models.CASCADE, related_name='organizer_profile')
+    business_name = models.CharField(max_length=255, blank=True, default='')
+    bio = models.TextField(max_length=2000, blank=True, default='')
+    avatar = models.ImageField(upload_to='organizer_avatars/', null=True, blank=True)
+    cover_photo = models.ImageField(upload_to='organizer_covers/', null=True, blank=True)
+    website = models.URLField(blank=True, default='')
+    location = models.CharField(max_length=300, blank=True, default='')
+    social_links = models.JSONField(blank=True, default=dict)
+    gender = models.CharField(max_length=20, choices=[('male', 'Male'), ('female', 'Female'), ('other', 'Other'), ('prefer_not_to_say', 'Prefer not to say')], blank=True, null=True)
+    date_of_birth = models.DateField(null=True, blank=True)
+    is_open_for_partnership = models.BooleanField(default=False)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return self.business_name or self.user.get_full_name() or self.user.email
+
+    class Meta:
+        verbose_name = 'Organizer Profile'
+        verbose_name_plural = 'Organizer Profiles'
+
+
+class SponsorProfile(models.Model):
+    user = models.OneToOneField('Authentication.CustomUser', on_delete=models.CASCADE, related_name='sponsor_profile')
+    company_name = models.CharField(max_length=255)
+    logo = models.ImageField(upload_to='sponsor_logos/', null=True, blank=True)
+    industry = models.CharField(max_length=100, blank=True, default='')
+    description = models.TextField(max_length=2000, blank=True, default='')
+    website = models.URLField(blank=True, default='')
+    contact_email = models.EmailField(blank=True, default='')
+    phone = models.CharField(max_length=50, blank=True, default='')
+    location = models.CharField(max_length=300, blank=True, default='')
+    budget_range = models.CharField(max_length=100, blank=True, default='', help_text="e.g. $1k-$5k per event")
+    social_links = models.JSONField(blank=True, default=dict)
+    gender = models.CharField(max_length=20, choices=[('male', 'Male'), ('female', 'Female'), ('other', 'Other'), ('prefer_not_to_say', 'Prefer not to say')], blank=True, null=True)
+    date_of_birth = models.DateField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return self.company_name
+
+    class Meta:
+        verbose_name = 'Sponsor Profile'
+        verbose_name_plural = 'Sponsor Profiles'
+
+
 class Event(models.Model):
     name = models.CharField(max_length=200)
     description = models.TextField(max_length=2000)
@@ -138,7 +186,7 @@ class Event(models.Model):
     # Entity Authorship
     institution = models.ForeignKey(Institution, on_delete=models.CASCADE, null=True, blank=True, related_name='events')
     organisation = models.ForeignKey(Organisation, on_delete=models.CASCADE, null=True, blank=True, related_name='events')
-    event_organizer = models.ForeignKey('Funding.Business', on_delete=models.SET_NULL, null=True, blank=True, related_name='organized_events')
+    event_organizer = models.ForeignKey('OrganizerProfile', on_delete=models.SET_NULL, null=True, blank=True, related_name='organized_events')
     
     # Advanced Settings
     seeking_sponsors = models.BooleanField(default=False)
@@ -653,6 +701,9 @@ class EventAttendance(models.Model):
     user = models.ForeignKey(CustomUser, on_delete=models.DO_NOTHING)
     check_in_time = models.DateTimeField(auto_now_add=True)
     check_out_time = models.DateTimeField(null=True, blank=True)
+    gender = models.CharField(max_length=20, choices=[('male', 'Male'), ('female', 'Female'), ('other', 'Other'), ('prefer_not_to_say', 'Prefer not to say')], blank=True, null=True)
+    location = models.CharField(max_length=300, blank=True, null=True)
+    category = models.CharField(max_length=50, blank=True, null=True)
 
     def __str__(self):
         return f"{self.user} - {self.event.name}"
@@ -988,6 +1039,103 @@ class SponsorRequest(models.Model):
     def __str__(self):
         org_name = self.organization.name if self.organization else self.recipient_email or 'Unknown'
         return f"Sponsor request for {self.event.name} to {org_name}"
+
+class SponsorApplication(models.Model):
+    events = models.ManyToManyField(Event, related_name='sponsor_applications')
+    sponsor_profile = models.ForeignKey('SponsorProfile', on_delete=models.CASCADE, null=True, blank=True)
+    user = models.ForeignKey('Authentication.CustomUser', on_delete=models.CASCADE)
+    organisation = models.ForeignKey('Organisation.Organisation', on_delete=models.SET_NULL, null=True, blank=True)
+    applicant_name = models.CharField(max_length=200)
+    applicant_contact = models.CharField(max_length=200)
+    application_details = models.TextField(max_length=2000)
+    status = models.CharField(max_length=50, choices=[('pending','Pending'),('approved','Approved'),('rejected','Rejected'),('negotiating','Negotiating')], default='pending')
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return f"Application by {self.applicant_name} for {self.events.count()} event(s)"
+
+
+class SponsorshipNegotiation(models.Model):
+    application = models.ForeignKey('SponsorApplication', on_delete=models.CASCADE, related_name='negotiations')
+    proposer = models.ForeignKey('Authentication.CustomUser', on_delete=models.CASCADE, related_name='proposed_negotiations')
+    terms = models.JSONField(default=dict, help_text="Proposed terms e.g. {contribution_amount, benefits, duration}")
+    counter_terms = models.JSONField(default=dict, blank=True, null=True)
+    status = models.CharField(max_length=50, choices=[('proposed','Proposed'),('countered','Countered'),('accepted','Accepted'),('declined','Declined')], default='proposed')
+    messages = models.JSONField(default=list, blank=True, help_text="Array of {sender, message, timestamp}")
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return f"Negotiation for {self.application} - {self.status}"
+
+class OrganizerFollow(models.Model):
+    """Follow relationship between users for organizer discovery"""
+    follower = models.ForeignKey('Authentication.CustomUser', on_delete=models.CASCADE, related_name='organizer_following')
+    organizer = models.ForeignKey(OrganizerProfile, on_delete=models.CASCADE, related_name='followers')
+    notifications_enabled = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        unique_together = ('follower', 'organizer')
+        verbose_name = 'Organizer Follow'
+        verbose_name_plural = 'Organizer Follows'
+
+    def __str__(self):
+        return f"{self.follower.email} follows {self.organizer.business_name}"
+
+
+class SponsorFollow(models.Model):
+    """Follow relationship between users for sponsor discovery"""
+    follower = models.ForeignKey('Authentication.CustomUser', on_delete=models.CASCADE, related_name='sponsor_following')
+    sponsor = models.ForeignKey(SponsorProfile, on_delete=models.CASCADE, related_name='followers')
+    notifications_enabled = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        unique_together = ('follower', 'sponsor')
+        verbose_name = 'Sponsor Follow'
+        verbose_name_plural = 'Sponsor Follows'
+
+    def __str__(self):
+        return f"{self.follower.email} follows {self.sponsor.company_name}"
+
+
+class PartnershipInvitation(models.Model):
+    """Invitation from one organizer to another to partner on events"""
+    sender = models.ForeignKey('Authentication.CustomUser', on_delete=models.CASCADE, related_name='sent_partnerships')
+    receiver = models.ForeignKey(OrganizerProfile, on_delete=models.CASCADE, related_name='received_partnerships')
+    events = models.ManyToManyField(Event, related_name='partnership_invitations')
+    message = models.TextField(max_length=2000, blank=True, default='')
+    status = models.CharField(max_length=50, choices=[
+        ('pending', 'Pending'),
+        ('accepted', 'Accepted'),
+        ('declined', 'Declined'),
+    ], default='pending')
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return f"Partnership: {self.sender.email} -> {self.receiver.business_name}"
+
+
+class CoOrganizer(models.Model):
+    """Shared event ownership between users"""
+    event = models.ForeignKey(Event, on_delete=models.CASCADE, related_name='co_organizers')
+    user = models.ForeignKey('Authentication.CustomUser', on_delete=models.CASCADE, related_name='co_organized_events')
+    permissions = models.CharField(max_length=50, choices=[
+        ('edit', 'Can Edit'),
+        ('view', 'Can View'),
+    ], default='edit')
+    added_by = models.ForeignKey('Authentication.CustomUser', on_delete=models.CASCADE, related_name='added_co_organizers')
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        unique_together = ('event', 'user')
+
+    def __str__(self):
+        return f"{self.user.email} co-organizes {self.event.name}"
+
 
 # Import enhanced models to register them with Django
 from .enhanced_models import *

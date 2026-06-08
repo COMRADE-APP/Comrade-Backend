@@ -452,6 +452,246 @@ class AccountDeletionRequestSerializer(serializers.ModelSerializer):
         return None
 
 
+class OrganizerRegistrationSerializer(serializers.ModelSerializer):
+    confirm_password = serializers.CharField(write_only=True, required=False)
+    browser_locale = serializers.CharField(write_only=True, required=False, allow_blank=True)
+
+    business_name = serializers.CharField(required=False, allow_blank=True, default='')
+    bio = serializers.CharField(required=False, allow_blank=True, default='')
+    website = serializers.URLField(required=False, allow_blank=True, default='')
+    location = serializers.CharField(required=False, allow_blank=True, default='')
+    gender = serializers.ChoiceField(choices=['male', 'female', 'other', 'prefer_not_to_say'], required=False, allow_blank=True, allow_null=True)
+    date_of_birth = serializers.DateField(required=False, allow_null=True)
+
+    class Meta:
+        model = CustomUser
+        fields = [
+            'first_name', 'last_name', 'other_names', 'email',
+            'password', 'confirm_password', 'phone_number',
+            'date_of_birth', 'country_of_origin',
+            'preferred_currency', 'preferred_language',
+            'business_name', 'bio', 'website', 'location',
+            'gender', 'browser_locale',
+        ]
+        extra_kwargs = {
+            'country_of_origin': {'required': False},
+            'preferred_currency': {'required': False},
+            'preferred_language': {'required': False},
+            'other_names': {'required': False},
+            'email': {'required': False},
+            'password': {'required': False},
+            'phone_number': {'required': False},
+        }
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        if self.context.get('existing_user'):
+            for field_name in ['first_name', 'last_name', 'email']:
+                field = self.fields.get(field_name)
+                if field:
+                    field.required = False
+                    field.allow_blank = True
+                    field.validators = [
+                        v for v in field.validators
+                        if 'UniqueValidator' not in type(v).__name__
+                    ]
+
+    def validate(self, data):
+        existing_user = self.context.get('existing_user')
+
+        if existing_user:
+            data.pop('password', None)
+            data.pop('confirm_password', None)
+            data.pop('phone_number', None)
+            data.pop('country_of_origin', None)
+            data.pop('preferred_currency', None)
+            data.pop('preferred_language', None)
+            data.pop('first_name', None)
+            data.pop('last_name', None)
+            data.pop('other_names', None)
+            return data
+
+        password = data.get('password')
+        if not password or len(password) < 8:
+            raise serializers.ValidationError({"password": "Password too short. Use 8 characters or more."})
+        if (not re.search(r'[A-Z]', password) or not re.search(r'[a-z]', password) or
+            not re.search(r'[0-9]', password) or not re.search(r'[!@#$%^&*(),.?\\":{}|<>]', password)):
+            raise serializers.ValidationError({"password": "Password must contain at least one uppercase, lowercase, numeric, and special character."})
+        if not data.get('confirm_password'):
+            raise serializers.ValidationError({'confirm_password': 'The password should be confirmed'})
+        if data['password'] != data['confirm_password']:
+            raise serializers.ValidationError({"confirm_password": "Passwords do not match"})
+        if len(data.get('phone_number', '')) < 10:
+            raise serializers.ValidationError({'phone_number': 'Phone number must be at least 10 digits.'})
+        return data
+
+    def create(self, validated_data):
+        existing_user = self.context.get('existing_user')
+
+        validated_data.pop('confirm_password', None)
+        validated_data.pop('browser_locale', None)
+
+        organizer_fields = {
+            'business_name': validated_data.pop('business_name', ''),
+            'bio': validated_data.pop('bio', ''),
+            'website': validated_data.pop('website', ''),
+            'location': validated_data.pop('location', ''),
+        }
+        gender = validated_data.pop('gender', None)
+        if gender:
+            organizer_fields['gender'] = gender
+        dob = validated_data.pop('date_of_birth', None)
+        if dob:
+            organizer_fields['date_of_birth'] = dob
+
+        if existing_user:
+            existing_user.is_organizer = True
+            existing_user.save(update_fields=['is_organizer'])
+            from Events.models import OrganizerProfile
+            OrganizerProfile.objects.create(user=existing_user, **organizer_fields)
+            return existing_user
+
+        password = validated_data.pop('password', None)
+        validated_data['is_organizer'] = True
+        validated_data['user_type'] = 'normal_user'
+        if dob:
+            validated_data['date_of_birth'] = dob
+
+        user = CustomUser.objects.create_user(password=password, is_active=False, **validated_data)
+
+        UserProfile.objects.create(user=user)
+
+        from Events.models import OrganizerProfile
+        OrganizerProfile.objects.create(user=user, **organizer_fields)
+
+        return user
+
+
+class SponsorRegistrationSerializer(serializers.ModelSerializer):
+    confirm_password = serializers.CharField(write_only=True, required=False)
+    browser_locale = serializers.CharField(write_only=True, required=False, allow_blank=True)
+
+    company_name = serializers.CharField(required=False, allow_blank=True)
+    industry = serializers.CharField(required=False, allow_blank=True, default='')
+    description = serializers.CharField(required=False, allow_blank=True, default='')
+    website = serializers.URLField(required=False, allow_blank=True, default='')
+    contact_email = serializers.EmailField(required=False, allow_blank=True, default='')
+    phone = serializers.CharField(required=False, allow_blank=True, default='')
+    location = serializers.CharField(required=False, allow_blank=True, default='')
+    budget_range = serializers.CharField(required=False, allow_blank=True, default='')
+    gender = serializers.ChoiceField(choices=['male', 'female', 'other', 'prefer_not_to_say'], required=False, allow_blank=True, allow_null=True)
+    date_of_birth = serializers.DateField(required=False, allow_null=True)
+
+    class Meta:
+        model = CustomUser
+        fields = [
+            'first_name', 'last_name', 'other_names', 'email',
+            'password', 'confirm_password', 'phone_number',
+            'date_of_birth', 'country_of_origin',
+            'preferred_currency', 'preferred_language',
+            'company_name', 'industry', 'description', 'website',
+            'contact_email', 'phone', 'location', 'budget_range',
+            'gender', 'browser_locale',
+        ]
+        extra_kwargs = {
+            'country_of_origin': {'required': False},
+            'preferred_currency': {'required': False},
+            'preferred_language': {'required': False},
+            'other_names': {'required': False},
+            'email': {'required': False},
+            'password': {'required': False},
+            'phone_number': {'required': False},
+        }
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        if self.context.get('existing_user'):
+            for field_name in ['first_name', 'last_name', 'email']:
+                field = self.fields.get(field_name)
+                if field:
+                    field.required = False
+                    field.allow_blank = True
+                    field.validators = [
+                        v for v in field.validators
+                        if 'UniqueValidator' not in type(v).__name__
+                    ]
+
+    def validate(self, data):
+        existing_user = self.context.get('existing_user')
+
+        if existing_user:
+            data.pop('password', None)
+            data.pop('confirm_password', None)
+            data.pop('phone_number', None)
+            data.pop('country_of_origin', None)
+            data.pop('preferred_currency', None)
+            data.pop('preferred_language', None)
+            data.pop('first_name', None)
+            data.pop('last_name', None)
+            data.pop('other_names', None)
+            data.pop('email', None)
+            return data
+
+        password = data.get('password')
+        if not password or len(password) < 8:
+            raise serializers.ValidationError({"password": "Password too short. Use 8 characters or more."})
+        if (not re.search(r'[A-Z]', password) or not re.search(r'[a-z]', password) or
+            not re.search(r'[0-9]', password) or not re.search(r'[!@#$%^&*(),.?\\":{}|<>]', password)):
+            raise serializers.ValidationError({"password": "Password must contain at least one uppercase, lowercase, numeric, and special character."})
+        if not data.get('confirm_password'):
+            raise serializers.ValidationError({'confirm_password': 'The password should be confirmed'})
+        if data['password'] != data['confirm_password']:
+            raise serializers.ValidationError({"confirm_password": "Passwords do not match"})
+        if len(data.get('phone_number', '')) < 10:
+            raise serializers.ValidationError({'phone_number': 'Phone number must be at least 10 digits.'})
+        return data
+
+    def create(self, validated_data):
+        existing_user = self.context.get('existing_user')
+
+        validated_data.pop('confirm_password', None)
+        validated_data.pop('browser_locale', None)
+
+        sponsor_fields = {
+            'company_name': validated_data.pop('company_name', ''),
+            'industry': validated_data.pop('industry', ''),
+            'description': validated_data.pop('description', ''),
+            'website': validated_data.pop('website', ''),
+            'contact_email': validated_data.pop('contact_email', ''),
+            'phone': validated_data.pop('phone', ''),
+            'location': validated_data.pop('location', ''),
+            'budget_range': validated_data.pop('budget_range', ''),
+        }
+        gender = validated_data.pop('gender', None)
+        if gender:
+            sponsor_fields['gender'] = gender
+        dob = validated_data.pop('date_of_birth', None)
+        if dob:
+            sponsor_fields['date_of_birth'] = dob
+
+        if existing_user:
+            existing_user.is_sponsor = True
+            existing_user.save(update_fields=['is_sponsor'])
+            from Events.models import SponsorProfile
+            SponsorProfile.objects.create(user=existing_user, **sponsor_fields)
+            return existing_user
+
+        password = validated_data.pop('password', None)
+        validated_data['is_sponsor'] = True
+        validated_data['user_type'] = 'normal_user'
+        if dob:
+            validated_data['date_of_birth'] = dob
+
+        user = CustomUser.objects.create_user(password=password, is_active=False, **validated_data)
+
+        UserProfile.objects.create(user=user)
+
+        from Events.models import SponsorProfile
+        SponsorProfile.objects.create(user=user, **sponsor_fields)
+
+        return user
+
+
 class ArchivedUserDataSerializer(serializers.ModelSerializer):
     archived_by_name = serializers.SerializerMethodField()
     

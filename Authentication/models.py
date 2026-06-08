@@ -72,6 +72,8 @@ class CustomUser(AbstractUser):
     is_editor = models.BooleanField(default=False)
     is_normal_user = models.BooleanField(default=False)  # Non-student general users
     is_researcher = models.BooleanField(default=False)
+    is_organizer = models.BooleanField(default=False)
+    is_sponsor = models.BooleanField(default=False)
     
     # Profile completion tracking
     profile_completed = models.BooleanField(default=False)
@@ -117,6 +119,7 @@ class CustomUser(AbstractUser):
 
     # User Preferences
     date_of_birth = models.DateField(null=True, blank=True)
+    gender = models.CharField(max_length=20, choices=[('male', 'Male'), ('female', 'Female'), ('other', 'Other'), ('prefer_not_to_say', 'Prefer not to say')], blank=True, null=True)
     country_of_origin = models.CharField(max_length=2, blank=True, help_text="ISO 3166-1 alpha-2 country code")
     preferred_currency = models.CharField(max_length=3, default='USD')  # ISO 4217
     preferred_language = models.CharField(max_length=10, default='en')  # BCP 47 (e.g. 'en', 'sw', 'fr')

@@ -1,14 +1,16 @@
 from django.shortcuts import render
 from django.http import HttpResponse
 from django.db import models, IntegrityError
+from django.db.models import Sum, Count, Avg, Q
+from django.db.models.functions import TruncMonth
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework import status
 from rest_framework.permissions import IsAuthenticated, IsAdminUser, IsAuthenticatedOrReadOnly
 from rest_framework.viewsets import ModelViewSet
 from Events.serializers import EventSerializer
-from Events.models import Event, EventCategory, EventAttendance, EventBudget, EventCategoryAssignment, EventCollaboration, EventFeedback, EventFeedbackResponse, EventFile, EventFollowUp, EventLogistics, EventMediaCoverage, EventPartnership, EventPhoto, EventPromotion, EventRegistration, EventReminder, EventSchedule, EventSession, EventSpeaker, EventSponsor, EventSponsorAgreement, EventSponsorBenefit, EventSponsorLogo, EventSponsorPackage, EventSponsorPayment, EventSponsorshipAgreementDocument, EventSponsorshipApplication, EventSponsorshipApproval, EventSponsorshipCertificate, EventSponsorshipContract, EventSponsorshipDowngrade, EventSponsorshipEvaluation, EventSponsorshipExtension, EventSponsorshipFeedback, EventSponsorshipHistory, EventSponsorshipInvoice, EventSponsorshipLetter, EventSponsorshipLevel, EventSponsorshipRecognition, EventSponsorshipRejection, EventSponsorshipRenewal, EventSponsorshipReport, EventSponsorshipTermination, EventSponsorshipTransfer, EventSponsorshipUpgrade, EventSurvey, EventSurveyQuestion, EventSurveyResponse, EventTag, EventTagAssignment, EventTicket, EventVideo, EventReport, EventInvitation, EventLike, EventVisibility, VisibilityLog, EventSlotBooking, TicketTier, EventInteractionAnalytics, EventMaterial
-from Events.serializers import EventSerializer, EventCategorySerializer, EventAttendanceSerializer, EventBudgetSerializer, EventCategoryAssignmentSerializer, EventCollaborationSerializer, EventFeedbackSerializer, EventFeedbackResponseSerializer, EventFileSerializer, EventFollowUpSerializer, EventLogisticsSerializer, EventMediaCoverageSerializer, EventPartnershipSerializer, EventPhotoSerializer, EventPromotionSerializer, EventRegistrationSerializer, EventReminderSerializer, EventScheduleSerializer, EventSessionSerializer, EventSpeakerSerializer, EventSponsorSerializer, EventSponsorAgreementSerializer, EventSponsorBenefitSerializer, EventSponsorLogoSerializer, EventSponsorPackageSerializer, EventSponsorPaymentSerializer, EventSponsorshipAgreementDocumentSerializer, EventSponsorshipApplicationSerializer, EventSponsorshipApprovalSerializer, EventSponsorshipCertificateSerializer, EventSponsorshipContractSerializer, EventSponsorshipDowngradeSerializer, EventSponsorshipEvaluationSerializer, EventSponsorshipExtensionSerializer, EventSponsorshipFeedbackSerializer, EventSponsorshipHistorySerializer, EventSponsorshipInvoiceSerializer, EventSponsorshipLetterSerializer, EventSponsorshipLevelSerializer, EventSponsorshipRecognitionSerializer, EventSponsorshipRejectionSerializer, EventSponsorshipRenewalSerializer, EventSponsorshipReportSerializer, EventSponsorshipTerminationSerializer, EventSponsorshipTransferSerializer, EventSponsorshipUpgradeSerializer, EventSurveySerializer, EventSurveyQuestionSerializer, EventSurveyResponseSerializer, EventTagSerializer, EventTagAssignmentSerializer, EventTicketSerializer, EventVideoSerializer, EventReportSerializer, EventInvitationSerializer, EventLikeSerializer, EventVisibilitySerializer, VisibilityLogSerializer, EventSlotBookingSerializer, EventInteractionAnalyticsSerializer
+from Events.models import Event, EventCategory, EventAttendance, EventBudget, EventCategoryAssignment, EventCollaboration, EventFeedback, EventFeedbackResponse, EventFile, EventFollowUp, EventLogistics, EventMediaCoverage, EventPartnership, EventPhoto, EventPromotion, EventRegistration, EventReminder, EventSchedule, EventSession, EventSpeaker, EventSponsor, EventSponsorAgreement, EventSponsorBenefit, EventSponsorLogo, EventSponsorPackage, EventSponsorPayment, EventSponsorshipAgreementDocument, EventSponsorshipApplication, EventSponsorshipApproval, EventSponsorshipCertificate, EventSponsorshipContract, EventSponsorshipDowngrade, EventSponsorshipEvaluation, EventSponsorshipExtension, EventSponsorshipFeedback, EventSponsorshipHistory, EventSponsorshipInvoice, EventSponsorshipLetter, EventSponsorshipLevel, EventSponsorshipRecognition, EventSponsorshipRejection, EventSponsorshipRenewal, EventSponsorshipReport, EventSponsorshipTermination, EventSponsorshipTransfer, EventSponsorshipUpgrade, EventSurvey, EventSurveyQuestion, EventSurveyResponse, EventTag, EventTagAssignment, EventTicket, EventVideo, EventReport, EventInvitation, EventLike, EventVisibility, VisibilityLog, EventSlotBooking, TicketTier, EventInteractionAnalytics, EventMaterial, OrganizerProfile, SponsorProfile, OrganizerFollow, PartnershipInvitation, CoOrganizer, SponsorApplication, SponsorshipNegotiation
+from Events.serializers import EventSerializer, EventCategorySerializer, EventAttendanceSerializer, EventBudgetSerializer, EventCategoryAssignmentSerializer, EventCollaborationSerializer, EventFeedbackSerializer, EventFeedbackResponseSerializer, EventFileSerializer, EventFollowUpSerializer, EventLogisticsSerializer, EventMediaCoverageSerializer, EventPartnershipSerializer, EventPhotoSerializer, EventPromotionSerializer, EventRegistrationSerializer, EventReminderSerializer, EventScheduleSerializer, EventSessionSerializer, EventSpeakerSerializer, EventSponsorSerializer, EventSponsorAgreementSerializer, EventSponsorBenefitSerializer, EventSponsorLogoSerializer, EventSponsorPackageSerializer, EventSponsorPaymentSerializer, EventSponsorshipAgreementDocumentSerializer, EventSponsorshipApplicationSerializer, EventSponsorshipApprovalSerializer, EventSponsorshipCertificateSerializer, EventSponsorshipContractSerializer, EventSponsorshipDowngradeSerializer, EventSponsorshipEvaluationSerializer, EventSponsorshipExtensionSerializer, EventSponsorshipFeedbackSerializer, EventSponsorshipHistorySerializer, EventSponsorshipInvoiceSerializer, EventSponsorshipLetterSerializer, EventSponsorshipLevelSerializer, EventSponsorshipRecognitionSerializer, EventSponsorshipRejectionSerializer, EventSponsorshipRenewalSerializer, EventSponsorshipReportSerializer, EventSponsorshipTerminationSerializer, EventSponsorshipTransferSerializer, EventSponsorshipUpgradeSerializer, EventSurveySerializer, EventSurveyQuestionSerializer, EventSurveyResponseSerializer, EventTagSerializer, EventTagAssignmentSerializer, EventTicketSerializer, EventVideoSerializer, EventReportSerializer, EventInvitationSerializer, EventLikeSerializer, EventVisibilitySerializer, VisibilityLogSerializer, EventSlotBookingSerializer, EventInteractionAnalyticsSerializer, OrganizerProfileSerializer, SponsorProfileSerializer, OrganizerFollowSerializer, SponsorFollowSerializer, PartnershipInvitationSerializer, CoOrganizerSerializer, SponsorApplicationSerializer, SponsorshipNegotiationSerializer
 from Announcements.models import Pin
 from Rooms.permissions import IsModerator
 from rest_framework.filters import SearchFilter, OrderingFilter
@@ -152,7 +154,7 @@ class EventViewSet(ModelViewSet):
             from django.contrib.contenttypes.models import ContentType
             
             content_type = ContentType.objects.get_for_model(instance)
-            group_name = instance.event_organizer.name if instance.event_organizer else f"Event Kitty - {instance.name}"
+            group_name = instance.event_organizer.business_name if instance.event_organizer else f"Event Kitty - {instance.name}"
             # Ensure name fits in PaymentGroup name field (max 100)
             if len(group_name) > 100:
                 group_name = group_name[:97] + '...'
@@ -587,10 +589,16 @@ class EventViewSet(ModelViewSet):
     
     @action(detail=True, methods=['post'])
     def duplicate_event(self, request, name=None):
-        """ Duplicate Events Attrributes"""
-        event = EventSerializer(data=request.data)
-        event.validated_data.pop('id')
-        event.save()
+        """Duplicate event by copying the original"""
+        original = self.get_object()
+        original_data = EventSerializer(original).data
+        original_data.pop('id', None)
+        original_data.pop('uuid', None)
+        original_data['name'] = f"{original.name} (Copy)"
+        original_data['status'] = 'draft'
+        serializer = EventSerializer(data=original_data)
+        serializer.is_valid(raise_exception=True)
+        serializer.save(created_by=request.user)
         return Response({'message': 'Event duplicated successfully. Saved as draft.'}, status=status.HTTP_201_CREATED)
 
     # ===== REACTIONS (love, excited) =====
@@ -1292,6 +1300,461 @@ class EventSessionViewSet(ModelViewSet):
     queryset = EventSession.objects.all()
     permission_classes = [IsAuthenticatedOrReadOnly]
 
+class OrganizerDashboardViewSet(ModelViewSet):
+    queryset = OrganizerProfile.objects.none()
+    permission_classes = [IsAuthenticated]
+
+    @action(detail=False, methods=['get'])
+    def dashboard(self, request):
+        try:
+            organizer = OrganizerProfile.objects.get(user=request.user)
+        except OrganizerProfile.DoesNotExist:
+            return Response({'error': 'Organizer profile not found'}, status=404)
+
+        events = Event.objects.filter(event_organizer=organizer)
+
+        total_events = events.count()
+
+        total_attendees = EventRegistration.objects.filter(
+            event__in=events,
+            attendance_permission='approved'
+        ).values('user').distinct().count()
+
+        revenue_agg = EventSlotBooking.objects.filter(
+            event__in=events,
+            booking_status__in=['confirmed', 'checked_in']
+        ).aggregate(total=Sum('amount_paid'))
+        total_revenue = float(revenue_agg['total'] or 0)
+
+        sponsor_agg = EventSponsor.objects.filter(
+            event__in=events
+        ).aggregate(total=Sum('contribution_amount'))
+        total_sponsorship = float(sponsor_agg['total'] or 0)
+
+        rating_agg = EventFeedback.objects.filter(
+            event__in=events
+        ).aggregate(avg=Avg('rating'))
+        avg_rating = round(float(rating_agg['avg']), 2) if rating_agg['avg'] else None
+
+        total_views = EventInteractionAnalytics.objects.filter(
+            event__in=events,
+            interaction_type='view'
+        ).count()
+
+        total_bookings = EventRegistration.objects.filter(
+            event__in=events,
+            attendance_permission='approved'
+        ).count()
+
+        event_metrics = []
+        for event in events:
+            sold_agg = EventSlotBooking.objects.filter(
+                event=event,
+                booking_status__in=['confirmed', 'checked_in']
+            ).aggregate(total=Sum('quantity'))
+            tickets_sold = sold_agg['total'] or 0
+
+            rev_agg = EventSlotBooking.objects.filter(
+                event=event,
+                booking_status__in=['confirmed', 'checked_in']
+            ).aggregate(total=Sum('amount_paid'))
+            revenue = float(rev_agg['total'] or 0)
+
+            interested_count = EventRegistration.objects.filter(event=event).count()
+            booked_count = EventRegistration.objects.filter(event=event, attendance_permission='approved').count()
+            checked_in_count = EventAttendance.objects.filter(event=event).count()
+
+            views = EventInteractionAnalytics.objects.filter(
+                event=event,
+                interaction_type='view'
+            ).count()
+
+            event_metrics.append({
+                'id': event.id,
+                'name': event.name,
+                'event_date': event.event_date,
+                'status': event.status,
+                'tickets_sold': tickets_sold,
+                'revenue': revenue,
+                'interested_count': interested_count,
+                'booked_count': booked_count,
+                'checked_in_count': checked_in_count,
+                'views': views,
+            })
+
+        conversion_funnel = []
+        for event in events:
+            views = EventInteractionAnalytics.objects.filter(
+                event=event,
+                interaction_type='view'
+            ).count()
+            interested = EventRegistration.objects.filter(event=event).count()
+            booked = EventRegistration.objects.filter(event=event, attendance_permission='approved').count()
+            checked_in = EventAttendance.objects.filter(event=event).count()
+
+            conversion_funnel.append({
+                'event_id': event.id,
+                'event_name': event.name,
+                'views': views,
+                'interested': interested,
+                'booked': booked,
+                'checked_in': checked_in,
+            })
+
+        category_data = []
+        for cat_val, cat_label in [('individual', 'Individual'), ('couple', 'Couple'), ('group', 'Group')]:
+            tier_ids = TicketTier.objects.filter(event__in=events, category=cat_val).values_list('id', flat=True)
+            bookings = EventSlotBooking.objects.filter(
+                ticket_tier_id__in=list(tier_ids),
+                booking_status__in=['confirmed', 'checked_in']
+            )
+            cat_sales = bookings.aggregate(total=Sum('quantity'))['total'] or 0
+            cat_revenue = float(bookings.aggregate(total=Sum('amount_paid'))['total'] or 0)
+            category_data.append({
+                'category': cat_val,
+                'label': cat_label,
+                'sales': cat_sales,
+                'revenue': cat_revenue,
+            })
+
+        tier_performance = []
+        for tier in TicketTier.objects.filter(event__in=events):
+            sold = EventSlotBooking.objects.filter(
+                ticket_tier=tier,
+                booking_status__in=['confirmed', 'checked_in']
+            ).aggregate(total=Sum('quantity'))['total'] or 0
+            tier_rev = float(EventSlotBooking.objects.filter(
+                ticket_tier=tier,
+                booking_status__in=['confirmed', 'checked_in']
+            ).aggregate(total=Sum('amount_paid'))['total'] or 0)
+            tier_performance.append({
+                'id': tier.id,
+                'name': tier.name,
+                'category': tier.category,
+                'tier': tier.tier,
+                'price': float(tier.price),
+                'capacity': tier.capacity,
+                'sold': sold,
+                'revenue': tier_rev,
+                'event_id': tier.event_id,
+                'event_name': tier.event.name,
+            })
+
+        net_revenue = total_revenue + total_sponsorship
+
+        year_filter = request.query_params.get('year')
+        revenue_qs = EventSlotBooking.objects.filter(
+            event__in=events,
+            booking_status__in=['confirmed', 'checked_in']
+        )
+        if year_filter:
+            revenue_qs = revenue_qs.filter(booked_at__year=year_filter)
+        revenue_timeline = (
+            revenue_qs
+            .annotate(month=TruncMonth('booked_at'))
+            .values('month')
+            .annotate(revenue=Sum('amount_paid'))
+            .order_by('month')
+        )
+        revenue_timeline_data = [
+            {
+                'month': item['month'].strftime('%Y-%m') if item['month'] else None,
+                'revenue': float(item['revenue'])
+            }
+            for item in revenue_timeline
+        ]
+
+        return Response({
+            'overview': {
+                'total_events': total_events,
+                'total_attendees': total_attendees,
+                'total_revenue': total_revenue,
+                'total_sponsorship': total_sponsorship,
+                'avg_rating': avg_rating,
+                'total_views': total_views,
+                'total_bookings': total_bookings,
+            },
+            'events': event_metrics,
+            'conversion_funnel': conversion_funnel,
+            'ticket_categories': category_data,
+            'tier_performance': tier_performance,
+            'financial_summary': {
+                'total_revenue': total_revenue,
+                'total_sponsorship': total_sponsorship,
+                'net_revenue': net_revenue,
+            },
+            'revenue_timeline': revenue_timeline_data,
+        })
+
+    @action(detail=False, methods=['get'])
+    def demographics(self, request):
+        try:
+            organizer = OrganizerProfile.objects.get(user=request.user)
+        except OrganizerProfile.DoesNotExist:
+            return Response({'error': 'Organizer profile not found'}, status=404)
+
+        events = Event.objects.filter(event_organizer=organizer)
+        event_ids = events.values_list('id', flat=True)
+
+        attendance = EventAttendance.objects.filter(event__in=events)
+
+        gender_distribution = (
+            attendance.values('gender')
+            .annotate(count=Count('id'))
+            .order_by('-count')
+        )
+        gender_data = [
+            {'gender': item['gender'] or 'unknown', 'count': item['count']}
+            for item in gender_distribution
+        ]
+
+        location_data = (
+            attendance.values('location')
+            .annotate(count=Count('id'))
+            .order_by('-count')[:20]
+        )
+        location_data_list = [
+            {'location': item['location'] or 'unknown', 'count': item['count']}
+            for item in location_data
+        ]
+
+        category_data_demo = (
+            attendance.values('category')
+            .annotate(count=Count('id'))
+            .order_by('-count')
+        )
+        category_data_list = [
+            {'category': item['category'] or 'uncategorized', 'count': item['count']}
+            for item in category_data_demo
+        ]
+
+        monthly_attendance = (
+            attendance
+            .annotate(month=TruncMonth('check_in_time'))
+            .values('month')
+            .annotate(count=Count('id'))
+            .order_by('month')
+        )
+        monthly_attendance_data = [
+            {
+                'month': item['month'].strftime('%Y-%m') if item['month'] else None,
+                'count': item['count']
+            }
+            for item in monthly_attendance
+        ]
+
+        bookings_qs = EventSlotBooking.objects.filter(
+            event__in=events,
+            booking_status__in=['confirmed', 'checked_in']
+        )
+
+        monthly_revenue = (
+            bookings_qs
+            .annotate(month=TruncMonth('booked_at'))
+            .values('month')
+            .annotate(revenue=Sum('amount_paid'))
+            .order_by('month')
+        )
+        monthly_revenue_data = [
+            {
+                'month': item['month'].strftime('%Y-%m') if item['month'] else None,
+                'revenue': float(item['revenue'])
+            }
+            for item in monthly_revenue
+        ]
+
+        category_revenue = []
+        for cat_val, cat_label in [('individual', 'Individual'), ('couple', 'Couple'), ('group', 'Group')]:
+            tier_ids = TicketTier.objects.filter(event__in=events, category=cat_val).values_list('id', flat=True)
+            rev = bookings_qs.filter(ticket_tier_id__in=list(tier_ids)).aggregate(total=Sum('amount_paid'))
+            category_revenue.append({
+                'category': cat_val,
+                'label': cat_label,
+                'revenue': float(rev['total'] or 0)
+            })
+
+        sponsorship_revenue = float(
+            EventSponsor.objects.filter(event__in=events)
+            .aggregate(total=Sum('contribution_amount'))['total'] or 0
+        )
+
+        return Response({
+            'gender': gender_data,
+            'location': location_data_list,
+            'category': category_data_list,
+            'monthly_attendance': monthly_attendance_data,
+            'monthly_revenue': monthly_revenue_data,
+            'category_revenue': category_revenue,
+            'sponsorship_revenue': sponsorship_revenue,
+        })
+
+class OrganizerProfileViewSet(ModelViewSet):
+    serializer_class = OrganizerProfileSerializer
+    queryset = OrganizerProfile.objects.all()
+    permission_classes = [IsAuthenticatedOrReadOnly]
+
+    def perform_create(self, serializer):
+        serializer.save(user=self.request.user)
+        self.request.user.is_organizer = True
+        self.request.user.save(update_fields=['is_organizer'])
+
+    @action(detail=False, methods=['get', 'patch'])
+    def my_profile(self, request):
+        profile = OrganizerProfile.objects.filter(user=request.user).first()
+        if not profile:
+            return Response({'error': 'No organizer profile found'}, status=404)
+        if request.method == 'PATCH':
+            serializer = self.get_serializer(profile, data=request.data, partial=True)
+            serializer.is_valid(raise_exception=True)
+            serializer.save()
+            return Response(serializer.data)
+        serializer = self.get_serializer(profile)
+        return Response(serializer.data)
+
+    @action(detail=False, methods=['get'])
+    def discover(self, request):
+        from django.db.models import Count, Q
+        qs = OrganizerProfile.objects.annotate(follower_count=Count('followers'))
+        search = request.query_params.get('search', '')
+        if search:
+            qs = qs.filter(
+                Q(business_name__icontains=search) |
+                Q(location__icontains=search) |
+                Q(user__first_name__icontains=search) |
+                Q(user__last_name__icontains=search)
+            )
+        partnership = request.query_params.get('partnership')
+        if partnership == 'open':
+            qs = qs.filter(is_open_for_partnership=True)
+        page = self.paginate_queryset(qs)
+        serializer_context = self.get_serializer_context()
+        if request.user.is_authenticated:
+            user_follows = OrganizerFollow.objects.filter(follower=request.user)
+            follow_map = {f.organizer_id: f for f in user_follows}
+        else:
+            follow_map = {}
+        if page is not None:
+            serializer = self.get_serializer(page, many=True, context=serializer_context)
+            data = serializer.data
+            for item in data:
+                org_id = item.get('id')
+                follow = follow_map.get(org_id)
+                item['is_following'] = follow is not None
+                item['follow_id'] = follow.pk if follow else None
+                item['notifications_enabled'] = follow.notifications_enabled if follow else None
+            return self.get_paginated_response(data)
+        serializer = self.get_serializer(qs, many=True, context=serializer_context)
+        data = serializer.data
+        for item in data:
+            org_id = item.get('id')
+            follow = follow_map.get(org_id)
+            item['is_following'] = follow is not None
+            item['follow_id'] = follow.pk if follow else None
+            item['notifications_enabled'] = follow.notifications_enabled if follow else None
+        return Response(data)
+
+    @action(detail=True, methods=['post'])
+    def follow(self, request, pk=None):
+        profile = self.get_object()
+        follow, created = OrganizerFollow.objects.get_or_create(
+            follower=request.user,
+            organizer=profile
+        )
+        if not created:
+            follow.delete()
+            return Response({'following': False})
+        return Response({'following': True})
+
+    @action(detail=False, methods=['get'])
+    def following_events(self, request):
+        followed_orgs = OrganizerFollow.objects.filter(
+            follower=request.user
+        ).values_list('organizer', flat=True)
+        events = Event.objects.filter(
+            Q(event_organizer_id__in=followed_orgs) & 
+            (Q(seeking_partners=True) | Q(seeking_sponsors=True))
+        )
+        from Events.enhanced_serializers import EventDetailSerializer
+        page = self.paginate_queryset(events)
+        if page is not None:
+            serializer = EventDetailSerializer(page, many=True, context={'request': request})
+            return self.get_paginated_response(serializer.data)
+        serializer = EventDetailSerializer(events, many=True, context={'request': request})
+        return Response(serializer.data)
+
+class SponsorProfileViewSet(ModelViewSet):
+    serializer_class = SponsorProfileSerializer
+    queryset = SponsorProfile.objects.all()
+    permission_classes = [IsAuthenticatedOrReadOnly]
+
+    def perform_create(self, serializer):
+        serializer.save(user=self.request.user)
+        self.request.user.is_sponsor = True
+        self.request.user.save(update_fields=['is_sponsor'])
+
+    @action(detail=False, methods=['get', 'patch'])
+    def my_profile(self, request):
+        profile = SponsorProfile.objects.filter(user=request.user).first()
+        if not profile:
+            return Response({'error': 'No sponsor profile found'}, status=404)
+        if request.method == 'PATCH':
+            serializer = self.get_serializer(profile, data=request.data, partial=True)
+            serializer.is_valid(raise_exception=True)
+            serializer.save()
+            return Response(serializer.data)
+        serializer = self.get_serializer(profile)
+        return Response(serializer.data)
+
+    @action(detail=False, methods=['get'])
+    def discover(self, request):
+        from django.db.models import Count, Q
+        qs = SponsorProfile.objects.annotate(follower_count=Count('followers'))
+        search = request.query_params.get('search', '')
+        if search:
+            qs = qs.filter(
+                Q(company_name__icontains=search) |
+                Q(industry__icontains=search) |
+                Q(location__icontains=search)
+            )
+        page = self.paginate_queryset(qs)
+        serializer_context = self.get_serializer_context()
+        if request.user.is_authenticated:
+            user_follows = SponsorFollow.objects.filter(follower=request.user)
+            follow_map = {f.sponsor_id: f for f in user_follows}
+        else:
+            follow_map = {}
+        if page is not None:
+            serializer = self.get_serializer(page, many=True, context=serializer_context)
+            data = serializer.data
+            for item in data:
+                sponsor_id = item.get('id')
+                follow = follow_map.get(sponsor_id)
+                item['is_following'] = follow is not None
+                item['follow_id'] = follow.pk if follow else None
+                item['notifications_enabled'] = follow.notifications_enabled if follow else None
+            return self.get_paginated_response(data)
+        serializer = self.get_serializer(qs, many=True, context=serializer_context)
+        data = serializer.data
+        for item in data:
+            sponsor_id = item.get('id')
+            follow = follow_map.get(sponsor_id)
+            item['is_following'] = follow is not None
+            item['follow_id'] = follow.pk if follow else None
+            item['notifications_enabled'] = follow.notifications_enabled if follow else None
+        return Response(data)
+
+    @action(detail=True, methods=['post'])
+    def follow(self, request, pk=None):
+        profile = self.get_object()
+        follow, created = SponsorFollow.objects.get_or_create(
+            follower=request.user,
+            sponsor=profile
+        )
+        if not created:
+            follow.delete()
+            return Response({'following': False})
+        return Response({'following': True})
+
 class EventSponsorViewSet(ModelViewSet):
     serializer_class = EventSponsorSerializer
     queryset = EventSponsor.objects.all()
@@ -1580,15 +2043,39 @@ class EventSurveyViewSet(ModelViewSet):
     queryset = EventSurvey.objects.all()
     permission_classes = [IsAuthenticatedOrReadOnly]
 
+    def get_queryset(self):
+        qs = EventSurvey.objects.all()
+        event_id = self.request.query_params.get('event')
+        if event_id:
+            qs = qs.filter(event_id=event_id)
+        return qs
+
 class EventSurveyQuestionViewSet(ModelViewSet):
     serializer_class = EventSurveyQuestionSerializer
     queryset = EventSurveyQuestion.objects.all()
     permission_classes = [IsAuthenticatedOrReadOnly]
 
+    def get_queryset(self):
+        qs = EventSurveyQuestion.objects.all()
+        survey_id = self.request.query_params.get('survey')
+        if survey_id:
+            qs = qs.filter(survey_id=survey_id)
+        return qs
+
 class EventSurveyResponseViewSet(ModelViewSet):
     serializer_class = EventSurveyResponseSerializer
     queryset = EventSurveyResponse.objects.all()
     permission_classes = [IsAuthenticatedOrReadOnly]
+
+    def get_queryset(self):
+        qs = EventSurveyResponse.objects.all()
+        question_id = self.request.query_params.get('question')
+        if question_id:
+            qs = qs.filter(question_id=question_id)
+        user_id = self.request.query_params.get('user')
+        if user_id:
+            qs = qs.filter(user_id=user_id)
+        return qs
 
 class EventTagViewSet(ModelViewSet):
     serializer_class = EventTagSerializer
@@ -1899,6 +2386,177 @@ class EventSlotBookingViewSet(ModelViewSet):
         })
 
 
+class SponsorApplicationViewSet(ModelViewSet):
+    serializer_class = SponsorApplicationSerializer
+    queryset = SponsorApplication.objects.all()
+    permission_classes = [IsAuthenticatedOrReadOnly]
+
+    def get_queryset(self):
+        qs = super().get_queryset()
+        event_id = self.request.query_params.get('event')
+        if event_id:
+            qs = qs.filter(events__id=event_id)
+        return qs.order_by('-created_at')
+
+    def perform_create(self, serializer):
+        serializer.save(user=self.request.user)
+
+    @action(detail=False, methods=['get'])
+    def my_applications(self, request):
+        applications = SponsorApplication.objects.filter(user=request.user).order_by('-created_at')
+        serializer = self.get_serializer(applications, many=True)
+        return Response(serializer.data)
+
+    @action(detail=False, methods=['get'])
+    def incoming_requests(self, request):
+        applications = SponsorApplication.objects.filter(
+            events__created_by=request.user
+        ).exclude(
+            user=request.user
+        ).distinct().order_by('-created_at')
+        serializer = self.get_serializer(applications, many=True)
+        return Response(serializer.data)
+
+    @action(detail=True, methods=['post'])
+    def approve(self, request, pk=None):
+        application = self.get_object()
+        if request.user != application.user and not request.user.is_staff:
+            has_event_access = application.events.filter(created_by=request.user).exists()
+            if not has_event_access:
+                return Response({'error': 'Not authorized to approve this application'}, status=status.HTTP_403_FORBIDDEN)
+
+        application.status = 'approved'
+        application.save()
+
+        for event in application.events.all():
+            EventSponsor.objects.get_or_create(
+                event=event,
+                sponsor_name=application.applicant_name,
+                defaults={
+                    'organisation': application.organisation,
+                    'sponsor_rep': application.user,
+                    'sponsor_details': application.application_details[:1000],
+                }
+            )
+
+        return Response({'message': f'Sponsorship application from {application.applicant_name} approved.'})
+
+    @action(detail=True, methods=['post'])
+    def reject(self, request, pk=None):
+        application = self.get_object()
+        if request.user != application.user and not request.user.is_staff:
+            has_event_access = application.events.filter(created_by=request.user).exists()
+            if not has_event_access:
+                return Response({'error': 'Not authorized to reject this application'}, status=status.HTTP_403_FORBIDDEN)
+
+        application.status = 'rejected'
+        application.save()
+        return Response({'message': f'Sponsorship application from {application.applicant_name} rejected.'})
+
+    @action(detail=False, methods=['post'])
+    def bulk_apply(self, request):
+        event_ids = request.data.get('event_ids', [])
+        if not event_ids:
+            return Response({'error': 'event_ids list is required'}, status=status.HTTP_400_BAD_REQUEST)
+
+        events = Event.objects.filter(id__in=event_ids)
+        if not events.exists():
+            return Response({'error': 'No valid events found'}, status=status.HTTP_400_BAD_REQUEST)
+
+        application = SponsorApplication.objects.create(
+            user=request.user,
+            applicant_name=request.data.get('applicant_name', request.user.get_full_name() or request.user.email),
+            applicant_contact=request.data.get('applicant_contact', request.user.email),
+            application_details=request.data.get('application_details', ''),
+        )
+        if request.data.get('organisation'):
+            from Organisation.models import Organisation
+            try:
+                application.organisation = Organisation.objects.get(pk=request.data['organisation'])
+            except Organisation.DoesNotExist:
+                pass
+        application.events.set(events)
+        application.save()
+
+        serializer = self.get_serializer(application)
+        return Response(serializer.data, status=status.HTTP_201_CREATED)
+
+
+class SponsorshipNegotiationViewSet(ModelViewSet):
+    serializer_class = SponsorshipNegotiationSerializer
+    queryset = SponsorshipNegotiation.objects.all()
+    permission_classes = [IsAuthenticatedOrReadOnly]
+
+    @action(detail=True, methods=['post'])
+    def negotiate(self, request, pk=None):
+        negotiation = self.get_object()
+        terms = request.data.get('terms')
+        message = request.data.get('message')
+
+        if terms:
+            if negotiation.status == 'proposed':
+                negotiation.counter_terms = terms
+                negotiation.status = 'countered'
+            else:
+                negotiation.terms = terms
+                negotiation.status = 'proposed'
+
+        if message:
+            msgs = negotiation.messages or []
+            msgs.append({
+                'sender': request.user.email,
+                'message': message,
+                'timestamp': timezone.now().isoformat()
+            })
+            negotiation.messages = msgs
+
+        negotiation.save()
+        serializer = self.get_serializer(negotiation)
+        return Response(serializer.data)
+
+    @action(detail=True, methods=['post'])
+    def accept(self, request, pk=None):
+        negotiation = self.get_object()
+        negotiation.status = 'accepted'
+        negotiation.save()
+
+        application = negotiation.application
+        application.status = 'approved'
+        application.save()
+
+        return Response({'message': 'Negotiation accepted.', 'status': 'accepted'})
+
+    @action(detail=True, methods=['post'])
+    def decline(self, request, pk=None):
+        negotiation = self.get_object()
+        negotiation.status = 'declined'
+        negotiation.save()
+        return Response({'message': 'Negotiation declined.', 'status': 'declined'})
+
+    @action(detail=True, methods=['post'])
+    def counter(self, request, pk=None):
+        negotiation = self.get_object()
+        counter_terms = request.data.get('counter_terms')
+        message = request.data.get('message')
+
+        if counter_terms:
+            negotiation.counter_terms = counter_terms
+        negotiation.status = 'countered'
+
+        if message:
+            msgs = negotiation.messages or []
+            msgs.append({
+                'sender': request.user.email,
+                'message': message,
+                'timestamp': timezone.now().isoformat()
+            })
+            negotiation.messages = msgs
+
+        negotiation.save()
+        serializer = self.get_serializer(negotiation)
+        return Response(serializer.data)
+
+
 class EventInteractionAnalyticsViewSet(ModelViewSet):
     """ViewSet to handle granular interaction logging (post) and analytics dashboard retrieval (get)"""
     serializer_class = EventInteractionAnalyticsSerializer
@@ -1980,3 +2638,119 @@ class EventInteractionAnalyticsViewSet(ModelViewSet):
             'tickets_sold': ticket_sales,
             'age_distribution': age_distribution
         })
+
+
+class OrganizerFollowViewSet(ModelViewSet):
+    serializer_class = OrganizerFollowSerializer
+    permission_classes = [IsAuthenticatedOrReadOnly]
+
+    def get_queryset(self):
+        return OrganizerFollow.objects.filter(follower=self.request.user)
+
+    def perform_create(self, serializer):
+        serializer.save(follower=self.request.user)
+
+    @action(detail=False, methods=['get'])
+    def following(self, request):
+        qs = OrganizerFollow.objects.filter(follower=request.user)
+        serializer = self.get_serializer(qs, many=True)
+        return Response(serializer.data)
+
+    @action(detail=False, methods=['get'])
+    def followers(self, request):
+        qs = OrganizerFollow.objects.filter(organizer__user=request.user)
+        serializer = self.get_serializer(qs, many=True)
+        return Response(serializer.data)
+
+    @action(detail=True, methods=['patch'])
+    def toggle_notifications(self, request, pk=None):
+        follow = self.get_object()
+        enabled = request.data.get('notifications_enabled')
+        if enabled is None:
+            follow.notifications_enabled = not follow.notifications_enabled
+        else:
+            follow.notifications_enabled = bool(enabled)
+        follow.save(update_fields=['notifications_enabled'])
+        serializer = self.get_serializer(follow)
+        return Response(serializer.data)
+
+
+class SponsorFollowViewSet(ModelViewSet):
+    serializer_class = SponsorFollowSerializer
+    permission_classes = [IsAuthenticatedOrReadOnly]
+
+    def get_queryset(self):
+        return SponsorFollow.objects.filter(follower=self.request.user)
+
+    def perform_create(self, serializer):
+        serializer.save(follower=self.request.user)
+
+    @action(detail=False, methods=['get'])
+    def following(self, request):
+        qs = SponsorFollow.objects.filter(follower=request.user)
+        serializer = self.get_serializer(qs, many=True)
+        return Response(serializer.data)
+
+    @action(detail=False, methods=['get'])
+    def followers(self, request):
+        qs = SponsorFollow.objects.filter(sponsor__user=request.user)
+        serializer = self.get_serializer(qs, many=True)
+        return Response(serializer.data)
+
+    @action(detail=True, methods=['patch'])
+    def toggle_notifications(self, request, pk=None):
+        follow = self.get_object()
+        enabled = request.data.get('notifications_enabled')
+        if enabled is None:
+            follow.notifications_enabled = not follow.notifications_enabled
+        else:
+            follow.notifications_enabled = bool(enabled)
+        follow.save(update_fields=['notifications_enabled'])
+        serializer = self.get_serializer(follow)
+        return Response(serializer.data)
+
+
+class PartnershipInvitationViewSet(ModelViewSet):
+    serializer_class = PartnershipInvitationSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        return PartnershipInvitation.objects.filter(
+            models.Q(sender=self.request.user) | models.Q(receiver__user=self.request.user)
+        )
+
+    def perform_create(self, serializer):
+        serializer.save(sender=self.request.user)
+
+    @action(detail=False, methods=['get'])
+    def inbox(self, request):
+        qs = PartnershipInvitation.objects.filter(receiver__user=request.user, status='pending')
+        serializer = self.get_serializer(qs, many=True)
+        return Response(serializer.data)
+
+    @action(detail=True, methods=['post'])
+    def accept(self, request, pk=None):
+        inv = self.get_object()
+        inv.status = 'accepted'
+        inv.save()
+        return Response({'status': 'accepted'})
+
+    @action(detail=True, methods=['post'])
+    def decline(self, request, pk=None):
+        inv = self.get_object()
+        inv.status = 'declined'
+        inv.save()
+        return Response({'status': 'declined'})
+
+
+class CoOrganizerViewSet(ModelViewSet):
+    serializer_class = CoOrganizerSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        return CoOrganizer.objects.filter(
+            models.Q(user=self.request.user) | models.Q(event__created_by=self.request.user)
+        )
+
+    def perform_create(self, serializer):
+        serializer.save(added_by=self.request.user)

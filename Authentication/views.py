@@ -29,7 +29,8 @@ from Authentication.models import (
 from Authentication.serializers import (
     LoginSerializer, CustomUserSerializer, LecturerSerializer, OrgStaffSerializer, 
     StudentAdminSerializer, OrgAdminSerializer, InstAdminSerializer, 
-    InstStaffSerializer, ProfileSerializer, BaseUserSerializer
+    InstStaffSerializer, ProfileSerializer, BaseUserSerializer,
+    OrganizerRegistrationSerializer, SponsorRegistrationSerializer
 )
 from Authentication.otp_utils import (
     generate_totp_secret, generate_totp_otp, verify_totp_otp, 
@@ -41,6 +42,7 @@ from Authentication.activity_logger import (
     log_user_activity, log_login_attempt, log_password_reset, 
     log_2fa_activity, log_device_activity
 )
+from rest_framework_simplejwt.authentication import JWTAuthentication
 
 logger = logging.getLogger(__name__)
 
@@ -149,6 +151,192 @@ class RegisterView(APIView):
         if changed:
             user.save(update_fields=['preferred_currency', 'preferred_language'])
 
+
+
+class RegisterOrganizerView(APIView):
+    permission_classes = [AllowAny]
+    authentication_classes = [JWTAuthentication]
+
+    def post(self, request):
+        from Events.models import OrganizerProfile
+
+        email = request.data.get('email')
+
+        if request.user.is_authenticated:
+            if email and request.user.email != email:
+                return Response({"error": "Email doesn't match your account."}, status=status.HTTP_400_BAD_REQUEST)
+            if OrganizerProfile.objects.filter(user=request.user).exists():
+                return Response({"error": "You already have an organizer profile."}, status=status.HTTP_400_BAD_REQUEST)
+            serializer = OrganizerRegistrationSerializer(
+                data={**request.data, 'email': request.user.email},
+                context={'existing_user': request.user}
+            )
+        else:
+            serializer = OrganizerRegistrationSerializer(data=request.data)
+
+        if serializer.is_valid():
+            user = serializer.save()
+
+            if not request.user.is_authenticated:
+                browser_locale = request.data.get('browser_locale', '')
+                self._infer_preferences(user, browser_locale)
+                log_user_activity(user, 'register_organizer', request, "Organizer registered")
+                otp_code = str(secrets.SystemRandom().randint(100000, 999999))
+                user.set_registration_otp(otp_code)
+                user.registration_otp_expires = timezone.now() + timezone.timedelta(minutes=OTP_EXPIRY_MINUTES)
+                user.save()
+                try:
+                    send_email_otp(user.email, otp_code, action='registration')
+                except Exception as e:
+                    logger.error(f"Failed to send registration OTP: {e}")
+                return Response({
+                    "message": "Registration successful. Please verify your email with the OTP sent.",
+                    "email": user.email,
+                    "next_step": "verify_registration_otp"
+                }, status=status.HTTP_201_CREATED)
+            else:
+                log_user_activity(user, 'became_organizer', request, "Added organizer profile")
+                return Response({
+                    "message": "Organizer profile created successfully.",
+                    "is_organizer": True,
+                    "next_step": "organiser_dashboard"
+                }, status=status.HTTP_201_CREATED)
+
+        logger.warning(
+            "Organizer registration 400: auth=%s, user_email=%s, sent_email=%s, data_keys=%s, errors=%s",
+            request.user.is_authenticated,
+            getattr(request.user, 'email', 'N/A'),
+            email,
+            list(request.data.keys()),
+            dict(serializer.errors)
+        )
+        return Response({
+            "error": serializer.errors,
+            "debug": {
+                "is_authenticated": request.user.is_authenticated,
+                "user_email": request.user.email if request.user.is_authenticated else None,
+                "sent_email": email,
+                "received_keys": list(request.data.keys()),
+            }
+        }, status=status.HTTP_400_BAD_REQUEST)
+
+    def _infer_preferences(self, user, browser_locale):
+        from Authentication.currency_utils import (
+            infer_currency_from_email, infer_currency_from_locale,
+            infer_language_from_email, infer_language_from_locale,
+        )
+        changed = False
+        if user.preferred_currency == 'USD':
+            currency = infer_currency_from_email(user.email)
+            if not currency:
+                currency = infer_currency_from_locale(browser_locale)
+            if currency:
+                user.preferred_currency = currency
+                changed = True
+        if user.preferred_language == 'en':
+            language = infer_language_from_locale(browser_locale)
+            if language == 'en':
+                email_lang = infer_language_from_email(user.email)
+                if email_lang:
+                    language = email_lang
+            if language and language != 'en':
+                user.preferred_language = language
+                changed = True
+        if changed:
+            user.save(update_fields=['preferred_currency', 'preferred_language'])
+
+
+class RegisterSponsorView(APIView):
+    permission_classes = [AllowAny]
+    authentication_classes = [JWTAuthentication]
+
+    def post(self, request):
+        from Events.models import SponsorProfile
+
+        email = request.data.get('email')
+
+        if request.user.is_authenticated:
+            if email and request.user.email != email:
+                return Response({"error": "Email doesn't match your account."}, status=status.HTTP_400_BAD_REQUEST)
+            if SponsorProfile.objects.filter(user=request.user).exists():
+                return Response({"error": "You already have a sponsor profile."}, status=status.HTTP_400_BAD_REQUEST)
+            serializer = SponsorRegistrationSerializer(
+                data={**request.data, 'email': request.user.email},
+                context={'existing_user': request.user}
+            )
+        else:
+            serializer = SponsorRegistrationSerializer(data=request.data)
+
+        if serializer.is_valid():
+            user = serializer.save()
+
+            if not request.user.is_authenticated:
+                browser_locale = request.data.get('browser_locale', '')
+                self._infer_preferences(user, browser_locale)
+                log_user_activity(user, 'register_sponsor', request, "Sponsor registered")
+                otp_code = str(secrets.SystemRandom().randint(100000, 999999))
+                user.set_registration_otp(otp_code)
+                user.registration_otp_expires = timezone.now() + timezone.timedelta(minutes=OTP_EXPIRY_MINUTES)
+                user.save()
+                try:
+                    send_email_otp(user.email, otp_code, action='registration')
+                except Exception as e:
+                    logger.error(f"Failed to send registration OTP: {e}")
+                return Response({
+                    "message": "Registration successful. Please verify your email with the OTP sent.",
+                    "email": user.email,
+                    "next_step": "verify_registration_otp"
+                }, status=status.HTTP_201_CREATED)
+            else:
+                log_user_activity(user, 'became_sponsor', request, "Added sponsor profile")
+                return Response({
+                    "message": "Sponsor profile created successfully.",
+                    "is_sponsor": True,
+                    "next_step": "sponsor_dashboard"
+                }, status=status.HTTP_201_CREATED)
+
+        logger.warning(
+            "Sponsor registration 400: auth=%s, user_email=%s, sent_email=%s, data_keys=%s, errors=%s",
+            request.user.is_authenticated,
+            getattr(request.user, 'email', 'N/A'),
+            email,
+            list(request.data.keys()),
+            dict(serializer.errors)
+        )
+        return Response({
+            "error": serializer.errors,
+            "debug": {
+                "is_authenticated": request.user.is_authenticated,
+                "user_email": request.user.email if request.user.is_authenticated else None,
+                "sent_email": email,
+                "received_keys": list(request.data.keys()),
+            }
+        }, status=status.HTTP_400_BAD_REQUEST)
+
+    def _infer_preferences(self, user, browser_locale):
+        from Authentication.currency_utils import (
+            infer_currency_from_email, infer_currency_from_locale,
+            infer_language_from_email, infer_language_from_locale,
+        )
+        changed = False
+        if user.preferred_currency == 'USD':
+            currency = infer_currency_from_email(user.email)
+            if not currency:
+                currency = infer_currency_from_locale(browser_locale)
+            if currency:
+                user.preferred_currency = currency
+                changed = True
+        if user.preferred_language == 'en':
+            language = infer_language_from_locale(browser_locale)
+            if language == 'en':
+                email_lang = infer_language_from_email(user.email)
+                if email_lang:
+                    language = email_lang
+            if language and language != 'en':
+                user.preferred_language = language
+                changed = True
+        if changed:
+            user.save(update_fields=['preferred_currency', 'preferred_language'])
 
 
 class RegisterVerifyView(APIView):
