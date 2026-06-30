@@ -1,11 +1,15 @@
 from django.shortcuts import render, get_object_or_404
 from django.utils import timezone
+from django.conf import settings
+from django.http import FileResponse
 from rest_framework.viewsets import ModelViewSet
 from rest_framework.decorators import action
 from rest_framework import status
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
 from django.db.models import Max
+from jinja2 import Template
+from xhtml2pdf import pisa
 from Specialization.models import (
     Specialization, Stack, SavedSpecialization, SavedStack,
     SpecializationAdmin, SpecializationMembership, SpecializationModerator,
@@ -29,7 +33,7 @@ from Specialization.serializers import (
     ActivitySerializer, ActivitySubmissionSerializer, LabSerializer
 )
 from Authentication.models import Profile
-from Specialization.permissions import IsAdmin, IsCreator, IsModerator
+from Specialization.permissions import IsAdmin, IsCreator, IsModerator, IsMember
 from decimal import Decimal
 import json, uuid, random
 from datetime import datetime
@@ -260,10 +264,15 @@ class SpecializationViewSet(ModelViewSet):
 
     @action(detail=True, methods=['get'], permission_classes=[IsAuthenticated])
     def progress(self, request, pk=None):
-        """Get full progress tree for a specialization."""
         specialization = self.get_object()
         enrollment = Enrollment.objects.filter(user=request.user, specialization=specialization).first()
         is_enrolled = enrollment is not None
+
+        try:
+            profile = Profile.objects.get(user=request.user)
+            is_staff = specialization.created_by.filter(id=profile.id).exists() or specialization.admins.filter(id=profile.id).exists() or specialization.moderator.filter(id=profile.id).exists()
+        except Profile.DoesNotExist:
+            is_staff = False
 
         stacks = specialization.stacks.all()
         progress_data = []
@@ -281,19 +290,15 @@ class SpecializationViewSet(ModelViewSet):
                 lp = LearnerProgress.objects.filter(user=request.user, lesson=lesson).first()
                 is_completed = lp.completed if lp else False
 
-                # Locked for unenrolled
                 locked = lesson.is_locked
-                if specialization.lock_for_unenrolled and not is_enrolled and not lesson.is_preview:
-                    locked = True
-
-                # Sequential locking
-                if specialization.sequential_locking and not prev_lesson_completed and not lesson.is_preview:
-                    locked = True
-                    sequential_blocked = True
-
-                # Skip disabled — hide future lessons
-                if specialization.skip_disabled and sequential_blocked and not lesson.is_preview:
-                    continue
+                if not is_staff:
+                    if specialization.lock_for_unenrolled and not is_enrolled and not lesson.is_preview:
+                        locked = True
+                    if specialization.sequential_locking and not prev_lesson_completed and not lesson.is_preview:
+                        locked = True
+                        sequential_blocked = True
+                    if specialization.skip_disabled and sequential_blocked and not lesson.is_preview:
+                        continue
 
                 if is_completed:
                     completed_lessons += 1
@@ -504,7 +509,7 @@ class LessonViewSet(ModelViewSet):
     def get_permissions(self):
         if self.action in ['list', 'retrieve', 'complete']:
             return [IsAuthenticated()]
-        return [IsAuthenticated()]
+        return [IsAuthenticated(), IsModerator()]
 
     def get_queryset(self):
         qs = super().get_queryset()
@@ -615,6 +620,44 @@ class LessonViewSet(ModelViewSet):
         )
         issued.specialization.add(specialization)
 
+        if cert_template and cert_template.template_html:
+            self._render_certificate_pdf(issued, cert_template, specialization, user, grade, avg_score, hours)
+
+    def _render_certificate_pdf(self, issued, cert_template, specialization, user, grade, avg_score, hours):
+        try:
+            profile = Profile.objects.filter(user=user).first()
+            learner_name = profile.name if profile and profile.name else user.email
+
+            html_str = cert_template.template_html
+            jinja_template = Template(html_str)
+            rendered = jinja_template.render(
+                learner_name=learner_name,
+                course_name=specialization.name,
+                issuer_name=cert_template.issuer_name,
+                completion_date=timezone.now().strftime('%B %d, %Y'),
+                grade=grade,
+                average_score=round(avg_score, 1),
+                hours_completed=hours,
+                verification_code=str(issued.verification_code),
+            )
+
+            from io import BytesIO
+            pdf_buffer = BytesIO()
+            pisa_status = pisa.CreatePDF(src=rendered, dest=pdf_buffer)
+            if pisa_status.err:
+                return
+            pdf_bytes = pdf_buffer.getvalue()
+
+            from django.core.files.base import ContentFile
+            issued.certificate_file.save(
+                f'cert_{issued.verification_code}.pdf',
+                ContentFile(pdf_bytes),
+                save=True,
+            )
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).warning(f'Failed to render certificate PDF: {e}')
+
     @action(detail=True, methods=['post'])
     def add_block(self, request, pk=None):
         from .models import LessonContentBlock
@@ -680,9 +723,9 @@ class QuizViewSet(ModelViewSet):
     serializer_class = QuizSerializer
 
     def get_permissions(self):
-        if self.action in ['list', 'retrieve', 'submit_attempt']:
+        if self.action in ['list', 'retrieve', 'submit_attempt', 'my_attempts']:
             return [IsAuthenticated()]
-        return [IsAuthenticated()]
+        return [IsAuthenticated(), IsModerator()]
 
     def get_queryset(self):
         qs = super().get_queryset()
@@ -1092,7 +1135,11 @@ Content:
 class QuizQuestionViewSet(ModelViewSet):
     queryset = QuizQuestion.objects.all()
     serializer_class = QuizQuestionCreateSerializer
-    permission_classes = [IsAuthenticated]
+
+    def get_permissions(self):
+        if self.action in ['list', 'retrieve']:
+            return [IsAuthenticated()]
+        return [IsAuthenticated(), IsModerator()]
 
     def get_queryset(self):
         qs = super().get_queryset()
@@ -1123,7 +1170,8 @@ class EnrollmentViewSet(ModelViewSet):
 
     @action(detail=True, methods=['post'])
     def unlock(self, request, pk=None):
-        """Simulate payment unlock for a paid specialization."""
+        if not settings.DEBUG and not request.user.is_staff:
+            return Response({'error': 'This endpoint is only available in development mode.'}, status=status.HTTP_403_FORBIDDEN)
         enrollment = self.get_object()
         enrollment.payment_status = 'paid'
         enrollment.save()
@@ -1139,6 +1187,50 @@ class CertificateViewSet(ModelViewSet):
     serializer_class = CertificateSerializer
     permission_classes = [IsAuthenticated]
 
+    @action(detail=True, methods=['post'])
+    def generate_pdf(self, request, pk=None):
+        cert_template = self.get_object()
+        if not cert_template.template_html:
+            return Response({'error': 'Certificate template has no HTML content.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            specialization = cert_template.specialization.first()
+            html_str = cert_template.template_html
+            jinja_template = Template(html_str)
+            rendered = jinja_template.render(
+                learner_name='[Learner Name]',
+                course_name=specialization.name if specialization else '[Course Name]',
+                issuer_name=cert_template.issuer_name,
+                completion_date='[Completion Date]',
+                grade='[Grade]',
+                average_score=0,
+                hours_completed=0,
+                verification_code='[Verification Code]',
+            )
+
+            from io import BytesIO
+            pdf_buffer = BytesIO()
+            pisa_status = pisa.CreatePDF(src=rendered, dest=pdf_buffer)
+            if pisa_status.err:
+                return Response({'error': 'PDF generation failed'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+            pdf_bytes = pdf_buffer.getvalue()
+
+            from django.core.files.base import ContentFile
+            cert_template.certificate_file.save(
+                f'template_{cert_template.id}_preview.pdf',
+                ContentFile(pdf_bytes),
+                save=True,
+            )
+
+            if cert_template.certificate_file:
+                return Response({
+                    'detail': 'PDF generated successfully',
+                    'file_url': cert_template.certificate_file.url,
+                })
+            return Response({'detail': 'PDF generated'})
+        except Exception as e:
+            return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
 
 class IssuedCertificateViewSet(ModelViewSet):
     queryset = IssuedCertificate.objects.all()
@@ -1150,6 +1242,14 @@ class IssuedCertificateViewSet(ModelViewSet):
         if profile:
             return IssuedCertificate.objects.filter(issued_to=profile)
         return IssuedCertificate.objects.none()
+
+    @action(detail=True, methods=['get'])
+    def download(self, request, pk=None):
+        cert = self.get_object()
+        if cert.certificate_file:
+            response = FileResponse(cert.certificate_file, as_attachment=True, filename=f'certificate_{cert.verification_code}.pdf')
+            return response
+        return Response({'error': 'Certificate file not available.'}, status=status.HTTP_404_NOT_FOUND)
 
     @action(detail=False, methods=['get'])
     def verify(self, request):
@@ -1223,47 +1323,59 @@ class LabViewSet(ModelViewSet):
 class SavedSpecializationViewSet(ModelViewSet):
     queryset = SavedSpecialization.objects.all()
     serializer_class = SavedSpecializationSerializer
+    permission_classes = [IsAuthenticated]
 
 class SavedStackViewSet(ModelViewSet):
     queryset = SavedStack.objects.all()
     serializer_class = SavedStackSerializer
+    permission_classes = [IsAuthenticated]
 
 class CompletedSpecializationViewSet(ModelViewSet):
     queryset = CompletedSpecialization.objects.all()
     serializer_class = CompletedSpecializationSerializer
+    permission_classes = [IsAuthenticated]
 
 class CompletedStackViewSet(ModelViewSet):
     queryset = CompletedStack.objects.all()
     serializer_class = CompletedStackSerializer
+    permission_classes = [IsAuthenticated]
 
 class SpecializationAdminViewSet(ModelViewSet):
     queryset = SpecializationAdmin.objects.all()
     serializer_class = SpecializationAdminSerializer
+    permission_classes = [IsAuthenticated, IsAdmin]
 
 class StackAdminViewSet(ModelViewSet):
     queryset = StackAdmin.objects.all()
     serializer_class = StackAdminSerializer
+    permission_classes = [IsAuthenticated, IsAdmin]
 
 class SpecializationModeratorViewSet(ModelViewSet):
     queryset = SpecializationModerator.objects.all()
     serializer_class = SpecializationModeratorSerializer
+    permission_classes = [IsAuthenticated, IsModerator]
 
 class StackModeratorViewSet(ModelViewSet):
     queryset = StackModerator.objects.all()
     serializer_class = StackModeratorSerializer
+    permission_classes = [IsAuthenticated, IsModerator]
 
 class SpecializationMembershipViewSet(ModelViewSet):
     queryset = SpecializationMembership.objects.all()
     serializer_class = SpecializationMembershipSerializer
+    permission_classes = [IsAuthenticated, IsMember]
 
 class StackMembershipViewSet(ModelViewSet):
     queryset = StackMembership.objects.all()
     serializer_class = StackMembershipSerializer
+    permission_classes = [IsAuthenticated, IsMember]
 
 class SpecializationRoomViewSet(ModelViewSet):
     queryset = SpecializationRoom.objects.all()
     serializer_class = SpecializationRoomSerializer
+    permission_classes = [IsAuthenticated]
 
 class PositionTrackerViewSet(ModelViewSet):
     queryset = PositionTracker.objects.all()
     serializer_class = PositionTrackerSerializer
+    permission_classes = [IsAuthenticated]

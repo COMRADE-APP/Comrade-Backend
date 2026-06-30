@@ -8,6 +8,7 @@ from Specialization.models import (
     Lesson, Quiz, QuizQuestion, QuizAttempt, Enrollment, LearnerProgress,
     LessonContentBlock, Activity, ActivitySubmission, Lab
 )
+from Authentication.models import Profile
 from comrade.mixins import RichTextSanitizeMixin
 
 
@@ -271,6 +272,16 @@ class SpecializationSerializer(serializers.ModelSerializer):
             return data
 
         is_enrolled = Enrollment.objects.filter(user=request.user, specialization=instance).exists()
+
+        try:
+            profile = Profile.objects.get(user=request.user)
+            is_staff = instance.created_by.filter(id=profile.id).exists() or instance.admins.filter(id=profile.id).exists() or instance.moderator.filter(id=profile.id).exists()
+        except Profile.DoesNotExist:
+            is_staff = False
+
+        if is_staff:
+            return data
+
         has_locking = instance.lock_for_unenrolled or instance.sequential_locking or instance.skip_disabled
         if not has_locking:
             return data
@@ -344,13 +355,24 @@ class SpecializationListSerializer(serializers.ModelSerializer):
 # ============================================================================
 
 class CertificateSerializer(serializers.ModelSerializer):
+    certificate_url = serializers.SerializerMethodField()
+
     class Meta:
         model = Certificate
         fields = '__all__'
 
+    def get_certificate_url(self, obj):
+        if obj.certificate_file:
+            request = self.context.get('request')
+            if request:
+                return request.build_absolute_uri(obj.certificate_file.url)
+            return obj.certificate_file.url
+        return None
+
 
 class IssuedCertificateSerializer(serializers.ModelSerializer):
     specialization_names = serializers.SerializerMethodField()
+    certificate_url = serializers.SerializerMethodField()
 
     class Meta:
         model = IssuedCertificate
@@ -358,6 +380,14 @@ class IssuedCertificateSerializer(serializers.ModelSerializer):
 
     def get_specialization_names(self, obj):
         return [s.name for s in obj.specialization.all()]
+
+    def get_certificate_url(self, obj):
+        if obj.certificate_file:
+            request = self.context.get('request')
+            if request:
+                return request.build_absolute_uri(obj.certificate_file.url)
+            return obj.certificate_file.url
+        return None
 
 
 # ============================================================================
