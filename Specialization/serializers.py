@@ -5,7 +5,8 @@ from Specialization.models import (
     SpecializationRoom, StackAdmin, StackMembership, StackModerator,
     CompletedSpecialization, CompletedStack, PositionTracker,
     Certificate, IssuedCertificate,
-    Lesson, Quiz, QuizQuestion, QuizAttempt, Enrollment, LearnerProgress
+    Lesson, Quiz, QuizQuestion, QuizAttempt, Enrollment, LearnerProgress,
+    LessonContentBlock, Activity, ActivitySubmission, Lab
 )
 from comrade.mixins import RichTextSanitizeMixin
 
@@ -14,17 +15,24 @@ from comrade.mixins import RichTextSanitizeMixin
 # LESSON & CONTENT SERIALIZERS
 # ============================================================================
 
+class LessonContentBlockSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = LessonContentBlock
+        fields = ['id', 'lesson', 'block_type', 'content', 'url', 'file', 'code_language', 'caption', 'order', 'background_color']
+
+
 class LessonSerializer(serializers.ModelSerializer, RichTextSanitizeMixin):
     has_quiz = serializers.SerializerMethodField()
+    content_blocks = LessonContentBlockSerializer(many=True, read_only=True)
 
     class Meta:
         model = Lesson
         fields = [
-            'id', 'stack', 'title', 'description', 'content_type',
+            'id', 'stack', 'title', 'slug', 'description', 'content_type',
             'content_text', 'video_url', 'audio_url', 'image_url',
             'file_upload', 'code_snippet', 'code_language', 'external_url',
             'order', 'duration_minutes', 'is_preview', 'is_locked', 'created_on',
-            'has_quiz'
+            'has_quiz', 'content_blocks', 'background_color'
         ]
         read_only_fields = ['id', 'created_on']
 
@@ -36,14 +44,16 @@ class LessonListSerializer(serializers.ModelSerializer):
     """Lightweight lesson serializer for listing within stacks."""
     completed = serializers.SerializerMethodField()
     has_quiz = serializers.SerializerMethodField()
+    content_blocks = LessonContentBlockSerializer(many=True, read_only=True)
 
     class Meta:
         model = Lesson
         fields = [
-            'id', 'title', 'content_type', 'order', 'duration_minutes',
+            'id', 'title', 'slug', 'content_type', 'order', 'duration_minutes',
             'is_preview', 'is_locked', 'completed', 'has_quiz',
             'content_text', 'video_url', 'audio_url', 'image_url',
-            'file_upload', 'code_snippet', 'code_language', 'external_url'
+            'file_upload', 'code_snippet', 'code_language', 'external_url',
+            'content_blocks', 'background_color'
         ]
 
     def get_completed(self, obj):
@@ -88,6 +98,8 @@ class QuizSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'stack', 'lesson', 'specialization', 'title', 'description',
             'placement', 'passing_score', 'time_limit_minutes', 'max_attempts',
+            'display_mode', 'timer_mode', 'time_per_question', 'allow_back_navigation',
+            'show_results_immediately', 'pass_mark_to_continue',
             'order', 'created_on', 'questions', 'question_count'
         ]
         read_only_fields = ['id', 'created_on']
@@ -104,6 +116,34 @@ class QuizAttemptSerializer(serializers.ModelSerializer):
             'started_at', 'completed_at', 'attempt_number'
         ]
         read_only_fields = ['id', 'user', 'score', 'passed', 'started_at', 'attempt_number']
+
+
+# ============================================================================
+# ACTIVITY & LAB SERIALIZERS
+# ============================================================================
+
+class ActivitySerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Activity
+        fields = ['id', 'stack', 'title', 'activity_type', 'instructions',
+                  'content_blocks', 'submission_required', 'due_days', 'order', 'created_on']
+        read_only_fields = ['id', 'created_on']
+
+
+class ActivitySubmissionSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = ActivitySubmission
+        fields = ['id', 'activity', 'user', 'content', 'file',
+                  'submitted_at', 'grade', 'feedback']
+        read_only_fields = ['id', 'user', 'submitted_at']
+
+
+class LabSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Lab
+        fields = ['id', 'stack', 'title', 'description', 'instructions',
+                  'content_blocks', 'setup_guide', 'expected_output', 'links', 'order', 'created_on']
+        read_only_fields = ['id', 'created_on']
 
 
 # ============================================================================
@@ -155,16 +195,18 @@ class LearnerProgressSerializer(serializers.ModelSerializer):
 # ============================================================================
 
 class StackDetailSerializer(serializers.ModelSerializer):
-    """Stack with nested lessons and quizzes."""
+    """Stack with nested lessons, quizzes, activities, and labs."""
     lessons = LessonListSerializer(many=True, read_only=True)
     quizzes = QuizSerializer(many=True, read_only=True)
+    activities = ActivitySerializer(many=True, read_only=True)
+    labs = LabSerializer(many=True, read_only=True)
     lesson_count = serializers.SerializerMethodField()
 
     class Meta:
         model = Stack
         fields = [
             'id', 'name', 'description', 'image_url', 'created_on',
-            'lessons', 'quizzes', 'lesson_count'
+            'lessons', 'quizzes', 'activities', 'labs', 'lesson_count'
         ]
 
     def get_lesson_count(self, obj):
@@ -184,7 +226,9 @@ class SpecializationSerializer(serializers.ModelSerializer):
         model = Specialization
         fields = [
             'id', 'name', 'description', 'image_url', 'learning_type',
-            'is_paid', 'price', 'created_by', 'created_on',
+            'is_paid', 'price', 'background_color', 'lock_for_unenrolled',
+            'sequential_locking', 'skip_disabled',
+            'created_by', 'created_on',
             'stacks', 'stacks_detail', 'members', 'admins', 'moderator',
             'member_count', 'stack_count', 'total_lessons', 'total_duration',
             'is_enrolled', 'user_progress'
@@ -220,6 +264,49 @@ class SpecializationSerializer(serializers.ModelSerializer):
                 return float(enrollment.progress_percent)
         return 0
 
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        request = self.context.get('request')
+        if not request or not request.user.is_authenticated:
+            return data
+
+        is_enrolled = Enrollment.objects.filter(user=request.user, specialization=instance).exists()
+        has_locking = instance.lock_for_unenrolled or instance.sequential_locking or instance.skip_disabled
+        if not has_locking:
+            return data
+
+        completed_lesson_ids = set(
+            LearnerProgress.objects.filter(
+                user=request.user,
+                lesson__stack__specialization_stacks=instance,
+                completed=True
+            ).values_list('lesson_id', flat=True)
+        )
+
+        for stack in data.get('stacks_detail', []):
+            prev_completed = True
+            sequential_blocked = False
+            for lesson in stack.get('lessons', []):
+                locked = lesson.get('is_locked', False)
+                lesson_id = lesson.get('id')
+                is_completed = lesson_id in completed_lesson_ids
+
+                if instance.lock_for_unenrolled and not is_enrolled and not lesson.get('is_preview'):
+                    locked = True
+
+                if (instance.sequential_locking or instance.skip_disabled) and not prev_completed and not lesson.get('is_preview'):
+                    locked = True
+                    sequential_blocked = True
+
+                if instance.skip_disabled and sequential_blocked and not lesson.get('is_preview'):
+                    lesson['hidden'] = True
+
+                lesson['is_locked'] = locked
+                lesson['sequential_blocked'] = sequential_blocked and not is_completed
+                prev_completed = is_completed
+
+        return data
+
 
 class SpecializationListSerializer(serializers.ModelSerializer):
     """Lightweight serializer for catalog listing."""
@@ -232,7 +319,7 @@ class SpecializationListSerializer(serializers.ModelSerializer):
         model = Specialization
         fields = [
             'id', 'name', 'description', 'image_url', 'learning_type',
-            'is_paid', 'price', 'created_on',
+            'is_paid', 'price', 'background_color', 'created_on',
             'member_count', 'stack_count', 'total_lessons', 'is_enrolled'
         ]
 

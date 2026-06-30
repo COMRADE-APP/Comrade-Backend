@@ -1,12 +1,12 @@
 from django.shortcuts import render
-from Organisation.models import Organisation, OrgBranch, Division, Department, Section, Team, Project, Centre, Committee, Board, Unit, Institute, Program, OtherOrgUnit, OrganisationMember
+from Organisation.models import Organisation, OrgBranch, Division, Department, Section, Team, Project, Centre, Committee, Board, Unit, Institute, Program, OtherOrgUnit, OrganisationMember, OrganisationInvitation
 from rest_framework.viewsets import ModelViewSet
 from rest_framework.response import Response
 from rest_framework import status
 from rest_framework.decorators import action
 from rest_framework.permissions import IsAuthenticatedOrReadOnly, AllowAny, IsAuthenticated
 from rest_framework.filters import SearchFilter
-from Organisation.serializers import OrganisationSerializer, OrgBranchSerializer, DivisionSerializer, DepartmentSerializer, SectionSerializer, TeamSerializer, ProjectSerializer, CentreSerializer, CommitteeSerializer, BoardSerializer, UnitSerializer, InstituteSerializer, ProgramSerializer, OtherOrgUnitSerializer, OrganisationMemberSerializer
+from Organisation.serializers import OrganisationSerializer, OrgBranchSerializer, DivisionSerializer, DepartmentSerializer, SectionSerializer, TeamSerializer, ProjectSerializer, CentreSerializer, CommitteeSerializer, BoardSerializer, UnitSerializer, InstituteSerializer, ProgramSerializer, OtherOrgUnitSerializer, OrganisationMemberSerializer, OrganisationInvitationSerializer
 
 
 # Create your views here.
@@ -175,6 +175,86 @@ class OrganisationViewSet(ModelViewSet):
                 seen_ids.add(org.id)
         
         return Response(accounts)
+
+    @action(detail=True, methods=['post'], permission_classes=[IsAuthenticated])
+    def invite_member(self, request, pk=None):
+        organisation = self.get_object()
+        email = request.data.get('email', '').strip().lower()
+        role = request.data.get('role', 'member')
+        title = request.data.get('title', '')
+
+        if not email:
+            return Response({'error': 'Email is required'}, status=status.HTTP_400_BAD_REQUEST)
+
+        is_admin = OrganisationMember.objects.filter(
+            organisation=organisation, user=request.user, role='admin', is_active=True
+        ).exists()
+        if organisation.created_by != request.user and not is_admin:
+            return Response({'error': 'Only admins can invite members'}, status=status.HTTP_403_FORBIDDEN)
+
+        if OrganisationMember.objects.filter(organisation=organisation, user__email=email, is_active=True).exists():
+            return Response({'error': 'User is already a member'}, status=status.HTTP_400_BAD_REQUEST)
+
+        from datetime import timedelta
+        from django.utils import timezone
+        invitation, created = OrganisationInvitation.objects.update_or_create(
+            organisation=organisation, email=email,
+            defaults={
+                'invited_by': request.user, 'role': role,
+                'status': 'pending', 'expires_at': timezone.now() + timedelta(days=7),
+            }
+        )
+
+        from django.core.mail import send_mail
+        from django.conf import settings
+        invite_url = f"http://localhost:8000/organizations/{organisation.id}?invite={invitation.token}"
+        try:
+            send_mail(
+                f'You are invited to join {organisation.name} on Comrade',
+                f'Hi,\n\n{request.user.get_full_name() or request.user.email} has invited you to join '
+                f'"{organisation.name}" as a {role}.\n\n'
+                f'Click here to accept: {invite_url}\n\n'
+                f'This invitation expires in 7 days.',
+                settings.DEFAULT_FROM_EMAIL, [email]
+            )
+        except Exception:
+            pass
+
+        serializer = OrganisationInvitationSerializer(invitation)
+        return Response(serializer.data, status=status.HTTP_201_CREATED if created else status.HTTP_200_OK)
+
+    @action(detail=False, methods=['post'], permission_classes=[IsAuthenticated])
+    def accept_invitation(self, request):
+        token = request.data.get('token')
+        if not token:
+            return Response({'error': 'Token is required'}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            invitation = OrganisationInvitation.objects.get(token=token, status='pending')
+        except OrganisationInvitation.DoesNotExist:
+            return Response({'error': 'Invalid or expired invitation'}, status=status.HTTP_404_NOT_FOUND)
+
+        from django.utils import timezone
+        if invitation.expires_at < timezone.now():
+            invitation.status = 'expired'
+            invitation.save()
+            return Response({'error': 'Invitation has expired'}, status=status.HTTP_400_BAD_REQUEST)
+
+        OrganisationMember.objects.get_or_create(
+            organisation=invitation.organisation, user=request.user,
+            defaults={'role': invitation.role, 'is_active': True}
+        )
+        invitation.status = 'accepted'
+        invitation.save()
+
+        return Response({'status': 'accepted', 'organisation_id': str(invitation.organisation.id)})
+
+    @action(detail=True, methods=['get'], permission_classes=[IsAuthenticated])
+    def pending_invitations(self, request, pk=None):
+        organisation = self.get_object()
+        invitations = OrganisationInvitation.objects.filter(organisation=organisation, status='pending')
+        serializer = OrganisationInvitationSerializer(invitations, many=True)
+        return Response(serializer.data)
 
 class OrgBranchViewSet(ModelViewSet):
     queryset = OrgBranch.objects.all()

@@ -1,6 +1,7 @@
 from django.db import models
 from django.contrib.auth.hashers import make_password, check_password
-from datetime import datetime
+from datetime import datetime, timedelta
+import uuid
 
 # Create your models here.
 ORG_TYPES = (
@@ -268,4 +269,31 @@ class OrganisationMember(models.Model):
         return f"{self.user.email} - {self.title or self.role} at {self.organisation.name}"
 
 
+class OrganisationInvitation(models.Model):
+    """Invitation to join an organisation as a member with a specific role."""
+    organisation = models.ForeignKey(Organisation, on_delete=models.CASCADE, related_name='invitations')
+    invited_by = models.ForeignKey('Authentication.CustomUser', on_delete=models.CASCADE, related_name='sent_org_invitations')
+    email = models.EmailField()
+    role = models.CharField(max_length=50, choices=(
+        ('admin', 'Administrator'),
+        ('moderator', 'Moderator'),
+        ('member', 'Member'),
+    ), default='member')
+    token = models.UUIDField(default=uuid.uuid4, editable=False, unique=True)
+    status = models.CharField(max_length=20, choices=(
+        ('pending', 'Pending'),
+        ('accepted', 'Accepted'),
+        ('rejected', 'Rejected'),
+        ('expired', 'Expired'),
+    ), default='pending')
+    expires_at = models.DateTimeField(default=datetime.now() + timedelta(days=7))
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        unique_together = ('organisation', 'email')
+        verbose_name = 'Organisation Invitation'
+        verbose_name_plural = 'Organisation Invitations'
+
+    def __str__(self):
+        return f"Invite {self.email} → {self.organisation.name} as {self.role}"
 

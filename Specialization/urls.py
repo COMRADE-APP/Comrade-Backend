@@ -9,7 +9,8 @@ from Specialization.views import (
     CompletedSpecializationViewSet, CompletedStackViewSet,
     PositionTrackerViewSet, CertificateViewSet, IssuedCertificateViewSet,
     LessonViewSet, QuizViewSet, QuizQuestionViewSet,
-    EnrollmentViewSet, LearnerProgressViewSet
+    EnrollmentViewSet, LearnerProgressViewSet,
+    ActivityViewSet, LabViewSet
 )
 
 router = DefaultRouter()
@@ -22,6 +23,8 @@ router.register(r'quizzes', QuizViewSet, basename='quiz')
 router.register(r'quiz-questions', QuizQuestionViewSet, basename='quiz-question')
 router.register(r'enrollments', EnrollmentViewSet, basename='enrollment')
 router.register(r'progress', LearnerProgressViewSet, basename='progress')
+router.register(r'activities', ActivityViewSet, basename='activity')
+router.register(r'labs', LabViewSet, basename='lab')
 
 # Certificates
 router.register(r'certificates', CertificateViewSet, basename='certificate')

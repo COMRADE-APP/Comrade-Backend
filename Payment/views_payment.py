@@ -781,6 +781,134 @@ class VerifyFlutterwaveView(APIView):
                 return Response({'error': 'Local transaction token not found'}, status=status.HTTP_404_NOT_FOUND)
         else:
             return Response({'error': 'Flutterwave verification failed or transaction not successful'}, status=status.HTTP_400_BAD_REQUEST)
+
+
+# ============================================================================
+# PAYSTACK WEBHOOK & VERIFY
+# ============================================================================
+
+class PaystackWebhookView(APIView):
+    """Handle Paystack webhook notifications.
+    
+    Paystack signs webhooks with HMAC SHA-512 (x-paystack-signature header)
+    and sends from a known set of IP addresses.
+    """
+    permission_classes = []
+    
+    def _verify_paystack_source(self, request):
+        """Verify request comes from Paystack's IP range."""
+        forwarded_for = request.META.get('HTTP_X_FORWARDED_FOR', '')
+        client_ip = forwarded_for.split(',')[0].strip() if forwarded_for else request.META.get('REMOTE_ADDR', '')
+        
+        if getattr(settings, 'DEBUG', False):
+            return True
+        
+        from Payment.services.payment_service import PaystackProvider
+        allowed_ips = PaystackProvider.get_allowed_webhook_ips()
+        for allowed in allowed_ips:
+            if client_ip.startswith(allowed):
+                return True
+        
+        logger.warning(f'Paystack webhook from unauthorized IP: {client_ip}')
+        return False
+    
+    def post(self, request):
+        if not self._verify_paystack_source(request):
+            raise PermissionDenied('Unauthorized source IP')
+        
+        # Verify HMAC signature
+        signature = request.META.get('HTTP_X_PAYSTACK_SIGNATURE', '')
+        from Payment.services.payment_service import PaystackProvider
+        if not PaystackProvider.verify_webhook_signature(request.body, signature):
+            logger.warning('Paystack webhook signature mismatch')
+            return Response({'error': 'Invalid signature'}, status=status.HTTP_403_FORBIDDEN)
+        
+        event_data = request.data
+        event_type = event_data.get('event', '')
+        data = event_data.get('data', {})
+        
+        if event_type == 'charge.success':
+            reference = data.get('reference', '')
+            amount = data.get('amount', 0) / 100
+            
+            from Payment.idempotency import is_webhook_idempotent
+            if not is_webhook_idempotent(reference, prefix="paystack"):
+                return Response({'status': 'ignored duplicate event'})
+            
+            try:
+                transaction = TransactionToken.objects.get(transaction_code=reference)
+                if transaction.status == 'completed':
+                    return Response({'status': 'already verified'})
+                
+                if transaction.transaction_type == 'deposit':
+                    from decimal import Decimal
+                    pp = transaction.payment_profile
+                    pp.comrade_balance += Decimal(str(transaction.amount))
+                    pp.save()
+                
+                transaction.balance_after = transaction.payment_profile.comrade_balance
+                transaction.status = 'completed'
+                transaction.save()
+                
+                TransactionHistory.objects.create(
+                    payment_profile=transaction.payment_profile,
+                    transaction_token=transaction,
+                    status='completed',
+                    balance_after=transaction.payment_profile.comrade_balance
+                )
+                logger.info(f'Paystack payment completed: {reference}')
+            except TransactionToken.DoesNotExist:
+                logger.debug(f'Paystack webhook: no token for ref {reference}')
+        
+        return Response({'status': 'success'})
+
+
+class VerifyPaystackView(APIView):
+    """Synchronously verify a Paystack inline modal payment by reference."""
+    permission_classes = [IsAuthenticated]
+    
+    def post(self, request):
+        reference = request.data.get('reference')
+        
+        if not reference:
+            return Response({'error': 'reference is required'}, status=status.HTTP_400_BAD_REQUEST)
+        
+        from Payment.services.payment_service import PaystackProvider
+        verification = PaystackProvider.verify_transaction(reference)
+        
+        if verification.get('status') == 'completed':
+            try:
+                transaction = TransactionToken.objects.get(transaction_code=reference)
+                if transaction.status == 'completed':
+                    return Response({'message': 'Transaction already verified'})
+                
+                if transaction.transaction_type == 'deposit':
+                    from decimal import Decimal
+                    pp = transaction.payment_profile
+                    pp.comrade_balance += Decimal(str(transaction.amount))
+                    pp.save()
+                
+                transaction.balance_after = transaction.payment_profile.comrade_balance
+                transaction.status = 'completed'
+                transaction.save()
+                
+                TransactionHistory.objects.create(
+                    payment_profile=transaction.payment_profile,
+                    transaction_token=transaction,
+                    status='completed',
+                    balance_after=transaction.payment_profile.comrade_balance
+                )
+                
+                return Response({'message': 'Payment verified successfully', 'reference': reference})
+            except TransactionToken.DoesNotExist:
+                return Response({'error': 'Local transaction token not found'}, status=status.HTTP_404_NOT_FOUND)
+        else:
+            return Response(
+                {'error': verification.get('message', 'Paystack verification failed')},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+
 class PesapalIPNView(APIView):
     """Handle Pesapal Instant Payment Notifications (IPN).
     
@@ -1011,14 +1139,23 @@ class GatewayConfigView(APIView):
     
     The frontend calls this on load to know which payment buttons to show
     and to initialize Stripe Elements with the correct publishable key.
+    
+    Accepts optional ?country_code=KE to return gateways ordered by
+    relevance to the user's location.
     """
     permission_classes = []  # Public — only exposes public keys
     
     def get(self, request):
         from Payment.services.payment_service import PaymentService
         gateways = PaymentService.get_available_gateways()
-        return Response({
+        country_code = request.query_params.get('country_code', '')
+        preferred = PaymentService.get_preferred_gateway(country_code) if country_code else None
+        
+        response_data = {
             'gateways': gateways,
-            'default_gateway': getattr(settings, 'PAYMENT_DESTINATION', 'stripe'),
-        })
+            'default_gateway': preferred or getattr(settings, 'PAYMENT_DESTINATION', 'paystack'),
+        }
+        if country_code:
+            response_data['country_code'] = country_code.upper()
+        return Response(response_data)
 

@@ -1,4 +1,4 @@
-from Organisation.models import Organisation, OrgBranch, Division, Department, Section, Team, Project, Centre, Committee, Board, Unit, Institute, Program, OtherOrgUnit, OrganisationMember
+from Organisation.models import Organisation, OrgBranch, Division, Department, Section, Team, Project, Centre, Committee, Board, Unit, Institute, Program, OtherOrgUnit, OrganisationMember, OrganisationInvitation
 from rest_framework import serializers
 from rest_framework.serializers import ModelSerializer
 
@@ -143,3 +143,14 @@ class OrganisationMemberSerializer(ModelSerializer):
         return None
 
 
+class OrganisationInvitationSerializer(ModelSerializer):
+    invited_by_name = serializers.SerializerMethodField()
+    organisation_name = serializers.CharField(source='organisation.name', read_only=True)
+
+    class Meta:
+        model = OrganisationInvitation
+        fields = '__all__'
+        read_only_fields = ['token', 'invited_by', 'status', 'created_at']
+
+    def get_invited_by_name(self, obj):
+        return obj.invited_by.get_full_name() or obj.invited_by.email

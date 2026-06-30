@@ -5,13 +5,15 @@ from rest_framework.decorators import action
 from rest_framework import status
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
+from django.db.models import Max
 from Specialization.models import (
     Specialization, Stack, SavedSpecialization, SavedStack,
     SpecializationAdmin, SpecializationMembership, SpecializationModerator,
     SpecializationRoom, StackAdmin, StackMembership, StackModerator,
     CompletedSpecialization, CompletedStack, PositionTracker,
     Certificate, IssuedCertificate,
-    Lesson, Quiz, QuizQuestion, QuizAttempt, Enrollment, LearnerProgress
+    Lesson, Quiz, QuizQuestion, QuizAttempt, Enrollment, LearnerProgress,
+    Activity, ActivitySubmission, Lab
 )
 from Specialization.serializers import (
     SpecializationSerializer, SpecializationListSerializer, StackSerializer,
@@ -23,7 +25,8 @@ from Specialization.serializers import (
     PositionTrackerSerializer, CertificateSerializer, IssuedCertificateSerializer,
     LessonSerializer, LessonListSerializer, QuizSerializer, QuizQuestionSerializer,
     QuizQuestionCreateSerializer, QuizAttemptSerializer,
-    EnrollmentSerializer, LearnerProgressSerializer
+    EnrollmentSerializer, LearnerProgressSerializer,
+    ActivitySerializer, ActivitySubmissionSerializer, LabSerializer
 )
 from Authentication.models import Profile
 from Specialization.permissions import IsAdmin, IsCreator, IsModerator
@@ -42,7 +45,7 @@ class SpecializationViewSet(ModelViewSet):
     pagination_class = None
 
     def get_permissions(self):
-        if self.action in ['list', 'retrieve', 'analytics', 'enroll', 'my_enrollments', 'progress']:
+        if self.action in ['list', 'retrieve', 'analytics', 'enroll', 'my_enrollments', 'progress', 'reorder_stacks']:
             return [IsAuthenticated()]
         return [IsModerator()]
 
@@ -55,6 +58,13 @@ class SpecializationViewSet(ModelViewSet):
         context = super().get_serializer_context()
         context['request'] = self.request
         return context
+
+    def get_queryset(self):
+        qs = super().get_queryset()
+        provider_id = self.request.query_params.get('provider')
+        if provider_id:
+            qs = qs.filter(provider_id=provider_id)
+        return qs
 
     def perform_create(self, serializer):
         from Payment.models import PaymentGroups, PaymentProfile
@@ -253,6 +263,7 @@ class SpecializationViewSet(ModelViewSet):
         """Get full progress tree for a specialization."""
         specialization = self.get_object()
         enrollment = Enrollment.objects.filter(user=request.user, specialization=specialization).first()
+        is_enrolled = enrollment is not None
 
         stacks = specialization.stacks.all()
         progress_data = []
@@ -260,14 +271,35 @@ class SpecializationViewSet(ModelViewSet):
         completed_lessons = 0
 
         for stack in stacks:
-            lessons = stack.lessons.all()
+            lessons = stack.lessons.all().order_by('order')
             stack_lessons = []
+            sequential_blocked = False
+            prev_lesson_completed = True
+
             for lesson in lessons:
                 total_lessons += 1
                 lp = LearnerProgress.objects.filter(user=request.user, lesson=lesson).first()
                 is_completed = lp.completed if lp else False
+
+                # Locked for unenrolled
+                locked = lesson.is_locked
+                if specialization.lock_for_unenrolled and not is_enrolled and not lesson.is_preview:
+                    locked = True
+
+                # Sequential locking
+                if specialization.sequential_locking and not prev_lesson_completed and not lesson.is_preview:
+                    locked = True
+                    sequential_blocked = True
+
+                # Skip disabled — hide future lessons
+                if specialization.skip_disabled and sequential_blocked and not lesson.is_preview:
+                    continue
+
                 if is_completed:
                     completed_lessons += 1
+
+                prev_lesson_completed = is_completed
+
                 stack_lessons.append({
                     'id': lesson.id,
                     'title': lesson.title,
@@ -275,8 +307,9 @@ class SpecializationViewSet(ModelViewSet):
                     'duration_minutes': lesson.duration_minutes,
                     'order': lesson.order,
                     'is_preview': lesson.is_preview,
-                    'is_locked': lesson.is_locked,
+                    'is_locked': locked,
                     'completed': is_completed,
+                    'sequential_blocked': sequential_blocked and not is_completed,
                 })
 
             # Get quizzes for this stack
@@ -383,6 +416,14 @@ class SpecializationViewSet(ModelViewSet):
         serializer = self.get_serializer(new_spec)
         return Response({'message': f'Generated with {len(files)} stacks.', 'data': serializer.data}, status=status.HTTP_201_CREATED)
 
+    @action(detail=True, methods=['post'])
+    def reorder_stacks(self, request, pk=None):
+        spec = self.get_object()
+        stack_ids = request.data.get('ordered_stack_ids', [])
+        spec.stack_order = stack_ids
+        spec.save(update_fields=['stack_order'])
+        return Response({'status': 'reordered', 'stack_order': stack_ids})
+
 
 # ============================================================================
 # STACK VIEWSET (ENHANCED)
@@ -393,7 +434,7 @@ class StackViewSet(ModelViewSet):
     serializer_class = StackSerializer
 
     def get_permissions(self):
-        if self.action in ['list', 'retrieve']:
+        if self.action in ['list', 'retrieve', 'add_lesson', 'remove_lesson', 'reorder_lessons']:
             return [IsAuthenticated()]
         return [IsAuthenticated(), IsModerator()]
 
@@ -412,6 +453,44 @@ class StackViewSet(ModelViewSet):
             return Response({'error': 'Failed to mark as complete.'}, status=status.HTTP_400_BAD_REQUEST)
         serializer.save()
         return Response({'data': serializer.data, 'message': 'Stack completed!'}, status=status.HTTP_201_CREATED)
+
+    @action(detail=True, methods=['post'])
+    def add_lesson(self, request, pk=None):
+        stack = self.get_object()
+        title = request.data.get('title', 'Untitled Lesson')
+        content_type = request.data.get('content_type', 'text')
+        description = request.data.get('description', '')
+        content_text = request.data.get('content_text', '')
+        video_url = request.data.get('video_url', '')
+        duration_minutes = request.data.get('duration_minutes', 10)
+        last_order = Lesson.objects.filter(stack=stack).aggregate(Max('order'))['order__max'] or 0
+        lesson = Lesson.objects.create(
+            stack=stack, title=title, content_type=content_type,
+            description=description, content_text=content_text,
+            video_url=video_url, duration_minutes=duration_minutes,
+            order=last_order + 1,
+        )
+        from .serializers import LessonSerializer
+        return Response(LessonSerializer(lesson).data, status=status.HTTP_201_CREATED)
+
+    @action(detail=True, methods=['post'])
+    def remove_lesson(self, request, pk=None):
+        stack = self.get_object()
+        lesson_id = request.data.get('lesson_id')
+        if not lesson_id:
+            return Response({'error': 'lesson_id is required'}, status=status.HTTP_400_BAD_REQUEST)
+        Lesson.objects.filter(pk=lesson_id, stack=stack).delete()
+        return Response({'status': 'removed'})
+
+    @action(detail=True, methods=['post'])
+    def reorder_lessons(self, request, pk=None):
+        stack = self.get_object()
+        ordered_ids = request.data.get('ordered_ids', [])
+        if not ordered_ids:
+            return Response({'error': 'ordered_ids is required'}, status=status.HTTP_400_BAD_REQUEST)
+        for idx, lesson_id in enumerate(ordered_ids):
+            Lesson.objects.filter(pk=lesson_id, stack=stack).update(order=idx)
+        return Response({'status': 'reordered'})
 
 
 # ============================================================================
@@ -438,6 +517,21 @@ class LessonViewSet(ModelViewSet):
     def complete(self, request, pk=None):
         """Mark a lesson as completed and update enrollment progress."""
         lesson = self.get_object()
+
+        # Check pass_mark_to_continue — if any stack-level quiz requires passing, enforce it
+        stack = lesson.stack
+        passing_quizzes = Quiz.objects.filter(stack=stack, pass_mark_to_continue=True)
+        for quiz in passing_quizzes:
+            passed = QuizAttempt.objects.filter(
+                user=request.user, quiz=quiz, passed=True
+            ).exists()
+            if not passed:
+                return Response({
+                    'error': f'You must pass "{quiz.title}" before completing this lesson.',
+                    'requires_pass': True,
+                    'quiz_id': quiz.id,
+                }, status=status.HTTP_400_BAD_REQUEST)
+
         progress, created = LearnerProgress.objects.get_or_create(
             user=request.user, lesson=lesson,
             defaults={'completed': True, 'completed_at': timezone.now()}
@@ -520,6 +614,61 @@ class LessonViewSet(ModelViewSet):
             hours_completed=Decimal(str(hours)),
         )
         issued.specialization.add(specialization)
+
+    @action(detail=True, methods=['post'])
+    def add_block(self, request, pk=None):
+        from .models import LessonContentBlock
+        lesson = self.get_object()
+        block_type = request.data.get('block_type', 'text')
+        content = request.data.get('content', '')
+        url = request.data.get('url', '')
+        caption = request.data.get('caption', '')
+        code_language = request.data.get('code_language', 'plaintext')
+        background_color = request.data.get('background_color', '#ffffff')
+        last_order = LessonContentBlock.objects.filter(lesson=lesson).aggregate(Max('order'))['order__max'] or 0
+        block = LessonContentBlock.objects.create(
+            lesson=lesson, block_type=block_type, content=content,
+            url=url, caption=caption, code_language=code_language,
+            background_color=background_color, order=last_order + 1,
+        )
+        from .serializers import LessonContentBlockSerializer
+        return Response(LessonContentBlockSerializer(block).data, status=status.HTTP_201_CREATED)
+
+    @action(detail=True, methods=['post'])
+    def remove_block(self, request, pk=None):
+        lesson = self.get_object()
+        block_id = request.data.get('block_id')
+        from .models import LessonContentBlock
+        LessonContentBlock.objects.filter(pk=block_id, lesson=lesson).delete()
+        return Response({'status': 'removed'})
+
+    @action(detail=True, methods=['post'])
+    def reorder_blocks(self, request, pk=None):
+        lesson = self.get_object()
+        ordered_ids = request.data.get('ordered_ids', [])
+        if not ordered_ids:
+            return Response({'error': 'ordered_ids is required'}, status=status.HTTP_400_BAD_REQUEST)
+        from .models import LessonContentBlock
+        for idx, block_id in enumerate(ordered_ids):
+            LessonContentBlock.objects.filter(pk=block_id, lesson=lesson).update(order=idx)
+        return Response({'status': 'reordered'})
+
+    @action(detail=True, methods=['post'])
+    def upload_block_file(self, request, pk=None):
+        lesson = self.get_object()
+        uploaded = request.FILES.get('file')
+        if not uploaded:
+            return Response({'error': 'No file provided'}, status=status.HTTP_400_BAD_REQUEST)
+        block_type = request.data.get('block_type', 'file')
+        from .models import LessonContentBlock
+        last_order = LessonContentBlock.objects.filter(lesson=lesson).aggregate(Max('order'))['order__max'] or 0
+        block = LessonContentBlock.objects.create(
+            lesson=lesson, block_type=block_type,
+            caption=request.data.get('caption', uploaded.name),
+            file=uploaded, order=last_order + 1,
+        )
+        from .serializers import LessonContentBlockSerializer
+        return Response(LessonContentBlockSerializer(block).data, status=status.HTTP_201_CREATED)
 
 
 # ============================================================================
@@ -626,6 +775,319 @@ class QuizViewSet(ModelViewSet):
         serializer = QuizAttemptSerializer(attempts, many=True)
         return Response(serializer.data)
 
+    @action(detail=False, methods=['post'], permission_classes=[IsAuthenticated])
+    def generate_from_content(self, request):
+        """AI-powered quiz question generation from lesson content.
+        Accepts (JSON or FormData):
+          - lesson_ids: [...], content_text: "...", num_questions: 5, question_types: [...]
+          - files: multipart upload (pdf, docx, txt, md)
+          - reference_urls: [{label, url}, ...]
+          - include_transcripts: bool (auto-extract YouTube/internet video transcripts)
+        Uses configured AI provider (OpenAI, Gemini, or Hugging Face) or falls back to rules-based extraction.
+        """
+        import json
+
+        def _parse_field(data, key, default=None):
+            val = data.get(key, default)
+            if isinstance(val, str):
+                try:
+                    return json.loads(val)
+                except (json.JSONDecodeError, TypeError):
+                    return val
+            return val
+
+        lesson_ids = _parse_field(request.data, 'lesson_ids', [])
+        content_text = request.data.get('content_text', '')
+        num_questions = int(_parse_field(request.data, 'num_questions', 5))
+        question_types = _parse_field(request.data, 'question_types', ['multiple_choice', 'true_false'])
+        reference_urls = _parse_field(request.data, 'reference_urls', [])
+        include_transcripts = str(_parse_field(request.data, 'include_transcripts', False)).lower() in ('true', '1', 'yes')
+        uploaded_files = request.FILES.getlist('files')
+
+        # Gather content from lessons
+        if lesson_ids:
+            lessons = Lesson.objects.filter(id__in=lesson_ids)
+            for lesson in lessons:
+                if lesson.content_text:
+                    content_text += '\n\n' + lesson.content_text
+                for block in lesson.content_blocks.filter(block_type='text'):
+                    if block.content:
+                        content_text += '\n\n' + block.content
+                if include_transcripts:
+                    for block in lesson.content_blocks.filter(block_type='video'):
+                        if block.url:
+                            transcript = self._extract_video_transcript(block.url)
+                            if transcript:
+                                content_text += '\n\n[Video Transcript]\n' + transcript
+
+        # Extract text from uploaded files
+        if uploaded_files:
+            for f in uploaded_files:
+                extracted = self._extract_file_text(f)
+                if extracted:
+                    content_text += '\n\n[From file: ' + f.name + ']\n' + extracted
+
+        # Fetch content from reference URLs
+        if reference_urls:
+            for ref in reference_urls:
+                url = ref.get('url', '')
+                label = ref.get('label', url)
+                if not url:
+                    continue
+                fetched = self._fetch_url_content(url, include_transcripts)
+                if fetched:
+                    content_text += '\n\n[From: ' + label + ']\n' + fetched
+
+        if not content_text.strip():
+            return Response({'error': 'No content provided to generate from.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        generated_questions = []
+
+        # Try AI generation via available providers
+        ai_questions = self._try_ai_generation(content_text, num_questions, question_types)
+        if ai_questions:
+            generated_questions = ai_questions
+        else:
+            # Fallback: rules-based extraction
+            generated_questions = self._rules_based_generation(content_text, num_questions)
+
+        return Response({
+            'questions': generated_questions,
+            'source': 'ai' if ai_questions else 'rules',
+            'content_length': len(content_text),
+        })
+
+    def _extract_file_text(self, file_obj):
+        """Extract text content from uploaded file (PDF, DOCX, TXT, MD)."""
+        import os
+        ext = os.path.splitext(file_obj.name)[1].lower()
+        try:
+            if ext == '.pdf':
+                try:
+                    import fitz
+                    text = ''
+                    doc = fitz.open(stream=file_obj.read(), filetype='pdf')
+                    for page in doc:
+                        text += page.get_text()
+                    doc.close()
+                    return text
+                except ImportError:
+                    pass
+            elif ext == '.docx':
+                try:
+                    from docx import Document
+                    doc = Document(file_obj)
+                    return '\n'.join(p.text for p in doc.paragraphs)
+                except ImportError:
+                    pass
+            elif ext in ('.txt', '.md'):
+                return file_obj.read().decode('utf-8', errors='replace')
+        except Exception:
+            pass
+        return None
+
+    def _fetch_url_content(self, url, include_transcripts=False):
+        """Fetch content from a URL — extract visible text or transcript."""
+        import requests
+        from urllib.parse import urlparse
+        import re
+
+        # YouTube transcript
+        if include_transcripts:
+            transcript = self._extract_video_transcript(url)
+            if transcript:
+                return '[Video Transcript]\n' + transcript
+
+        try:
+            resp = requests.get(url, timeout=15, headers={'User-Agent': 'Mozilla/5.0'})
+            if resp.status_code == 200:
+                html = resp.text
+                # Strip HTML tags to get visible text
+                text = re.sub(r'<[^>]+>', ' ', html)
+                text = re.sub(r'\s+', ' ', text).strip()
+                # Limit to reasonable size
+                return text[:10000]
+        except Exception:
+            pass
+        return None
+
+    def _extract_video_transcript(self, url):
+        """Extract transcript from YouTube videos (and other platforms where possible)."""
+        import re
+        # YouTube
+        yt_match = re.search(r'(?:youtube\.com/watch\?v=|youtu\.be/|youtube\.com/embed/)([\w-]+)', url)
+        if yt_match:
+            video_id = yt_match.group(1)
+            try:
+                from youtube_transcript_api import YouTubeTranscriptApi
+                transcript_list = YouTubeTranscriptApi.get_transcript(video_id)
+                return ' '.join(item['text'] for item in transcript_list)
+            except Exception:
+                pass
+            # Fallback: try oEmbed for description
+            try:
+                import requests
+                oembed = requests.get(
+                    f'https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v={video_id}&format=json',
+                    timeout=10
+                )
+                if oembed.status_code == 200:
+                    data = oembed.json()
+                    return data.get('title', '') + '\n' + data.get('author_name', '') + '\n' + data.get('description', '')
+            except Exception:
+                pass
+        return None
+
+    def _try_ai_generation(self, content_text, num_questions, question_types):
+        """Try AI providers in order: OpenAI -> Gemini -> Hugging Face."""
+        import os, json
+
+        # Try OpenAI
+        api_key = os.environ.get('OPENAI_API_KEY')
+        if api_key:
+            try:
+                import requests
+                prompt = f"""Generate {num_questions} educational quiz questions from the following content.
+Question types to use: {', '.join(question_types)}.
+For each question, provide: question_text, question_type, choices (for multiple_choice/true_false as list of {{label, text, is_correct}} objects), correct_answer (for short_answer), explanation, points (default 1).
+
+Content:
+{content_text[:8000]}
+
+Return ONLY valid JSON array of question objects."""
+
+                resp = requests.post(
+                    'https://api.openai.com/v1/chat/completions',
+                    headers={'Authorization': f'Bearer {api_key}', 'Content-Type': 'application/json'},
+                    json={'model': 'gpt-4o-mini', 'messages': [{'role': 'user', 'content': prompt}], 'temperature': 0.7},
+                    timeout=30
+                )
+                if resp.status_code == 200:
+                    text = resp.json()['choices'][0]['message']['content']
+                    # Extract JSON array from response
+                    import re
+                    json_match = re.search(r'\[.*\]', text, re.DOTALL)
+                    if json_match:
+                        questions = json.loads(json_match.group())
+                        for q in questions:
+                            q.setdefault('points', 1)
+                            q.setdefault('explanation', '')
+                        return questions
+            except Exception:
+                pass
+
+        # Try Gemini
+        api_key = os.environ.get('GEMINI_API_KEY')
+        if api_key:
+            try:
+                import requests
+                prompt = f"""Generate {num_questions} educational quiz questions from the following content.
+Question types to use: {', '.join(question_types)}.
+Return JSON array of objects with: question_text, question_type, choices (array of {{label, text, is_correct}}), correct_answer, explanation, points.
+
+Content:
+{content_text[:8000]}"""
+
+                resp = requests.post(
+                    f'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={api_key}',
+                    headers={'Content-Type': 'application/json'},
+                    json={'contents': [{'parts': [{'text': prompt}]}]},
+                    timeout=30
+                )
+                if resp.status_code == 200:
+                    text = resp.json()['candidates'][0]['content']['parts'][0]['text']
+                    import re
+                    json_match = re.search(r'\[.*\]', text, re.DOTALL)
+                    if json_match:
+                        questions = json.loads(json_match.group())
+                        for q in questions:
+                            q.setdefault('points', 1)
+                            q.setdefault('explanation', '')
+                        return questions
+            except Exception:
+                pass
+
+        # Try Hugging Face
+        api_key = os.environ.get('HF_API_KEY')
+        if api_key:
+            try:
+                import requests
+                prompt = f"Generate {num_questions} quiz questions from this content. Return JSON array.\n\n{content_text[:4000]}"
+                resp = requests.post(
+                    'https://api-inference.huggingface.co/models/mistralai/Mistral-7B-Instruct-v0.3',
+                    headers={'Authorization': f'Bearer {api_key}'},
+                    json={'inputs': prompt, 'parameters': {'max_new_tokens': 2000}},
+                    timeout=30
+                )
+                if resp.status_code == 200:
+                    text = resp.json()[0]['generated_text']
+                    import re
+                    json_match = re.search(r'\[.*\]', text, re.DOTALL)
+                    if json_match:
+                        questions = json.loads(json_match.group())
+                        for q in questions:
+                            q.setdefault('points', 1)
+                            q.setdefault('explanation', '')
+                        return questions
+            except Exception:
+                pass
+
+        return None
+
+    def _rules_based_generation(self, content_text, num_questions):
+        """Fallback: extract sentences and create basic questions."""
+        import re
+        sentences = re.split(r'[.!?\n]+', content_text)
+        sentences = [s.strip() for s in sentences if len(s.strip()) > 30]
+
+        import random
+        random.shuffle(sentences)
+        questions = []
+        types_cycle = ['multiple_choice', 'true_false', 'short_answer']
+
+        for i, sent in enumerate(sentences[:num_questions]):
+            words = sent.split()
+            q_type = types_cycle[i % len(types_cycle)]
+
+            if q_type == 'true_false':
+                questions.append({
+                    'question_text': f'Based on the content: "{sent[:100]}" — Is this statement true?',
+                    'question_type': 'true_false',
+                    'choices': [
+                        {'label': 'True', 'text': 'True', 'is_correct': True},
+                        {'label': 'False', 'text': 'False', 'is_correct': False},
+                    ],
+                    'explanation': 'Review the content above.',
+                    'points': 1,
+                })
+            elif q_type == 'short_answer' and len(words) > 3:
+                # Blank out a keyword
+                idx = max(1, len(words) // 2)
+                keyword = words[idx].strip('",.')
+                words[idx] = '______'
+                questions.append({
+                    'question_text': 'Fill in the blank: ' + ' '.join(words[:30]),
+                    'question_type': 'short_answer',
+                    'correct_answer': keyword,
+                    'explanation': f'The correct term is: {keyword}',
+                    'points': 1,
+                })
+            else:
+                questions.append({
+                    'question_text': f'What does this statement mean? "{sent[:150]}"',
+                    'question_type': 'multiple_choice',
+                    'choices': [
+                        {'label': 'A', 'text': 'Refer to the lesson materials', 'is_correct': True},
+                        {'label': 'B', 'text': 'This is incorrect', 'is_correct': False},
+                        {'label': 'C', 'text': 'Not enough information', 'is_correct': False},
+                        {'label': 'D', 'text': 'None of the above', 'is_correct': False},
+                    ],
+                    'explanation': 'Review the lesson content for the correct answer.',
+                    'points': 1,
+                })
+
+        return questions[:num_questions]
+
 
 class QuizQuestionViewSet(ModelViewSet):
     queryset = QuizQuestion.objects.all()
@@ -718,6 +1180,40 @@ class LearnerProgressViewSet(ModelViewSet):
 
     def get_queryset(self):
         return LearnerProgress.objects.filter(user=self.request.user)
+
+
+# ============================================================================
+# ACTIVITY VIEWSET
+# ============================================================================
+
+class ActivityViewSet(ModelViewSet):
+    queryset = Activity.objects.all()
+    serializer_class = ActivitySerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        qs = super().get_queryset()
+        stack_id = self.request.query_params.get('stack_id')
+        if stack_id:
+            qs = qs.filter(stack_id=stack_id)
+        return qs
+
+
+# ============================================================================
+# LAB VIEWSET
+# ============================================================================
+
+class LabViewSet(ModelViewSet):
+    queryset = Lab.objects.all()
+    serializer_class = LabSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        qs = super().get_queryset()
+        stack_id = self.request.query_params.get('stack_id')
+        if stack_id:
+            qs = qs.filter(stack_id=stack_id)
+        return qs
 
 
 # ============================================================================

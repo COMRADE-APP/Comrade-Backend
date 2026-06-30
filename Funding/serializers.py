@@ -80,9 +80,22 @@ class BusinessCreateSerializer(serializers.ModelSerializer):
         read_only_fields = ['id']
 
 class InvestmentOpportunitySerializer(serializers.ModelSerializer):
+    provider_registration_name = serializers.SerializerMethodField()
+    provider_type = serializers.SerializerMethodField()
+
     class Meta:
         model = InvestmentOpportunity
         fields = '__all__'
+
+    def get_provider_registration_name(self, obj):
+        if obj.provider_registration:
+            return obj.provider_registration.business_name
+        return None
+
+    def get_provider_type(self, obj):
+        if obj.provider_registration:
+            return obj.provider_registration.provider_type
+        return None
 
 
 # ==============================================================================

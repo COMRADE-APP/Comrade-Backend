@@ -92,8 +92,23 @@ class EventEnhancedViewSet(viewsets.ModelViewSet):
     
     def perform_create(self, serializer):
         """Auto-set created_by to the authenticated user and create tickets if capacity > 0"""
-        print('-----------------------------------------------------------')
         event = serializer.save(created_by=self.request.user)
+        
+        if not getattr(event, 'event_organizer', None):
+            from Events.models import OrganizerProfile
+            org_profile = OrganizerProfile.objects.filter(user=self.request.user).first()
+            if org_profile:
+                event.event_organizer = org_profile
+                event.save(update_fields=['event_organizer'])
+        
+        if not getattr(event, 'organisation_id', None):
+            from Organisation.models import OrganisationMember
+            membership = OrganisationMember.objects.filter(
+                user=self.request.user, is_active=True
+            ).select_related('organisation').first()
+            if membership:
+                event.organisation = membership.organisation
+                event.save(update_fields=['organisation'])
         
         # Auto-create tickets if capacity is defined
         if event.capacity > 0:
@@ -880,26 +895,29 @@ class EventEnhancedViewSet(viewsets.ModelViewSet):
 
         def _send_reminder(reminder_id):
             try:
-                # Need to use the model directly to avoid stale objects
                 rem = EventUserReminder.objects.get(id=reminder_id)
                 evt = rem.event
                 usr = rem.user
-                
+
+                event_url = f'http://localhost:8000/events/{evt.id}'
+
                 while True:
                     now = timezone.now()
                     if rem.remind_at <= now:
                         try:
-                            # 1. Send Email
                             if rem.send_email and not rem.email_sent:
                                 send_mail(
                                     f'Reminder: {evt.name} is starting in {rem.time_before}',
-                                    f'Hi {usr.first_name},\n\nThis is a reminder that the event "{evt.name}" starts in {rem.time_before}.\n\nLocation: {evt.location}\nDate: {evt.event_date}',
+                                    f'Hi {usr.first_name},\n\n'
+                                    f'This is a reminder that the event "{evt.name}" starts in {rem.time_before}.\n\n'
+                                    f'Location: {evt.location}\n'
+                                    f'Date: {evt.event_date}\n\n'
+                                    f'View event: {event_url}',
                                     settings.DEFAULT_FROM_EMAIL,
                                     [usr.email]
                                 )
                                 rem.email_sent = True
 
-                            # 2. Send System Message (from QomReminder)
                             if rem.send_system_message and not rem.system_message_sent:
                                 try:
                                     qom_reminder, _ = CustomUser.objects.get_or_create(
@@ -908,26 +926,36 @@ class EventEnhancedViewSet(viewsets.ModelViewSet):
                                     )
                                     dm_room, _ = DirectMessageRoom.objects.get_or_create(participants__in=[usr, qom_reminder])
                                     dm_room.participants.add(usr, qom_reminder)
-                                    
+
                                     DirectMessage.objects.create(
                                         sender=qom_reminder,
                                         receiver=usr,
-                                        content=f'Reminder: {evt.name} starts in {rem.time_before}',
+                                        content=f'Reminder: {evt.name} starts in {rem.time_before}\n\nView event: {event_url}',
                                         dm_room=dm_room
                                     )
                                     rem.system_message_sent = True
                                 except Exception as e:
                                     print('Failed system message reminder:', e)
 
-                            # 3. In-App Notification (Not implemented strictly, just mark true)
                             if rem.send_notification and not rem.notification_sent:
-                                rem.notification_sent = True
+                                try:
+                                    from Notifications.models import Notification
+                                    Notification.objects.create(
+                                        recipient=usr,
+                                        notification_type='event_reminder',
+                                        title=f'Event Reminder: {evt.name}',
+                                        message=f'"{evt.name}" starts in {rem.time_before}. Location: {evt.location}',
+                                        link=event_url,
+                                    )
+                                    rem.notification_sent = True
+                                except Exception as e:
+                                    print('Failed notification reminder:', e)
 
                             rem.save()
                         except Exception as e:
                             print("Error sending reminder:", e)
                         break
-                    time.sleep(60) # check every minute
+                    time.sleep(60)
             except Exception as e:
                 print("Reminder thread error:", e)
 
@@ -1291,84 +1319,6 @@ class EventEnhancedViewSet(viewsets.ModelViewSet):
             'total_shares': event.event_shares.count(),
             'total_interested': event.interests.filter(interested=True).count(),
         })
-    
-    # USER REMINDERS (3-channel: notification, system message, email)
-    
-    @action(detail=True, methods=['post'], permission_classes=[IsAuthenticated])
-    def set_user_reminder(self, request, pk=None):
-        """Set a reminder that sends notification, system message from QomReminders, and email"""
-        event = self.get_object()
-        time_before = request.data.get('time_before')  # '1h', '2h', '3h', '1d', '1w'
-        
-        if not time_before:
-            return Response({'error': 'time_before is required'}, status=status.HTTP_400_BAD_REQUEST)
-        
-        valid_times = ['1h', '2h', '3h', '6h', '12h', '1d', '2d', '1w']
-        if time_before not in valid_times:
-            return Response({'error': f'Invalid time_before. Must be one of: {valid_times}'}, status=status.HTTP_400_BAD_REQUEST)
-        
-        # Calculate remind_at datetime
-        from datetime import timedelta
-        time_map = {
-            '1h': timedelta(hours=1),
-            '2h': timedelta(hours=2),
-            '3h': timedelta(hours=3),
-            '6h': timedelta(hours=6),
-            '12h': timedelta(hours=12),
-            '1d': timedelta(days=1),
-            '2d': timedelta(days=2),
-            '1w': timedelta(weeks=1),
-        }
-        
-        remind_at = event.event_date - time_map[time_before]
-        
-        reminder, created = EventUserReminder.objects.update_or_create(
-            event=event,
-            user=request.user,
-            time_before=time_before,
-            defaults={
-                'remind_at': remind_at,
-                'send_notification': True,
-                'send_email': True,
-                'send_system_message': True,
-            }
-        )
-        
-        # Track analytics
-        EventAnalytics.objects.create(
-            event=event, user=request.user, action='reminder_set',
-            metadata={'time_before': time_before}
-        )
-        
-        serializer = EventUserReminderSerializer(reminder)
-        return Response(serializer.data, status=status.HTTP_201_CREATED if created else status.HTTP_200_OK)
-    
-    @action(detail=True, methods=['delete'], permission_classes=[IsAuthenticated])
-    def remove_user_reminder(self, request, pk=None):
-        """Remove a user reminder"""
-        event = self.get_object()
-        time_before = request.query_params.get('time_before')
-        
-        if time_before:
-            deleted, _ = EventUserReminder.objects.filter(
-                event=event, user=request.user, time_before=time_before
-            ).delete()
-        else:
-            deleted, _ = EventUserReminder.objects.filter(
-                event=event, user=request.user
-            ).delete()
-        
-        if deleted:
-            return Response(status=status.HTTP_204_NO_CONTENT)
-        return Response({'error': 'Reminder not found'}, status=status.HTTP_404_NOT_FOUND)
-    
-    @action(detail=True, methods=['get'], permission_classes=[IsAuthenticated])
-    def my_reminders(self, request, pk=None):
-        """Get user's reminders for this event"""
-        event = self.get_object()
-        reminders = EventUserReminder.objects.filter(event=event, user=request.user)
-        serializer = EventUserReminderSerializer(reminders, many=True)
-        return Response(serializer.data)
     
     # SCHEDULE MANAGEMENT (for creators)
     

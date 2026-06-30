@@ -276,6 +276,8 @@ REST_FRAMEWORK = {
         'rest_framework.filters.SearchFilter',
         'rest_framework.filters.OrderingFilter',
     ],
+    'TIME_FORMAT': '%H:%M',
+    'TIME_INPUT_FORMATS': ['%H:%M', '%H:%M:%S'],
 }
 
 SPECTACULAR_SETTINGS = {
@@ -372,6 +374,26 @@ PESAPAL_CONSUMER_SECRET = os.getenv('PESAPAL_CONSUMER_SECRET', '')
 PESAPAL_ENVIRONMENT = os.getenv('PESAPAL_ENVIRONMENT', 'sandbox')  # 'sandbox' or 'live'
 PESAPAL_BASE_URL = 'https://cybqa.pesapal.com/pesapalv3' if os.getenv('PESAPAL_ENVIRONMENT', 'sandbox') == 'sandbox' else 'https://pay.pesapal.com/v3'
 
+# Paystack (African aggregator — PRIMARY for Africa: M-Pesa, cards, bank, USSD, mobile money)
+# Covers: Kenya, Nigeria, Ghana, South Africa, + more
+# Get credentials from: https://dashboard.paystack.com/#/settings/developer
+PAYSTACK_PUBLIC_KEY = os.getenv('PAYSTACK_PUBLIC_KEY', '')
+PAYSTACK_SECRET_KEY = os.getenv('PAYSTACK_SECRET_KEY', '')
+PAYSTACK_ENVIRONMENT = os.getenv('PAYSTACK_ENVIRONMENT', 'sandbox')  # 'sandbox' or 'live'
+PAYSTACK_BASE_URL = 'https://api.paystack.co'
+
+# Gateway location mapping: country_code -> ordered list of preferred gateways
+# Used by the frontend and backend to auto-select the best payment gateway
+GATEWAY_LOCATION_MAP = {
+    'KE': ['paystack', 'mpesa', 'flutterwave', 'equity', 'pesapal', 'stripe', 'paypal'],
+    'NG': ['paystack', 'flutterwave', 'stripe', 'paypal'],
+    'GH': ['paystack', 'flutterwave', 'stripe', 'paypal'],
+    'ZA': ['paystack', 'flutterwave', 'stripe', 'paypal'],
+    'TZ': ['paystack', 'flutterwave', 'mpesa', 'stripe'],
+    'UG': ['paystack', 'flutterwave', 'mpesa', 'stripe'],
+    'RW': ['paystack', 'flutterwave', 'mpesa', 'stripe'],
+}
+
 # Equity Bank (Jenga API — direct bank integration)
 EQUITY_API_KEY = os.getenv('EQUITY_API_KEY', '')
 EQUITY_MERCHANT_CODE = os.getenv('EQUITY_MERCHANT_CODE', '')
@@ -387,7 +409,7 @@ PLATFORM_CURRENCY = os.getenv('PLATFORM_CURRENCY', 'USD')  # The common currency
 SUPPORTED_CURRENCIES = ['USD', 'EUR', 'GBP', 'KES', 'ZAR', 'NGN', 'GHS', 'TZS', 'UGX', 'BRL', 'INR', 'CNY', 'JPY', 'AUD', 'CAD', 'CHF']
 
 # Default payment destination (where platform earnings are routed)
-PAYMENT_DESTINATION = os.getenv('PAYMENT_DESTINATION', 'stripe')  # stripe, paypal, mpesa, flutterwave, pesapal, equity
+PAYMENT_DESTINATION = os.getenv('PAYMENT_DESTINATION', 'paystack')  # stripe, paypal, mpesa, flutterwave, pesapal, equity, paystack
 
 AUTHENTICATION_BACKENDS = [
     'django.contrib.auth.backends.ModelBackend',

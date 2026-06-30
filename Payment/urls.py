@@ -5,7 +5,8 @@ import Payment.views_automation as views_automation
 from Payment.views_payment import (
     PaymentMethodViewSet, ProcessPaymentView, RefundPaymentView,
     StripeWebhookView, PayPalWebhookView, MpesaCallbackView,
-    FlutterwaveWebhookView, PesapalIPNView, GatewayConfigView,
+    FlutterwaveWebhookView, PaystackWebhookView, VerifyPaystackView,
+    PesapalIPNView, GatewayConfigView,
     DetectPaymentMethodView, VerifyFlutterwaveView
 )
 from Payment.views_transactions import (
@@ -56,6 +57,7 @@ router.register(r'automations', views.StandingOrderViewSet, basename='automation
 router.register(r'loan-products', views.LoanProductViewSet, basename='loan-product')
 router.register(r'credit-scores', views.CreditScoreViewSet, basename='credit-score')
 router.register(r'loan-applications', views.LoanApplicationViewSet, basename='loan-application')
+router.register(r'loan-repayments', views.LoanRepaymentViewSet, basename='loan-repayment')
 
 # Escrow
 router.register(r'escrow', views.EscrowTransactionViewSet, basename='escrow')
@@ -91,6 +93,7 @@ router.register(r'provider-queries', views.ProviderQueryViewSet, basename='provi
 router.register(r'provider-applications', views.ProviderApplicationViewSet, basename='provider-application')
 router.register(r'provider-notifications', views.ProviderNotificationViewSet, basename='provider-notification')
 router.register(r'provider-ratings', views.ProviderRatingViewSet, basename='provider-rating')
+router.register(r'insurance-claims-review', views.InsuranceClaimReviewViewSet, basename='insurance-claim-review')
 
 urlpatterns = [
     path('', include(router.urls)),
@@ -115,6 +118,8 @@ urlpatterns = [
     path('mpesa/callback/', MpesaCallbackView.as_view(), name='mpesa-callback'),
     path('flutterwave/webhook/', FlutterwaveWebhookView.as_view(), name='flutterwave-webhook'),
     path('flutterwave/verify/', VerifyFlutterwaveView.as_view(), name='flutterwave-verify'),
+    path('paystack/webhook/', PaystackWebhookView.as_view(), name='paystack-webhook'),
+    path('paystack/verify/', VerifyPaystackView.as_view(), name='paystack-verify'),
     path('pesapal/ipn/', PesapalIPNView.as_view(), name='pesapal-ipn'),
     
     # Dynamic Pricing (RL Model)

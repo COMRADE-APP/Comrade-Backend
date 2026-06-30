@@ -724,11 +724,32 @@ class EventSurvey(models.Model):
         return f"{self.survey_title} - {self.event.name}"
     
 class EventSurveyQuestion(models.Model):
+    QUESTION_TYPES = (
+        ('text', 'Text Response'),
+        ('multiple_choice', 'Multiple Choice'),
+        ('rating', 'Rating Scale'),
+    )
     survey = models.ForeignKey(EventSurvey, on_delete=models.DO_NOTHING)
     question_text = models.TextField(max_length=1000)
+    question_type = models.CharField(max_length=20, choices=QUESTION_TYPES, default='text')
+    options = models.JSONField(default=list, blank=True, help_text='For multiple choice: list of option strings. For rating: [min, max]')
 
     def __str__(self):
         return f"Question for {self.survey.survey_title}"
+
+class EventSurveyTemplate(models.Model):
+    created_by = models.ForeignKey(CustomUser, on_delete=models.CASCADE, related_name='survey_templates_created', null=True, blank=True)
+    template_title = models.CharField(max_length=200)
+    template_description = models.TextField(max_length=2000, blank=True, default='')
+    questions_data = models.JSONField(default=list, help_text='JSON array of {question_text, question_type, options} objects')
+    is_platform = models.BooleanField(default=False, help_text='Pre-built platform templates visible to all')
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['-is_platform', '-created_at']
+
+    def __str__(self):
+        return self.template_title
     
 class EventSurveyResponse(models.Model):
     question = models.ForeignKey(EventSurveyQuestion, on_delete=models.DO_NOTHING)

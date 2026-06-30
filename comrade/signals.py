@@ -36,9 +36,12 @@ def global_file_scan_receiver(sender, instance, created, **kwargs):
             if file_attr and file_attr.name:
                 # Dispatch the async Celery task
                 logger.info(f"Queueing malware/NSFW scan for {sender._meta.app_label}.{sender._meta.model_name} (ID: {instance.pk})")
-                scan_model_file.delay(
-                    app_label=sender._meta.app_label,
-                    model_name=sender._meta.model_name,
-                    object_id=instance.pk,
-                    file_field_name=field.name
-                )
+                try:
+                    scan_model_file.delay(
+                        app_label=sender._meta.app_label,
+                        model_name=sender._meta.model_name,
+                        object_id=instance.pk,
+                        file_field_name=field.name
+                    )
+                except Exception as e:
+                    logger.warning(f"Failed to queue scan task (Celery/Redis may be unavailable): {e}")

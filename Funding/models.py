@@ -167,7 +167,13 @@ class InvestmentOpportunity(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     title = models.CharField(max_length=255)
     description = models.TextField()
-    provider = models.CharField(max_length=255, help_text="Institution offering this")
+    provider = models.CharField(max_length=255, blank=True, help_text="Institution offering this (legacy — use provider_registration)")
+    provider_registration = models.ForeignKey(
+        'Payment.ProviderRegistration',
+        null=True, blank=True,
+        on_delete=models.SET_NULL,
+        related_name='investment_opportunities'
+    )
     type = models.CharField(max_length=50, choices=TYPE_CHOICES)
     
     min_investment = models.DecimalField(max_digits=12, decimal_places=2, help_text="Legacy field, use min_individual_entry")

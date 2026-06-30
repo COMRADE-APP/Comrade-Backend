@@ -333,6 +333,19 @@ class InvestmentOpportunityViewSet(viewsets.ModelViewSet):
         serializer = InvestmentOpportunitySerializer(recommendations, many=True)
         return Response(serializer.data)
 
+    @action(detail=False, methods=['get'], permission_classes=[permissions.IsAuthenticated])
+    def my_opportunities(self, request):
+        """
+        Returns investment opportunities published by the authenticated user's provider registrations.
+        """
+        profile = Profile.objects.get(user=request.user)
+        opportunities = InvestmentOpportunity.objects.filter(
+            provider_registration__user=profile,
+            is_active=True
+        ).order_by('-created_at')
+        serializer = InvestmentOpportunitySerializer(opportunities, many=True)
+        return Response(serializer.data)
+
 
 # ==============================================================================
 # FUNDING RESPONSES & INTERACTIONS

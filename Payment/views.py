@@ -20,7 +20,8 @@ import uuid
 import secrets
 
 from django.contrib.contenttypes.models import ContentType
-from Funding.models import Business, CapitalVenture
+from Funding.models import Business, CapitalVenture, InvestmentOpportunity
+from Funding.serializers import InvestmentOpportunitySerializer
 
 from Payment.models import (
     PaymentProfile, PaymentItem, PaymentLog, PaymentGroups,
@@ -7981,6 +7982,40 @@ class CreditScoreViewSet(ModelViewSet):
         return Response(CreditScoreSerializer(score).data)
 
 
+class LoanRepaymentViewSet(ModelViewSet):
+    """
+    ViewSet for LoanRepayment — enables listing and managing individual loan repayments.
+    Previously this was only accessible via the LoanApplication serializer.
+    """
+    serializer_class = LoanRepaymentSerializer
+    permission_classes = [IsAuthenticated]
+    http_method_names = ['get']
+
+    def get_queryset(self):
+        profile = get_or_create_payment_profile(self.request.user)
+        return LoanRepayment.objects.filter(loan__user=profile).order_by('due_date')
+
+    @action(detail=False, methods=['get'])
+    def upcoming(self, request):
+        profile = get_or_create_payment_profile(request.user)
+        repayments = LoanRepayment.objects.filter(
+            loan__user=profile,
+            status__in=['upcoming', 'due']
+        ).order_by('due_date')
+        serializer = LoanRepaymentSerializer(repayments, many=True)
+        return Response(serializer.data)
+
+    @action(detail=False, methods=['get'])
+    def overdue(self, request):
+        profile = get_or_create_payment_profile(request.user)
+        repayments = LoanRepayment.objects.filter(
+            loan__user=profile,
+            status='overdue'
+        ).order_by('due_date')
+        serializer = LoanRepaymentSerializer(repayments, many=True)
+        return Response(serializer.data)
+
+
 class LoanApplicationViewSet(ModelViewSet):
     serializer_class = LoanApplicationSerializer
     permission_classes = [IsAuthenticated]
@@ -8110,7 +8145,7 @@ class LoanApplicationViewSet(ModelViewSet):
             return Response({'error': 'Payment profile not found'}, status=status.HTTP_404_NOT_FOUND)
         except Exception as e:
             return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-    
+
     @action(detail=True, methods=['post'])
     def repay(self, request, pk=None):
         loan = self.get_object()
@@ -8207,7 +8242,7 @@ class EscrowTransactionViewSet(ModelViewSet):
     
     @action(detail=True, methods=['post'])
     def fund(self, request, pk=None):
-        """Fund an escrow — supports wallet, stripe (hold), flutterwave, pesapal."""
+        """Fund an escrow — supports wallet, stripe (hold), flutterwave, paystack, pesapal."""
         escrow = self.get_object()
         profile = Profile.objects.get(user=request.user)
         if escrow.buyer != profile:
@@ -8273,6 +8308,27 @@ class EscrowTransactionViewSet(ModelViewSet):
                 'gateway': 'flutterwave',
                 'payment_link': result['payment_link'],
                 'tx_ref': result['tx_ref'],
+            })
+        
+        elif payment_method == 'paystack':
+            from Payment.services.payment_service import PaystackProvider
+            result = PaystackProvider.initiate_payment(
+                amount=float(escrow.total_amount),
+                currency=request.data.get('currency', 'KES'),
+                email=request.user.email,
+                description=f'Escrow: {escrow.title}',
+            )
+            if 'error' in result:
+                return Response({'error': result['error']}, status=status.HTTP_400_BAD_REQUEST)
+            
+            escrow.payment_gateway = 'paystack'
+            escrow.payment_intent_id = result.get('reference', '')
+            escrow.save()
+            return Response({
+                'status': 'redirect',
+                'gateway': 'paystack',
+                'authorization_url': result['authorization_url'],
+                'reference': result['reference'],
             })
         
         elif payment_method == 'pesapal':
@@ -8508,6 +8564,9 @@ class InsuranceProductViewSet(ModelViewSet):
         group = self.request.query_params.get('group')
         if group:
             qs = qs.filter(is_group_product=group.lower() == 'true')
+        provider_id = self.request.query_params.get('provider_registration')
+        if provider_id:
+            qs = qs.filter(provider_registration_id=provider_id)
         return qs
 
 
@@ -10479,16 +10538,207 @@ class ProviderRegistrationViewSet(ModelViewSet):
     @action(detail=True, methods=['get'])
     def dashboard(self, request, pk=None):
         provider = self.get_object()
+        from django.db.models.functions import TruncDate
+        from datetime import timedelta, datetime
+        from django.utils import timezone
+
+        kitty_balance = 0.0
+        if provider.linked_payment_group:
+            kitty_balance = float(provider.linked_payment_group.current_amount or 0)
+
+        pending_applications_count = provider.applications.filter(
+            status__in=['submitted', 'under_review']
+        ).count()
+        pending_queries_count = provider.queries.filter(
+            status__in=['open', 'in_progress', 'pending_response']
+        ).count()
+        active_products_count = provider.service_products.filter(status='active').count()
+        staff_count = provider.staff_members.filter(status='active').count()
+
+        total_volume = float(provider.transactions.aggregate(Sum('amount'))['amount__sum'] or 0)
+
+        thirty_days_ago = timezone.now() - timedelta(days=30)
+        daily_qs = provider.transactions.filter(
+            created_at__gte=thirty_days_ago
+        ).annotate(date=TruncDate('created_at')).values('date').annotate(
+            daily_total=Sum('amount')
+        ).order_by('date')
+        daily_revenue = [
+            {'date': str(entry['date']), 'amount': float(entry['daily_total'] or 0)}
+            for entry in daily_qs
+        ]
+
+        recent_items = []
+        for txn in provider.transactions.order_by('-created_at')[:5]:
+            recent_items.append({
+                'type': 'transaction',
+                'id': str(txn.id),
+                'description': txn.description or f'Transaction {txn.reference_number}',
+                'amount': float(txn.amount),
+                'status': txn.status,
+                'timestamp': txn.created_at.isoformat(),
+            })
+        for query in provider.queries.order_by('-created_at')[:5]:
+            recent_items.append({
+                'type': 'query',
+                'id': str(query.id),
+                'description': query.subject,
+                'status': query.status,
+                'priority': query.priority,
+                'timestamp': query.created_at.isoformat(),
+            })
+        for app in provider.applications.order_by('-created_at')[:5]:
+            recent_items.append({
+                'type': 'application',
+                'id': str(app.id),
+                'description': app.application_type.replace('_', ' ').title(),
+                'status': app.status,
+                'timestamp': app.created_at.isoformat(),
+            })
+        recent_items.sort(key=lambda x: x['timestamp'], reverse=True)
+        recent_activity = recent_items[:8]
+
         stats = {
             'total_transactions': provider.transactions.count(),
             'total_queries': provider.queries.count(),
-            'pending_applications': provider.applications.filter(status__in=['submitted', 'under_review']).count(),
-            'active_products': provider.service_products.filter(status='active').count(),
-            'staff_count': provider.staff_members.filter(status='active').count(),
-            'total_volume': float(provider.transactions.aggregate(Sum('amount'))['amount__sum'] or 0),
-            'pending_queries': provider.queries.filter(status__in=['open', 'in_progress', 'pending_response']).count(),
+            'pending_applications': pending_applications_count,
+            'active_products': active_products_count,
+            'staff_count': staff_count,
+            'total_volume': total_volume,
+            'pending_queries': pending_queries_count,
+            'kitty_balance': kitty_balance,
+            'daily_revenue': daily_revenue,
+            'recent_activity': recent_activity,
         }
         return Response(stats)
+
+    @action(detail=True, methods=['get'])
+    def kitty_analytics(self, request, pk=None):
+        provider = self.get_object()
+        kitty = provider.linked_payment_group
+        from django.db.models import Sum
+        from datetime import timedelta
+
+        kitty_balance = float(kitty.current_amount or 0) if kitty else 0.0
+
+        # ── Transactions from ProviderTransaction ──
+        ptxns = provider.transactions.all()
+        total_inflows = float(ptxns.filter(
+            transaction_type__in=['payment', 'commission', 'payout']
+        ).aggregate(Sum('amount'))['amount__sum'] or 0)
+        total_outflows = float(ptxns.filter(
+            transaction_type__in=['refund', 'fee', 'adjustment']
+        ).aggregate(Sum('amount'))['amount__sum'] or 0)
+        net_profit_loss = total_inflows - total_outflows
+
+        # ── Monthly trend (last 12 months) ──
+        monthly_trend = []
+        for i in range(11, -1, -1):
+            start = timezone.now().replace(day=1) - timedelta(days=30 * i)
+            end = (start + timedelta(days=32)).replace(day=1)
+            inflows = float(ptxns.filter(
+                created_at__gte=start, created_at__lt=end,
+                transaction_type__in=['payment', 'commission', 'payout']
+            ).aggregate(Sum('amount'))['amount__sum'] or 0)
+            outflows = float(ptxns.filter(
+                created_at__gte=start, created_at__lt=end,
+                transaction_type__in=['refund', 'fee', 'adjustment']
+            ).aggregate(Sum('amount'))['amount__sum'] or 0)
+            monthly_trend.append({
+                'month': start.strftime('%Y-%m'),
+                'revenue': inflows,
+                'expenses': outflows,
+            })
+
+        # ── Service breakdown ──
+        service_revenue = []
+        for svc_type, svc_label in [
+            ('bill_payment', 'Bills'), ('insurance', 'Insurance'),
+            ('loan', 'Loans'), ('investment', 'Investments'),
+            ('course', 'Courses'), ('other', 'Other'),
+        ]:
+            products = provider.service_products.filter(service_type=svc_type)
+            prod_ids = products.values_list('id', flat=True)
+            rev = float(ProviderTransaction.objects.filter(
+                provider=provider, service_product_id__in=prod_ids,
+                transaction_type='payment'
+            ).aggregate(Sum('amount'))['amount__sum'] or 0)
+            if rev > 0:
+                service_revenue.append({'type': svc_label, 'amount': rev})
+
+        active_products_count = provider.service_products.filter(status='active').count()
+
+        performance_score = min(100, int(
+            (kitty_balance / 10000) * 20 +
+            (ptxns.count() * 2) + (active_products_count * 10)
+        )) if active_products_count or kitty_balance else 0
+
+        stats = {
+            'current_balance': kitty_balance,
+            'total_inflows': total_inflows,
+            'total_outflows': total_outflows,
+            'net_profit_loss': net_profit_loss,
+            'monthly_trend': monthly_trend,
+            'service_revenue': service_revenue,
+            'performance_score': performance_score,
+            'total_products': active_products_count,
+            'total_transactions': ptxns.count(),
+        }
+        return Response(stats)
+
+    @action(detail=True, methods=['post'])
+    def publish_opportunity(self, request, pk=None):
+        """
+        Publish an investment opportunity linked to this provider registration.
+        """
+        provider = self.get_object()
+        title = request.data.get('title')
+        description = request.data.get('description', '')
+        opp_type = request.data.get('type', 'stock')
+        expected_return = request.data.get('expected_return', '')
+        risk_level = request.data.get('risk_level', 'medium')
+        min_individual_entry = request.data.get('min_individual_entry', 0)
+        min_group_entry = request.data.get('min_group_entry', 0)
+        gain_intervals = request.data.get('gain_intervals', 'monthly')
+        maturity_period = request.data.get('maturity_period', '')
+        link = request.data.get('link', '')
+
+        if not title:
+            return Response({'error': 'Title is required'}, status=status.HTTP_400_BAD_REQUEST)
+
+        if provider.status != 'approved':
+            return Response({'error': 'Provider must be approved to publish opportunities'}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            opportunity = InvestmentOpportunity.objects.create(
+                title=title,
+                description=description,
+                provider=provider.business_name,
+                provider_registration=provider,
+                type=opp_type,
+                expected_return=expected_return,
+                risk_level=risk_level,
+                min_investment=min_individual_entry,
+                min_individual_entry=min_individual_entry,
+                min_group_entry=min_group_entry,
+                gain_intervals=gain_intervals,
+                maturity_period=maturity_period or None,
+                link=link or None,
+                is_active=True,
+            )
+            serializer = InvestmentOpportunitySerializer(opportunity)
+            return Response(serializer.data, status=status.HTTP_201_CREATED)
+        except Exception as e:
+            return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+    @action(detail=True, methods=['get'])
+    def my_loan_products(self, request, pk=None):
+        provider = self.get_object()
+        products = LoanProduct.objects.filter(
+            provider_registration=provider
+        ).order_by('interest_rate')
+        serializer = LoanProductSerializer(products, many=True)
+        return Response(serializer.data)
 
     @action(detail=True, methods=['post'])
     def submit(self, request, pk=None):
@@ -10523,7 +10773,7 @@ class ProviderRegistrationViewSet(ModelViewSet):
                 return Response({'error': 'You do not have permission to request payouts'}, status=status.HTTP_403_FORBIDDEN)
 
         amount_str = request.data.get('amount')
-        payout_method = request.data.get('method', 'stripe') # stripe, flutterwave, mpesa
+        payout_method = request.data.get('method', 'stripe') # stripe, flutterwave, paystack, mpesa
         destination_account = request.data.get('destination_account')
         
         if not amount_str or not destination_account:
@@ -11235,6 +11485,119 @@ class ProviderRatingViewSet(ModelViewSet):
         rating.is_approved = False
         rating.save()
         return Response({'is_approved': False})
+
+
+class InsuranceClaimReviewViewSet(ModelViewSet):
+    """
+    Provider-facing viewset for reviewing and processing insurance claims.
+    Only provider staff with can_approve_claims can approve/reject.
+    Staff can escalate to platform admins.
+    """
+    serializer_class = InsuranceClaimSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        profile = Profile.objects.get(user=self.request.user)
+        provider_regs = ProviderRegistration.objects.filter(user=profile)
+        provider_ids = provider_regs.values_list('id', flat=True)
+        return InsuranceClaim.objects.filter(
+            policy__product__provider_registration__id__in=provider_ids
+        ).order_by('-created_at')
+
+    def _check_staff_permission(self, claim):
+        profile = Profile.objects.get(user=self.request.user)
+        provider_reg_id = claim.policy.product.provider_registration_id
+        if not provider_reg_id:
+            return False, 'No provider linked to this insurance product'
+        try:
+            provider = ProviderRegistration.objects.get(id=provider_reg_id)
+            staff = ProviderStaff.objects.get(provider=provider, user=profile)
+            if not staff.can_approve_claims:
+                return False, 'You do not have permission to review claims'
+            return True, staff
+        except ProviderStaff.DoesNotExist:
+            return False, 'You are not authorized staff for this provider'
+
+    @action(detail=True, methods=['post'])
+    def review_claim(self, request, pk=None):
+        claim = self.get_object()
+        action = request.data.get('action')
+        notes = request.data.get('notes', '')
+
+        if action not in ['approve', 'reject', 'request_info']:
+            return Response({'error': 'Invalid action. Use approve, reject, or request_info'},
+                            status=status.HTTP_400_BAD_REQUEST)
+
+        has_permission, result = self._check_staff_permission(claim)
+        if not has_permission and not request.user.is_staff:
+            return Response({'error': result}, status=status.HTTP_403_FORBIDDEN)
+
+        if action == 'approve':
+            claim.status = 'approved'
+            claim.amount_approved = request.data.get('amount_approved', claim.amount_claimed)
+        elif action == 'reject':
+            claim.status = 'rejected'
+        elif action == 'request_info':
+            claim.status = 'under_review'
+
+        claim.reviewer_notes = notes
+        claim.reviewed_at = timezone.now()
+        claim.save()
+
+        return Response(InsuranceClaimSerializer(claim).data)
+
+    @action(detail=True, methods=['post'])
+    def payout_claim(self, request, pk=None):
+        claim = self.get_object()
+
+        if claim.status != 'approved':
+            return Response({'error': 'Claim must be approved before payout'}, status=status.HTTP_400_BAD_REQUEST)
+
+        has_permission, _ = self._check_staff_permission(claim)
+        if not has_permission and not request.user.is_staff:
+            return Response({'error': 'You do not have permission to process payouts'}, status=status.HTTP_403_FORBIDDEN)
+
+        provider_reg_id = claim.policy.product.provider_registration_id
+        provider = ProviderRegistration.objects.get(id=provider_reg_id) if provider_reg_id else None
+
+        try:
+            with db_transaction.atomic():
+                payout_amount = claim.amount_approved or claim.amount_claimed
+                claim.status = 'paid'
+                claim.paid_at = timezone.now()
+                claim.save()
+
+                if provider and provider.linked_payment_group:
+                    kitty = provider.linked_payment_group
+                    if kitty.wallet_balance >= payout_amount:
+                        kitty.wallet_balance -= Decimal(str(payout_amount))
+                        kitty.save()
+
+                claimant_pp = get_or_create_payment_profile(claim.claimant.user)
+                claimant_pp.comrade_balance += Decimal(str(payout_amount))
+                claimant_pp.save()
+
+                TransactionToken.objects.create(
+                    receiver_profile=claimant_pp,
+                    amount=payout_amount,
+                    transaction_type='insurance_payout',
+                    status='completed',
+                    description=f"Insurance payout: {claim.policy.policy_number}",
+                    payment_group=provider.linked_payment_group if provider else None,
+                )
+
+                return Response({'status': 'paid', 'amount_paid': str(payout_amount)})
+        except Exception as e:
+            return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+    @action(detail=True, methods=['post'])
+    def escalate(self, request, pk=None):
+        claim = self.get_object()
+        reason = request.data.get('reason', 'Escalated for admin review')
+        claim.status = 'under_review'
+        claim.reviewer_notes = f"{claim.reviewer_notes or ''}\nESCALATED: {reason}".strip()
+        claim.save()
+        return Response(InsuranceClaimSerializer(claim).data)
 
 
 class ProviderNotificationViewSet(ModelViewSet):

@@ -2311,6 +2311,10 @@ RISK_LEVEL = (
 class LoanProduct(models.Model):
     name = models.CharField(max_length=200)
     description = models.TextField()
+    provider_registration = models.ForeignKey(
+        'ProviderRegistration', null=True, blank=True,
+        on_delete=models.SET_NULL, related_name='loan_products'
+    )
     interest_rate = models.DecimalField(decimal_places=2, max_digits=6, help_text='Monthly interest rate %')
     min_amount = models.DecimalField(decimal_places=2, max_digits=12)
     max_amount = models.DecimalField(decimal_places=2, max_digits=12)
@@ -2465,7 +2469,7 @@ class EscrowTransaction(models.Model):
     delivery_proof = models.TextField(blank=True)
     release_conditions = models.TextField(blank=True)
     # External payment gateway tracking
-    payment_gateway = models.CharField(max_length=30, blank=True, default='wallet', help_text='wallet, stripe, flutterwave, pesapal, paypal')
+    payment_gateway = models.CharField(max_length=30, blank=True, default='wallet', help_text='wallet, stripe, paystack, flutterwave, pesapal, paypal')
     payment_intent_id = models.CharField(max_length=255, blank=True, default='', help_text='Stripe PaymentIntent ID or external gateway transaction ref')
     funded_at = models.DateTimeField(null=True, blank=True)
     delivered_at = models.DateTimeField(null=True, blank=True)
@@ -2551,7 +2555,11 @@ PREMIUM_FREQUENCY = (
 
 class InsuranceProduct(models.Model):
     name = models.CharField(max_length=200)
-    provider = models.CharField(max_length=200, help_text='Insurance company name')
+    provider = models.CharField(max_length=200, blank=True, help_text='Insurance company name (legacy — use provider_registration)')
+    provider_registration = models.ForeignKey(
+        'ProviderRegistration', null=True, blank=True,
+        on_delete=models.SET_NULL, related_name='insurance_products'
+    )
     category = models.CharField(max_length=30, choices=INSURANCE_CATEGORY)
     description = models.TextField()
     premium_amount = models.DecimalField(decimal_places=2, max_digits=10, help_text='Premium per period')
@@ -3138,6 +3146,7 @@ PROVIDER_TYPE = (
     ('utility_provider', 'Utility Provider'),
     ('financial_service', 'Financial Service'),
     ('government_service', 'Government Service'),
+    ('course_provider', 'Course Provider'),
 )
 
 
@@ -3158,6 +3167,8 @@ class ProviderRegistration(models.Model):
     commission_rate = models.DecimalField(decimal_places=4, max_digits=6, default=Decimal('0.00'))
     min_transaction_amount = models.DecimalField(decimal_places=2, max_digits=12, default=Decimal('0.00'))
     max_transaction_amount = models.DecimalField(decimal_places=2, max_digits=12, default=Decimal('100000.00'))
+    account_label = models.CharField(max_length=100, default='Account Number', help_text='Label for the account field shown to users (e.g., "Meter Number", "Policy Number")')
+    account_format = models.CharField(max_length=200, blank=True, help_text='Regex pattern for account number validation (e.g., "^[0-9]{10}$")')
     supported_payment_methods = models.JSONField(default=list, blank=True)
     status = models.CharField(max_length=30, choices=PROVIDER_REGISTRATION_STATUS, default='draft')
     rejection_reason = models.TextField(blank=True)

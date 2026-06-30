@@ -2,7 +2,8 @@
 Auto-Kitty Signals
 Automatically creates a PaymentGroups 'kitty' when key entities are created.
 This lets every Business, CapitalVenture, ShopRegistration, Organisation,
-Institution, and Specialization have its own fund pool for tracking money.
+Institution, Specialization, OrganizerProfile, and SponsorProfile have its
+own fund pool for tracking money.
 """
 import logging
 from django.db.models.signals import post_save
@@ -134,7 +135,29 @@ def create_specialization_kitty(sender, instance, created, **kwargs):
 
 
 # ──────────────────────────────────────────────
-# 7. Auto-create Room when PaymentGroup is created
+# 7. Events: OrganizerProfile
+# ──────────────────────────────────────────────
+@receiver(post_save, sender='Events.OrganizerProfile')
+def create_organizer_kitty(sender, instance, created, **kwargs):
+    if not created:
+        return
+    name = instance.business_name or f"Organizer {instance.user.get_full_name() or instance.user.email}"
+    _create_kitty_for_entity(instance, name, instance.user)
+
+
+# ──────────────────────────────────────────────
+# 8. Events: SponsorProfile
+# ──────────────────────────────────────────────
+@receiver(post_save, sender='Events.SponsorProfile')
+def create_sponsor_kitty(sender, instance, created, **kwargs):
+    if not created:
+        return
+    name = instance.company_name or f"Sponsor {instance.user.get_full_name() or instance.user.email}"
+    _create_kitty_for_entity(instance, name, instance.user)
+
+
+# ──────────────────────────────────────────────
+# 9. Auto-create Room when PaymentGroup is created
 # ──────────────────────────────────────────────
 @receiver(post_save, sender='Payment.PaymentGroups')
 def auto_create_room_for_group(sender, instance, created, **kwargs):

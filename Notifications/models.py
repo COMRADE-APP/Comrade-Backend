@@ -28,6 +28,7 @@ NOTIFICATION_TYPES = (
     ('group_contribution', 'Group Contribution'),
     ('group_claim', 'Group Claim'),
     ('group_message', 'Group Message'),
+    ('event_reminder', 'Event Reminder'),
     # Provider Notifications
     ('provider_application_submitted', 'Application Submitted'),
     ('provider_application_approved', 'Application Approved'),

@@ -1,8 +1,9 @@
 """
 Payment Service Providers
 Handles communication with external payment APIs:
+  - Paystack (PRIMARY African aggregator: M-Pesa, cards, bank, USSD, mobile money)
   - Stripe (Primary: Visa, Mastercard, Apple Pay, Google Pay)
-  - Flutterwave (African aggregator: Kenyan banks, M-Pesa, local cards)
+  - Flutterwave (Fallback African aggregator: Kenyan banks, M-Pesa, local cards)
   - Pesapal (Kenya-focused aggregator: banks, M-Pesa, Airtel Money)
   - M-Pesa (Safaricom Daraja direct)
   - PayPal (+ Venmo)
@@ -264,15 +265,146 @@ class StripeProvider:
 
 
 # ============================================================================
-# FLUTTERWAVE PROVIDER (African Aggregator)
+# PAYSTACK PROVIDER (African Aggregator — PRIMARY)
+# ============================================================================
+
+class PaystackProvider:
+    """Paystack API integration.
+    
+    PRIMARY African gateway. Handles cards, M-Pesa, bank transfers, USSD,
+    and mobile money across Kenya, Nigeria, Ghana, South Africa, and more.
+    """
+
+    @staticmethod
+    def _get_headers():
+        secret_key = getattr(settings, 'PAYSTACK_SECRET_KEY', '')
+        if not secret_key:
+            return None
+        return {
+            'Authorization': f'Bearer {secret_key}',
+            'Content-Type': 'application/json',
+        }
+
+    @staticmethod
+    def initiate_payment(amount, currency='KES', email='', phone='',
+                         redirect_url='', reference=None, description='Qomrade Payment',
+                         channels=None):
+        """Initialize a Paystack transaction (for redirect or inline use).
+        
+        Returns the authorization_url (for redirect) and reference.
+        """
+        headers = PaystackProvider._get_headers()
+        if not headers:
+            return {"error": "Paystack not configured. Add PAYSTACK_SECRET_KEY to .env"}
+
+        base_url = getattr(settings, 'PAYSTACK_BASE_URL', 'https://api.paystack.co')
+        frontend_url = getattr(settings, 'FRONTEND_URL', 'http://localhost:5173/')
+
+        ref = reference or f'QOM-{uuid.uuid4().hex[:12].upper()}'
+        amount_kobo = int(float(amount) * 100)
+
+        payload = {
+            'email': email or 'customer@qomrade.com',
+            'amount': amount_kobo,
+            'currency': currency.upper(),
+            'reference': ref,
+            'callback_url': redirect_url or f'{frontend_url}payments/callback/paystack',
+            'metadata': {
+                'description': description,
+                'phone': phone or '',
+            },
+        }
+        if channels:
+            payload['channels'] = channels
+
+        try:
+            r = requests.post(
+                f'{base_url}/transaction/initialize',
+                json=payload, headers=headers, timeout=30
+            )
+            data = r.json()
+            if data.get('status') and data.get('data'):
+                return {
+                    'status': 'redirect',
+                    'authorization_url': data['data'].get('authorization_url', ''),
+                    'access_code': data['data'].get('access_code', ''),
+                    'reference': data['data'].get('reference', ref),
+                }
+            return {"error": data.get('message', 'Paystack initialization failed')}
+        except requests.RequestException as e:
+            return {"error": f"Paystack connection failed: {str(e)}"}
+
+    @staticmethod
+    def verify_transaction(reference):
+        """Verify a Paystack transaction by reference ID."""
+        headers = PaystackProvider._get_headers()
+        if not headers:
+            return {"error": "Paystack not configured"}
+
+        base_url = getattr(settings, 'PAYSTACK_BASE_URL', 'https://api.paystack.co')
+
+        try:
+            r = requests.get(
+                f'{base_url}/transaction/verify/{reference}',
+                headers=headers, timeout=30
+            )
+            data = r.json()
+            if data.get('status') and data.get('data') and data['data'].get('status') == 'success':
+                return {
+                    'status': 'completed',
+                    'amount': data['data'].get('amount', 0) / 100,
+                    'currency': data['data'].get('currency', 'KES'),
+                    'reference': data['data'].get('reference', ''),
+                    'channel': data['data'].get('channel', ''),
+                    'paid_at': data['data'].get('paid_at', ''),
+                }
+            return {
+                'status': data.get('data', {}).get('status', 'failed') if isinstance(data.get('data'), dict) else 'failed',
+                'message': data.get('message', 'Verification failed'),
+            }
+        except requests.RequestException as e:
+            return {"error": f"Paystack verification failed: {str(e)}"}
+
+    @staticmethod
+    def verify_webhook_signature(request_body, signature_header):
+        """Verify Paystack webhook HMAC SHA-512 signature.
+
+        Paystack signs webhooks with HMAC-SHA512 using the secret key.
+        The signature is sent in the 'x-paystack-signature' header.
+        """
+        secret_key = getattr(settings, 'PAYSTACK_SECRET_KEY', '')
+        if not secret_key:
+            logger.warning('PAYSTACK_SECRET_KEY not configured — rejecting webhook')
+            return False
+        if not signature_header:
+            return False
+        computed = hmac.new(
+            secret_key.encode('utf-8'),
+            request_body if isinstance(request_body, bytes) else request_body.encode('utf-8'),
+            hashlib.sha512
+        ).hexdigest()
+        return hmac.compare_digest(computed, signature_header)
+
+    @staticmethod
+    def get_allowed_webhook_ips():
+        """Paystack webhook source IPs (whitelist)."""
+        return [
+            '52.31.139.75',
+            '52.49.173.169',
+            '52.214.14.220',
+        ]
+
+
+# ============================================================================
+# FLUTTERWAVE PROVIDER (African Aggregator — Fallback)
 # ============================================================================
 
 class FlutterwaveProvider:
-    """Flutterwave API integration.
+    """Flutterwave API integration (FALLBACK).
     
     Covers all 7 Kenyan banks (Equity, KCB, DTB, Absa, Ecobank, NCBA, Family Bank),
     M-Pesa, and local card payments via a single integration.
-    Ideal for expanding to other African markets (Nigeria, Ghana, SA, etc).
+    Used as a fallback for Paystack.
     """
     
     @staticmethod
@@ -815,7 +947,7 @@ class PaymentRouter:
             destination: Override destination (paypal/mpesa/equity/stripe/flutterwave/pesapal)
             details: Dict with destination-specific details (email, phone, account_number)
         """
-        dest = destination or getattr(settings, 'PAYMENT_DESTINATION', 'flutterwave')
+        dest = destination or getattr(settings, 'PAYMENT_DESTINATION', 'paystack')
         details = details or {}
         
         if dest == 'paypal':
@@ -836,6 +968,9 @@ class PaymentRouter:
             if not account or not bank_code:
                 return {"error": "Account number and bank code required for Flutterwave routing"}
             return FlutterwaveProvider.initiate_transfer(account, bank_code, amount, currency)
+        
+        elif dest == 'paystack':
+            return {"status": "completed", "message": "Funds routed via Paystack — payout handled separately"}
         
         elif dest == 'equity':
             account = details.get('account_number', '')
@@ -867,6 +1002,12 @@ class PaymentService:
                 'label': 'Card / Apple Pay / Google Pay',
                 'methods': ['visa', 'mastercard', 'amex', 'apple_pay', 'google_pay'],
             },
+            'paystack': {
+                'available': bool(getattr(settings, 'PAYSTACK_SECRET_KEY', '')),
+                'public_key': getattr(settings, 'PAYSTACK_PUBLIC_KEY', ''),
+                'label': 'M-Pesa / Card / Bank (Africa)',
+                'methods': ['mpesa', 'card', 'bank_transfer', 'ussd', 'mobile_money'],
+            },
             'paypal': {
                 'available': bool(getattr(settings, 'PAYPAL_CLIENT_ID', '')),
                 'client_id': getattr(settings, 'PAYPAL_CLIENT_ID', ''),
@@ -881,7 +1022,7 @@ class PaymentService:
             'flutterwave': {
                 'available': bool(getattr(settings, 'FLUTTERWAVE_SECRET_KEY', '')),
                 'public_key': getattr(settings, 'FLUTTERWAVE_PUBLIC_KEY', ''),
-                'label': 'Bank / M-Pesa / Card (Africa)',
+                'label': 'Bank / M-Pesa / Card (Africa — Fallback)',
                 'methods': ['card', 'mpesa', 'bank_transfer', 'ussd'],
             },
             'pesapal': {
@@ -917,6 +1058,27 @@ class PaymentService:
         }
     
     @staticmethod
+    def get_preferred_gateway(country_code=''):
+        """Return the best gateway for a given country code.
+        
+        Falls back to the first available gateway if the preferred one
+        isn't configured or the country is unknown.
+        """
+        location_map = getattr(settings, 'GATEWAY_LOCATION_MAP', {})
+        country_code = country_code.upper() if country_code else ''
+        available = PaymentService.get_available_gateways()
+        
+        if country_code in location_map:
+            for gw in location_map[country_code]:
+                if gw in available:
+                    return gw
+        
+        # No country match — pick first available gateway
+        for gw in available:
+            return gw
+        return 'stripe'  # Ultimate fallback
+
+    @staticmethod
     def initiate_deposit(user, amount, method, details):
         """Initiate a deposit using the specified payment method."""
         user_label = 'user'
@@ -929,9 +1091,11 @@ class PaymentService:
         except Exception:
             pass
             
-        if method in ('flutterwave', 'card', 'stripe', 'mpesa'):
-            # Return inline ready status. Frontend handles standard inline checkout modal.
-            return {"status": "ready_for_inline", "provider": "flutterwave"}
+        if method in ('paystack', 'flutterwave', 'card', 'stripe', 'mpesa'):
+            # Primary: Paystack inline modal. Fallback: Flutterwave.
+            paystack_available = bool(getattr(settings, 'PAYSTACK_SECRET_KEY', ''))
+            provider = 'paystack' if paystack_available else 'flutterwave'
+            return {"status": "ready_for_inline", "provider": provider}
         elif method == 'pesapal':
             email = details.get('email', user_label)
             phone = details.get('phone_number', '')
@@ -973,8 +1137,11 @@ class PaymentService:
     @staticmethod
     def process_payment(amount, currency, method, details):
         """Process a payment using the specified method."""
-        if method in ('flutterwave', 'stripe', 'card', 'mpesa'):
-            return {"status": "ready_for_inline", "provider": "flutterwave"}
+        if method in ('paystack', 'flutterwave', 'stripe', 'card', 'mpesa'):
+            # Primary: Paystack inline modal. Fallback: Flutterwave.
+            paystack_available = bool(getattr(settings, 'PAYSTACK_SECRET_KEY', ''))
+            provider = 'paystack' if paystack_available else 'flutterwave'
+            return {"status": "ready_for_inline", "provider": provider}
         elif method == 'paypal':
             return PayPalProvider.create_order(
                 amount, currency, details.get('description', 'Purchase')

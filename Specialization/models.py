@@ -24,6 +24,7 @@ class Stack(models.Model):
     name = models.CharField(max_length=255)
     description = models.TextField(max_length=500, null=True, blank=True)
     image_url = models.URLField(max_length=500, null=True, blank=True)
+    background_color = models.CharField(max_length=30, default='#ffffff', help_text='Background color for module card')
     created_by = models.ManyToManyField(Profile, related_name='stack_creators', blank=True)
     created_on = models.DateTimeField(default=datetime.now)
     resources = models.ManyToManyField(Resource, related_name='stack_resources', blank=True)
@@ -53,10 +54,20 @@ class Specialization(models.Model):
     learning_type = models.CharField(max_length=50, choices=LEARNING_TYPES, default='specialization')
     is_paid = models.BooleanField(default=False)
     price = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
+    background_color = models.CharField(max_length=30, default='#ffffff', help_text='Background color for course card')
+    provider = models.ForeignKey(
+        'Payment.ProviderRegistration', null=True, blank=True,
+        on_delete=models.SET_NULL, related_name='specializations'
+    )
+
+    lock_for_unenrolled = models.BooleanField(default=True, help_text="Lessons locked for unenrolled students")
+    sequential_locking = models.BooleanField(default=False, help_text="Must complete previous lesson/module before accessing next")
+    skip_disabled = models.BooleanField(default=False, help_text="Disable skipping lessons; progress must be sequential")
 
     created_by = models.ManyToManyField(Profile, blank=True, related_name='created_specializations')
     created_on = models.DateTimeField(default=datetime.now)
     stacks = models.ManyToManyField(Stack, related_name='specialization_stacks', blank=True)
+    stack_order = models.JSONField(default=list, blank=True, help_text='Ordered list of stack IDs for drag-and-drop arrangement')
     members = models.ManyToManyField(Profile, blank=True, related_name='specialization_members_collection')
     admins = models.ManyToManyField(Profile, blank=True, related_name='specialization_admins_collections')
     moderator = models.ManyToManyField(Profile, blank=True, related_name='specialization_moderators_collections')
@@ -216,6 +227,7 @@ class Lesson(models.Model):
     """Individual content unit within a Stack (module)."""
     stack = models.ForeignKey(Stack, on_delete=models.CASCADE, related_name='lessons')
     title = models.CharField(max_length=255)
+    slug = models.SlugField(max_length=300, null=True, blank=True)
     description = models.TextField(blank=True)
     content_type = models.CharField(max_length=20, choices=CONTENT_TYPES, default='text')
     content_text = models.TextField(blank=True, help_text="Rich text / markdown content")
@@ -230,6 +242,7 @@ class Lesson(models.Model):
     duration_minutes = models.PositiveIntegerField(default=10)
     is_preview = models.BooleanField(default=False, help_text="Can be viewed without enrollment")
     is_locked = models.BooleanField(default=False, help_text="Requires payment to unlock")
+    background_color = models.CharField(max_length=30, default='#ffffff', help_text='Background color for lesson')
     created_on = models.DateTimeField(auto_now_add=True)
 
     class Meta:
@@ -238,6 +251,16 @@ class Lesson(models.Model):
 
     def __str__(self):
         return f"{self.stack.name} → {self.title}"
+
+    def save(self, *args, **kwargs):
+        from django.utils.text import slugify
+        import uuid
+        if not self.slug or (self.pk and self.__class__.objects.filter(pk=self.pk).exists() and self.__class__.objects.get(pk=self.pk).title != self.title):
+            base = slugify(self.title) or 'lesson'
+            self.slug = base + '-' + uuid.uuid4().hex[:6]
+            while self.__class__.objects.filter(slug=self.slug).exclude(pk=self.pk).exists():
+                self.slug = base + '-' + uuid.uuid4().hex[:6]
+        super().save(*args, **kwargs)
 
 
 # ============================================================================
@@ -265,8 +288,14 @@ class Quiz(models.Model):
     description = models.TextField(blank=True)
     placement = models.CharField(max_length=20, choices=QUIZ_PLACEMENT, default='end_of_module')
     passing_score = models.PositiveIntegerField(default=70, help_text="Minimum % to pass")
-    time_limit_minutes = models.PositiveIntegerField(null=True, blank=True)
+    time_limit_minutes = models.PositiveIntegerField(null=True, blank=True, help_text="Time limit for entire test in minutes")
     max_attempts = models.PositiveIntegerField(default=3)
+    display_mode = models.CharField(max_length=20, choices=[('whole', 'Whole Test'), ('one_by_one', 'One at a Time')], default='whole', help_text="Show all questions at once or one per page")
+    timer_mode = models.CharField(max_length=20, choices=[('per_test', 'Per Test'), ('per_question', 'Per Question')], default='per_test', help_text="Timer applies to entire test or each question")
+    time_per_question = models.PositiveIntegerField(null=True, blank=True, help_text="Seconds per question when timer_mode is per_question")
+    allow_back_navigation = models.BooleanField(default=True, help_text="Allow going back to previous questions. Auto-disabled when per_question timer is set.")
+    show_results_immediately = models.BooleanField(default=True, help_text="Show pass/fail and answers right after submission")
+    pass_mark_to_continue = models.BooleanField(default=False, help_text="Must achieve passing score to unlock next lesson/module")
     order = models.PositiveIntegerField(default=0)
     created_on = models.DateTimeField(auto_now_add=True)
 
@@ -315,6 +344,103 @@ class QuizAttempt(models.Model):
 
     def __str__(self):
         return f"{self.user} attempt #{self.attempt_number} on {self.quiz.title}"
+
+
+class LessonContentBlock(models.Model):
+    BLOCK_TYPES = [
+        ('text', 'Text'),
+        ('video', 'Video'),
+        ('audio', 'Audio'),
+        ('image', 'Image'),
+        ('code', 'Code'),
+        ('file', 'File'),
+        ('embed', 'Embed'),
+        ('quiz', 'Quiz Reference'),
+    ]
+    lesson = models.ForeignKey(Lesson, on_delete=models.CASCADE, related_name='content_blocks')
+    block_type = models.CharField(max_length=20, choices=BLOCK_TYPES)
+    content = models.TextField(blank=True, help_text='Text / Code / Caption content')
+    url = models.URLField(max_length=500, blank=True, help_text='Video / Audio / Image / Embed URL')
+    file = models.FileField(upload_to='specialization/blocks/', blank=True, null=True)
+    code_language = models.CharField(max_length=50, blank=True, default='plaintext')
+    caption = models.CharField(max_length=500, blank=True)
+    background_color = models.CharField(max_length=30, default='#ffffff', help_text='Background color for this content block')
+    order = models.PositiveIntegerField(default=0)
+
+    class Meta:
+        ordering = ['order']
+        unique_together = ['lesson', 'order']
+
+    def __str__(self):
+        return f"{self.lesson.title} → block {self.order} ({self.block_type})"
+
+
+# ============================================================================
+# ACTIVITIES
+# ============================================================================
+
+class Activity(models.Model):
+    ACTIVITY_TYPES = [
+        ('discussion', 'Discussion'),
+        ('assignment', 'Assignment'),
+        ('project', 'Project'),
+        ('peer_review', 'Peer Review'),
+        ('reflection', 'Reflection'),
+    ]
+    stack = models.ForeignKey(Stack, on_delete=models.CASCADE, related_name='activities')
+    title = models.CharField(max_length=255)
+    activity_type = models.CharField(max_length=20, choices=ACTIVITY_TYPES, default='assignment')
+    instructions = models.TextField(blank=True)
+    content_blocks = models.JSONField(default=list, blank=True, help_text="List of {type, content, url, caption, order} blocks")
+    submission_required = models.BooleanField(default=False)
+    due_days = models.PositiveIntegerField(null=True, blank=True, help_text="Days from enrollment to complete")
+    order = models.PositiveIntegerField(default=0)
+    created_on = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['order']
+
+    def __str__(self):
+        return f"{self.stack.name} → Activity: {self.title}"
+
+
+class ActivitySubmission(models.Model):
+    activity = models.ForeignKey(Activity, on_delete=models.CASCADE, related_name='submissions')
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='activity_submissions')
+    content = models.TextField(blank=True)
+    file = models.FileField(upload_to='specialization/activities/', blank=True, null=True)
+    submitted_at = models.DateTimeField(auto_now_add=True)
+    grade = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True)
+    feedback = models.TextField(blank=True)
+
+    class Meta:
+        unique_together = ['activity', 'user']
+
+    def __str__(self):
+        return f"{self.user} → {self.activity.title}"
+
+
+# ============================================================================
+# LABS / PRACTICE ENVIRONMENTS
+# ============================================================================
+
+class Lab(models.Model):
+    stack = models.ForeignKey(Stack, on_delete=models.CASCADE, related_name='labs')
+    title = models.CharField(max_length=255)
+    description = models.TextField(blank=True)
+    instructions = models.TextField(blank=True)
+    content_blocks = models.JSONField(default=list, blank=True, help_text="List of {type, content, url, caption, order} blocks")
+    setup_guide = models.TextField(blank=True)
+    expected_output = models.TextField(blank=True)
+    links = models.JSONField(default=list, blank=True, help_text="List of {label, url} objects")
+    order = models.PositiveIntegerField(default=0)
+    created_on = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['order']
+
+    def __str__(self):
+        return f"{self.stack.name} → Lab: {self.title}"
 
 
 # ============================================================================
