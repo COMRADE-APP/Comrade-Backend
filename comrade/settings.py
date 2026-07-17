@@ -56,7 +56,7 @@ INSTALLED_APPS = [
     'Messages',  # Direct messaging system
     'Verification',  # New verification system
     'Articles',  # Articles/Blog system
-    'QomAI',  # AI Assistant
+    'QNotes',  # Anonymous sticky notes
     'Funding',  # Business Funding Hub
     'Careers',  # Gigs & Career Opportunities
     'Trading',  # Crypto Trading Bot
@@ -303,7 +303,7 @@ SPECTACULAR_SETTINGS = {
         {'name': 'careers', 'description': 'Gigs & career opportunities'},
         {'name': 'entities', 'description': 'Institutions & organizations'},
         {'name': 'admin', 'description': 'Admin & moderation'},
-        {'name': 'ai', 'description': 'QomAI assistant'},
+        {'name': 'social', 'description': 'QNotes anonymous notes'},
         {'name': 'trading', 'description': 'Crypto trading bot'},
     ],
 }
