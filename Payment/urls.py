@@ -105,6 +105,9 @@ urlpatterns = [
     path('process/', ProcessPaymentView.as_view(), name='process-payment'),
     path('refund/', RefundPaymentView.as_view(), name='refund-payment'),
     path('detect-method/', DetectPaymentMethodView.as_view(), name='detect-payment-method'),
+
+    # Aggregate dashboard for the mobile app
+    path('dashboard/', views.DashboardView.as_view(), name='dashboard'),
     
     # Transaction Actions
     path('deposit/', DepositView.as_view(), name='deposit'),

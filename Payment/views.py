@@ -12111,3 +12111,43 @@ class AdminKittyViewSet(ModelViewSet):
         kitty.is_active = True
         kitty.save()
         return Response({'status': 'unfrozen', 'kitty_id': str(kitty.id), 'message': 'Kitty has been unfrozen'})
+
+
+class DashboardView(APIView):
+    """Aggregate payload for the QomSu mobile dashboard.
+
+    Returns the user's wallet, payment groups, and savings targets in a
+    single request so the app avoids three sequential round trips.
+    """
+
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        user = request.user
+        payment_profile = get_or_create_payment_profile(user)
+
+        wallet = None
+        if payment_profile:
+            wallet = PaymentProfileSerializer(payment_profile).data
+
+        groups = PaymentGroups.objects.filter(
+            members__payment_profile=payment_profile
+        ).distinct() if payment_profile else PaymentGroups.objects.none()
+
+        targets = GroupTarget.objects.none()
+        if payment_profile:
+            targets = GroupTarget.objects.filter(
+                Q(owner=payment_profile) |
+                Q(payment_group__members__payment_profile=payment_profile) |
+                Q(visibility='public', status='active')
+            ).distinct()
+
+        return Response({
+            'wallet': wallet,
+            'groups': PaymentGroupsSerializer(
+                groups, many=True, context={'request': request}
+            ).data,
+            'targets': GroupTargetSerializer(
+                targets, many=True, context={'request': request}
+            ).data,
+        })
