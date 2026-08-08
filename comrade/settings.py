@@ -60,6 +60,7 @@ INSTALLED_APPS = [
     'Funding',  # Business Funding Hub
     'Careers',  # Gigs & Career Opportunities
     'Trading',  # Crypto Trading Bot
+    'Compliance',  # CDD/EDD, safeguarding, AML/STR
     'django_celery_beat',  # Periodic task scheduler
     
     # Authentication Support Apps

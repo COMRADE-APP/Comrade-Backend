@@ -6,6 +6,72 @@ import uuid
 from django.db import migrations, models
 
 
+_SQLITE_CERTIFICATE_CREATE = """
+CREATE TABLE "Payment_groupcertificate" (
+    "id" char(32) NOT NULL PRIMARY KEY,
+    "status" varchar(20) NOT NULL,
+    "issued_at" datetime NULL,
+    "expires_at" datetime NULL,
+    "registration_number" varchar(100) NULL UNIQUE,
+    "verification_notes" text NOT NULL,
+    "created_at" datetime NOT NULL,
+    "updated_at" datetime NOT NULL,
+    "payment_group_id" char(32) NOT NULL UNIQUE REFERENCES "Payment_paymentgroups" ("id") DEFERRABLE INITIALLY DEFERRED
+)
+"""
+
+
+def convert_groupcertificate_id(apps, schema_editor):
+    """Convert GroupCertificate.id to UUID across backends.
+
+    The original migration used PostgreSQL-specific DDL. On SQLite the table
+    is rebuilt instead (data is preserved if present).
+    """
+    vendor = schema_editor.connection.vendor
+    if vendor == "postgresql":
+        schema_editor.execute(
+            """
+            ALTER TABLE "Payment_groupcertificate" ALTER COLUMN "id" DROP IDENTITY IF EXISTS;
+            ALTER TABLE "Payment_groupcertificate" ADD COLUMN "new_id" uuid DEFAULT gen_random_uuid();
+            UPDATE "Payment_groupcertificate" SET "new_id" = gen_random_uuid();
+            ALTER TABLE "Payment_groupcertificate" ALTER COLUMN "new_id" SET NOT NULL;
+            ALTER TABLE "Payment_groupcertificate" DROP CONSTRAINT "Payment_groupcertificate_pkey";
+            ALTER TABLE "Payment_groupcertificate" DROP COLUMN "id" CASCADE;
+            ALTER TABLE "Payment_groupcertificate" RENAME COLUMN "new_id" TO "id";
+            ALTER TABLE "Payment_groupcertificate" ADD PRIMARY KEY ("id");
+            """
+        )
+        return
+    if vendor == "sqlite":
+        with schema_editor.connection.cursor() as cursor:
+            cursor.execute('SELECT COUNT(*) FROM "Payment_groupcertificate"')
+            has_rows = cursor.fetchone()[0] > 0
+        if not has_rows:
+            schema_editor.execute('DROP TABLE "Payment_groupcertificate"')
+            schema_editor.execute(_SQLITE_CERTIFICATE_CREATE)
+            return
+        schema_editor.execute(
+            'ALTER TABLE "Payment_groupcertificate" RENAME TO "Payment_groupcertificate_old"'
+        )
+        schema_editor.execute(_SQLITE_CERTIFICATE_CREATE)
+        with schema_editor.connection.cursor() as cursor:
+            rows = cursor.execute(
+                'SELECT "status", "issued_at", "expires_at", "registration_number",'
+                ' "verification_notes", "created_at", "updated_at", "payment_group_id"'
+                ' FROM "Payment_groupcertificate_old"'
+            ).fetchall()
+            placeholders = ",".join(["?"] * 9)
+            for r in rows:
+                cursor.execute(
+                    f'INSERT INTO "Payment_groupcertificate"'
+                    f' ("id", "status", "issued_at", "expires_at", "registration_number",'
+                    f' "verification_notes", "created_at", "updated_at", "payment_group_id")'
+                    f' VALUES ({placeholders})',
+                    (uuid.uuid4().hex, *r),
+                )
+        schema_editor.execute('DROP TABLE "Payment_groupcertificate_old"')
+
+
 class Migration(migrations.Migration):
 
     dependencies = [
@@ -335,18 +401,9 @@ class Migration(migrations.Migration):
                 ),
             ],
             database_operations=[
-                migrations.RunSQL(
-                    sql='''
-                        ALTER TABLE "Payment_groupcertificate" ALTER COLUMN "id" DROP IDENTITY IF EXISTS;
-                        ALTER TABLE "Payment_groupcertificate" ADD COLUMN "new_id" uuid DEFAULT gen_random_uuid();
-                        UPDATE "Payment_groupcertificate" SET "new_id" = gen_random_uuid();
-                        ALTER TABLE "Payment_groupcertificate" ALTER COLUMN "new_id" SET NOT NULL;
-                        ALTER TABLE "Payment_groupcertificate" DROP CONSTRAINT "Payment_groupcertificate_pkey";
-                        ALTER TABLE "Payment_groupcertificate" DROP COLUMN "id" CASCADE;
-                        ALTER TABLE "Payment_groupcertificate" RENAME COLUMN "new_id" TO "id";
-                        ALTER TABLE "Payment_groupcertificate" ADD PRIMARY KEY ("id");
-                    ''',
-                    reverse_sql=None,
+                migrations.RunPython(
+                    code=convert_groupcertificate_id,
+                    reverse_code=migrations.RunPython.noop,
                 ),
             ],
         ),
