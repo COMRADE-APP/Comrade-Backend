@@ -3,8 +3,9 @@
 Exposes:
   GET  /api/v1/compliance/status/   -> aggregated compliance posture
   GET/POST /api/v1/compliance/cdd/  -> self-service KYC (CDD) submission
+  GET/PATCH /api/v1/compliance/cdd/<id>/ -> view or resubmit a record
 """
-from rest_framework import status, viewsets
+from rest_framework import serializers, status, viewsets
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -16,6 +17,12 @@ from Compliance.serializers import (
     CustomerRiskProfileSerializer,
     SafeguardingAccountSerializer,
 )
+
+#: Statuses that mean a submission is still "live" (no new submission allowed).
+_ACTIVE_SUBMISSION_STATUSES = ('pending', 'in_progress', 'cleared')
+
+#: Statuses a user may resubmit (a new/reviewed attempt is triggered).
+_RESUBMITTABLE_STATUSES = ('flagged', 'rejected')
 
 
 class ComplianceStatusView(APIView):
@@ -64,13 +71,53 @@ class ComplianceStatusView(APIView):
 
 
 class CDDRecordViewSet(viewsets.ModelViewSet):
-    """Self-service KYC submission. Users may only see/own their own records."""
+    """Self-service KYC submission.
+
+    Users only ever see/own their own records. A new submission is only
+    allowed when there is no live (pending/in_progress/cleared) record;
+    resubmission happens by updating a flagged/rejected record, which
+    moves it back to `pending` for review.
+    """
 
     permission_classes = [IsAuthenticated]
     serializer_class = CDDRecordSerializer
+    http_method_names = ['get', 'post', 'patch', 'head', 'options']
 
     def get_queryset(self):
-        return CDDRecord.objects.filter(customer=self.request.user)
+        qs = CDDRecord.objects.filter(customer=self.request.user)
+        requested_status = self.request.query_params.get('status')
+        if requested_status:
+            qs = qs.filter(status=requested_status)
+        return qs
+
+    def validate_documents(self, data):
+        """Require at least one government ID document."""
+        national_id = data.get('national_id')
+        passport = data.get('passport_number')
+        if not national_id and not passport:
+            raise serializers.ValidationError(
+                {'national_id': 'Provide a national ID or passport number.'}
+            )
+        return data
 
     def perform_create(self, serializer):
-        serializer.save(customer=self.request.user)
+        user = self.request.user
+        has_live = CDDRecord.objects.filter(
+            customer=user,
+            status__in=_ACTIVE_SUBMISSION_STATUSES,
+        ).exists()
+        if has_live:
+            raise serializers.ValidationError(
+                {'detail': 'You already have a verification in progress or completed.'}
+            )
+        self.validate_documents(serializer.validated_data)
+        serializer.save(customer=user)
+
+    def perform_update(self, serializer):
+        instance = self.get_object()
+        if instance.status not in _RESUBMITTABLE_STATUSES:
+            raise serializers.ValidationError(
+                {'detail': 'This submission is not open for re-submission.'}
+            )
+        self.validate_documents(serializer.validated_data)
+        serializer.save(status='pending')
