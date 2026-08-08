@@ -38,6 +38,7 @@ urlpatterns = [
     path(f'{API_V1}research/', include('Research.urls')),
     path(f'{API_V1}verification/', include('Verification.urls')),
     path(f'{API_V1}trading/', include('Trading.urls')),
+    path(f'{API_V1}compliance/', include('Compliance.urls')),
     path(f'{API_V1}auth/', include(rest_framework.urls)),
 
     # API documentation (Swagger / ReDoc)
