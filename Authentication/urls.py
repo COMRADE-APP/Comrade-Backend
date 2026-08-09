@@ -3,7 +3,6 @@ Authentication URL Configuration - Fixed and Complete
 """
 from django.urls import path, include
 from rest_framework.routers import DefaultRouter
-from rest_framework_simplejwt.views import TokenRefreshView, TokenVerifyView
 
 from Authentication.views_totp import (
     TOTPSetupView, TOTPVerifySetupView,
@@ -18,7 +17,8 @@ from Authentication.views import (
     ResendOTPView, VerifySMSOTPView, Verify2FAView,
     CustomUserViewSet, LecturerViewSet, OrgStaffViewSet,
     StudentAdminViewSet, OrgAdminViewSet, InstAdminViewSet,
-    InstStaffViewSet, ProfileViewSet, MeView
+    InstStaffViewSet, ProfileViewSet, MeView,
+    TokenRefreshView, TokenVerifyView
 )
 from Authentication.views_extra import (
     ChangePasswordView, UpdateProfileView,

@@ -12,6 +12,12 @@ import io
 import base64
 from django.core.cache import cache
 from Authentication.models import CustomUser
+from Authentication.otp_utils import (
+    record_otp_failure,
+    clear_otp_failures,
+    otp_attempts_exhausted,
+)
+from comrade.throttles import OTPThrottle
 
 
 class TOTPSetupView(APIView):
@@ -54,6 +60,7 @@ class TOTPSetupView(APIView):
 class TOTPVerifySetupView(APIView):
     """Verify TOTP code  during setup and save to user profile"""
     permission_classes = [IsAuthenticated]
+    throttle_classes = [OTPThrottle]
     
     def post(self, request):
         user = request.user
@@ -63,6 +70,12 @@ class TOTPVerifySetupView(APIView):
             return Response(
                 {'error': 'TOTP code is required'},
                 status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        if otp_attempts_exhausted(user.id, 'totp_setup'):
+            return Response(
+                {'error': 'Too many invalid attempts. Try again later.'},
+                status=status.HTTP_429_TOO_MANY_REQUESTS
             )
         
         # Get temporary secret from cache
@@ -76,10 +89,13 @@ class TOTPVerifySetupView(APIView):
         # Verify code
         totp = pyotp.TOTP(secret)
         if not totp.verify(code, valid_window=1):
+            record_otp_failure(user.id, 'totp_setup')
             return Response(
                 {'error': 'Invalid TOTP code'},
                 status=status.HTTP_400_BAD_REQUEST
             )
+        
+        clear_otp_failures(user.id, 'totp_setup')
         
         # Save to user profile (assuming CustomUser has totp_secret field)
         # TODO: Add totp_secret and totp_enabled fields to CustomUser model
@@ -103,6 +119,7 @@ class TOTPVerifySetupView(APIView):
 class TOTPVerifyLoginView(APIView):
     """Verify TOTP code during login"""
     permission_classes = [IsAuthenticated]
+    throttle_classes = [OTPThrottle]
     
     def post(self, request):
         user = request.user
@@ -112,6 +129,12 @@ class TOTPVerifyLoginView(APIView):
             return Response(
                 {'error': 'TOTP code is required'},
                 status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        if otp_attempts_exhausted(user.id, 'totp_login'):
+            return Response(
+                {'error': 'Too many invalid attempts. Try again later.'},
+                status=status.HTTP_429_TOO_MANY_REQUESTS
             )
         
         # TODO: Get secret from user profile
@@ -137,10 +160,13 @@ class TOTPVerifyLoginView(APIView):
         # TODO: Also check backup codes
         
         if not is_valid:
+            record_otp_failure(user.id, 'totp_login')
             return Response(
                 {'error': 'Invalid TOTP code'},
                 status=status.HTTP_401_UNAUTHORIZED
             )
+        
+        clear_otp_failures(user.id, 'totp_login')
         
         return Response({
             'message': 'TOTP verified successfully',

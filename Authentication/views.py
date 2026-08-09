@@ -50,8 +50,22 @@ from Authentication.activity_logger import (
     log_2fa_activity, log_device_activity
 )
 from rest_framework_simplejwt.authentication import JWTAuthentication
+from rest_framework_simplejwt.views import (
+    TokenRefreshView as BaseTokenRefreshView,
+    TokenVerifyView as BaseTokenVerifyView,
+)
 
 logger = logging.getLogger(__name__)
+
+
+class TokenRefreshView(BaseTokenRefreshView):
+    """JWT refresh, throttled to deter token-stuffing attacks."""
+    throttle_classes = [OTPThrottle, AuthSustainedThrottle]
+
+
+class TokenVerifyView(BaseTokenVerifyView):
+    """JWT verify, throttled like refresh."""
+    throttle_classes = [OTPThrottle, AuthSustainedThrottle]
 
 
 def _set_token_cookies(response, access_token, refresh_token, remember_me=False):
