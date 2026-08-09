@@ -239,3 +239,37 @@ def verify_otp(value, stored):
         return hashlib.sha256((salt + str(value)).encode()).hexdigest() == hashed
     except (ValueError, AttributeError):
         return False
+
+
+# ============================================================================
+# OTP BRUTE-FORCE / ATTEMPT LOCKOUT
+# ============================================================================
+
+#: Maximum failed verification attempts before the OTP is invalidated.
+MAX_OTP_ATTEMPTS = 5
+
+#: Window (in seconds) during which failed attempts are counted.
+OTP_ATTEMPT_WINDOW = 60 * 15  # 15 minutes
+
+
+def get_otp_attempts(user_id, action):
+    """Number of recent failed OTP verification attempts."""
+    return cache.get(f"otp_failures_{user_id}_{action}", 0)
+
+
+def record_otp_failure(user_id, action):
+    """Increment the failed-attempt counter for an OTP action."""
+    key = f"otp_failures_{user_id}_{action}"
+    count = cache.get(key, 0) + 1
+    cache.set(key, count, OTP_ATTEMPT_WINDOW)
+    return count
+
+
+def clear_otp_failures(user_id, action):
+    """Reset the failed-attempt counter after a successful verification."""
+    cache.delete(f"otp_failures_{user_id}_{action}")
+
+
+def otp_attempts_exhausted(user_id, action):
+    """True once MAX_OTP_ATTEMPTS failed attempts have been recorded."""
+    return get_otp_attempts(user_id, action) >= MAX_OTP_ATTEMPTS

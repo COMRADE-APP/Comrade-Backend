@@ -5,7 +5,6 @@ from django.contrib import admin
 from django.urls import path, include
 from django.conf import settings
 from django.conf.urls.static import static
-import rest_framework
 from drf_spectacular.views import SpectacularAPIView, SpectacularSwaggerView, SpectacularRedocView
 
 API_V1 = 'api/v1/'
@@ -39,7 +38,7 @@ urlpatterns = [
     path(f'{API_V1}verification/', include('Verification.urls')),
     path(f'{API_V1}trading/', include('Trading.urls')),
     path(f'{API_V1}compliance/', include('Compliance.urls')),
-    path(f'{API_V1}auth/', include(rest_framework.urls)),
+    path(f'{API_V1}auth/', include('Authentication.urls')),
 
     # API documentation (Swagger / ReDoc)
     path('api/schema/', SpectacularAPIView.as_view(), name='schema'),

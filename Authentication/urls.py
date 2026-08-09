@@ -3,6 +3,7 @@ Authentication URL Configuration - Fixed and Complete
 """
 from django.urls import path, include
 from rest_framework.routers import DefaultRouter
+from rest_framework_simplejwt.views import TokenRefreshView, TokenVerifyView
 
 from Authentication.views_totp import (
     TOTPSetupView, TOTPVerifySetupView,
@@ -84,6 +85,10 @@ urlpatterns = [
     path('check-email/', CheckEmailView.as_view(), name='check-email'),
     path('me/', MeView.as_view(), name='me'),
     path('heartbeat/', HeartbeatView.as_view(), name='heartbeat'),
+
+    # JWT token lifecycle (SimpleJWT)
+    path('token/refresh/', TokenRefreshView.as_view(), name='token-refresh'),
+    path('token/verify/', TokenVerifyView.as_view(), name='token-verify'),
     
     # User Search (must be before router URLs to not be intercepted by users/<pk>/)
     path('users/search/', UserSearchView.as_view(), name='user-search'),

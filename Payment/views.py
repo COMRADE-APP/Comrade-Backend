@@ -3875,17 +3875,13 @@ class GroupTargetViewSet(ModelViewSet):
     logger = logging.getLogger(__name__)
 
     def create(self, request, *args, **kwargs):
-        self.logger.debug(f"CREATE PIGGY BANK - Request data: {request.data}")
         self.logger.debug(f"CREATE PIGGY BANK - User: {request.user}")
-        self.logger.debug(f"CREATE PIGGY BANK - Auth: {request.auth}")
         try:
             response = super().create(request, *args, **kwargs)
             self.logger.debug(f"CREATE PIGGY BANK - Response status: {response.status_code}")
-            self.logger.debug(f"CREATE PIGGY BANK - Response data: {response.data}")
             return response
         except Exception as e:
             self.logger.error(f"CREATE PIGGY BANK - Exception: {str(e)}")
-            self.logger.error(f"CREATE PIGGY BANK - Exception type: {type(e)}")
             raise
 
     def get_queryset(self):
@@ -8741,8 +8737,6 @@ class DonationViewSet(ModelViewSet):
     logger = logging.getLogger(__name__)
 
     def create(self, request, *args, **kwargs):
-        self.logger.debug(f"CREATE DONATION - Request data: {request.data}")
-        self.logger.debug(f"CREATE DONATION - Files: {request.FILES}")
         self.logger.debug(f"CREATE DONATION - User: {request.user}")
         return super().create(request, *args, **kwargs)
 
@@ -9392,24 +9386,18 @@ class RoundContributionViewSet(ModelViewSet):
     logger = logging.getLogger(__name__)
 
     def create(self, request, *args, **kwargs):
-        self.logger.debug(f"CREATE ROUND - Request data: {request.data}")
         self.logger.debug(f"CREATE ROUND - User: {request.user}")
-        self.logger.debug(f"CREATE ROUND - Auth: {request.auth}")
         try:
             response = super().create(request, *args, **kwargs)
             self.logger.debug(f"CREATE ROUND - Response status: {response.status_code}")
-            self.logger.debug(f"CREATE ROUND - Response data: {response.data}")
             return response
         except Exception as e:
             self.logger.error(f"CREATE ROUND - Exception: {str(e)}")
-            self.logger.error(f"CREATE ROUND - Exception type: {type(e)}")
             raise
 
     def perform_create(self, serializer):
-        self.logger.debug(f"Creating round with data: {serializer.validated_data}")
         user = self.request.user
         payment_profile = get_or_create_payment_profile(user)
-        self.logger.debug(f"User: {user}, Payment Profile: {payment_profile}")
         
         if not payment_profile:
             self.logger.error("Failed to get or create payment profile")

@@ -8,6 +8,12 @@ from rest_framework import status
 from rest_framework.permissions import AllowAny, IsAuthenticated, IsAdminUser
 from rest_framework.viewsets import ModelViewSet
 from rest_framework.decorators import action
+from comrade.throttles import (
+    AuthBurstThrottle,
+    AuthSustainedThrottle,
+    OTPThrottle,
+    PasswordResetThrottle,
+)
 from rest_framework_simplejwt.tokens import RefreshToken
 from django.contrib.auth import authenticate
 from django.contrib.auth.tokens import default_token_generator
@@ -35,7 +41,8 @@ from Authentication.serializers import (
 from Authentication.otp_utils import (
     generate_totp_secret, generate_totp_otp, verify_totp_otp, 
     generate_qr_code, send_email_otp, send_sms_otp, send_2fa_qr_code,
-    check_otp_rate_limit, increment_otp_count, OTP_EXPIRY_MINUTES
+    check_otp_rate_limit, increment_otp_count, OTP_EXPIRY_MINUTES,
+    otp_attempts_exhausted, record_otp_failure, clear_otp_failures,
 )
 from Authentication.device_utils import register_device, revoke_device, is_trusted_device
 from Authentication.activity_logger import (
@@ -78,9 +85,9 @@ def _set_token_cookies(response, access_token, refresh_token, remember_me=False)
 class RegisterView(APIView):
     permission_classes = [AllowAny]
     authentication_classes = []  # Disable authentication (prevents SessionAuth CSRF check)
+    throttle_classes = [AuthBurstThrottle, AuthSustainedThrottle]
     
     def post(self, request):
-        print('-------------------', request.data, '-------------------')
         serializer = BaseUserSerializer(data=request.data)
         
         if serializer.is_valid():
@@ -98,9 +105,7 @@ class RegisterView(APIView):
             user.set_registration_otp(otp_code)
             user.registration_otp_expires = timezone.now() + timezone.timedelta(minutes=OTP_EXPIRY_MINUTES)
             user.save()
-            
-            print(f'Registration OTP: {otp_code}')
-            
+
             # Send OTP via email
             try:
                 email_sent = send_email_otp(user.email, otp_code, action='registration')
@@ -115,8 +120,6 @@ class RegisterView(APIView):
                 "next_step": "verify_registration_otp"
             }, status=status.HTTP_201_CREATED)
 
-        print('-------------------', serializer.errors, '-------------------')
-        
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
     
     def _infer_preferences(self, user, browser_locale):
@@ -343,6 +346,7 @@ class RegisterVerifyView(APIView):
     """Verify registration OTP and activate user account"""
     permission_classes = [AllowAny]
     authentication_classes = []  # Disable authentication (prevents SessionAuth CSRF check)
+    throttle_classes = [OTPThrottle]
     
     def post(self, request):
         email = request.data.get('email')
@@ -367,10 +371,21 @@ class RegisterVerifyView(APIView):
         if timezone.now() > user.registration_otp_expires:
             return Response({"detail": "Verification code expired."}, status=status.HTTP_400_BAD_REQUEST)
         
+        if otp_attempts_exhausted(user.id, 'registration'):
+            user.clear_registration_otp()
+            user.registration_otp_expires = None
+            user.save()
+            return Response(
+                {"detail": "Too many invalid attempts. Please request a new code."},
+                status=status.HTTP_429_TOO_MANY_REQUESTS,
+            )
+        
         if not user.verify_registration_otp(otp):
+            record_otp_failure(user.id, 'registration')
             return Response({"detail": "Invalid verification code."}, status=status.HTTP_400_BAD_REQUEST)
         
         # Activate user and clear OTP
+        clear_otp_failures(user.id, 'registration')
         user.is_active = True
         user.clear_registration_otp()
         user.registration_otp_expires = None
@@ -476,6 +491,7 @@ class HeartbeatView(APIView):
 class LoginView(APIView):
     permission_classes = [AllowAny]
     authentication_classes = []  # Disable authentication (prevents SessionAuth CSRF check)
+    throttle_classes = [AuthBurstThrottle, AuthSustainedThrottle]
     
     def post(self, request):
         email = request.data.get('email')
@@ -483,8 +499,7 @@ class LoginView(APIView):
         otp_method = request.data.get('otp_method', 'email')  # 'email' or 'sms'
         
         user = authenticate(email=email, password=password)
-        print('------------------------', request.data, '---------------------------')
-        
+
         if user is None:
             log_login_attempt(None, request, False, "Invalid credentials")
             return Response({"detail": "Invalid credentials."}, status=status.HTTP_401_UNAUTHORIZED)
@@ -573,9 +588,9 @@ class LoginView(APIView):
 class LoginVerifyView(APIView):
     permission_classes = [AllowAny]
     authentication_classes = []  # Disable authentication (prevents SessionAuth CSRF check)
+    throttle_classes = [OTPThrottle]
     
     def post(self, request):
-        print(request.data, '--------------------------')
         email = request.data.get('email')
         otp = request.data.get('otp')
         
@@ -591,10 +606,22 @@ class LoginVerifyView(APIView):
         if timezone.now() > user.login_otp_expires:
             return Response({"detail": "Verification code expired."}, status=status.HTTP_400_BAD_REQUEST)
         
+        if otp_attempts_exhausted(user.id, 'login'):
+            # Too many failures — invalidate the OTP to stop brute force.
+            user.clear_login_otp()
+            user.login_otp_expires = None
+            user.save()
+            return Response(
+                {"detail": "Too many invalid attempts. Please request a new code."},
+                status=status.HTTP_429_TOO_MANY_REQUESTS,
+            )
+        
         if not user.verify_login_otp(otp):
+            record_otp_failure(user.id, 'login')
             return Response({"detail": "Invalid verification code."}, status=status.HTTP_400_BAD_REQUEST)
         
         # Clear OTP after successful verification
+        clear_otp_failures(user.id, 'login')
         user.clear_login_otp()
         user.login_otp_expires = None
         user.save()
@@ -652,6 +679,7 @@ class LoginVerifyView(APIView):
 class ResendOTPView(APIView):
     permission_classes = [AllowAny]
     authentication_classes = []  # Disable authentication (prevents SessionAuth CSRF check)
+    throttle_classes = [OTPThrottle]
     
     def post(self, request):
         email = request.data.get('email')
@@ -706,6 +734,7 @@ class ResendOTPView(APIView):
 
 class Verify2FAView(APIView):
     permission_classes = [AllowAny]
+    throttle_classes = [OTPThrottle]
     
     def post(self, request):
         email = request.data.get('email')
@@ -719,7 +748,14 @@ class Verify2FAView(APIView):
         if not user.totp_enabled:
             return Response({"detail": "2FA not enabled for this user."}, status=status.HTTP_400_BAD_REQUEST)
         
+        if otp_attempts_exhausted(user.id, '2fa'):
+            return Response(
+                {"detail": "Too many invalid attempts. Try again later."},
+                status=status.HTTP_429_TOO_MANY_REQUESTS,
+            )
+        
         if verify_totp_otp(user.totp_secret, otp):
+            clear_otp_failures(user.id, '2fa')
             log_2fa_activity(user, request, 'verify')
             
             # Mark device as verified and trusted
@@ -749,11 +785,13 @@ class Verify2FAView(APIView):
             })
             return _set_token_cookies(resp, str(refresh.access_token), str(refresh), remember_me=remember_me)
         
+        record_otp_failure(user.id, '2fa')
         return Response({"detail": "Invalid 2FA code."}, status=status.HTTP_400_BAD_REQUEST)
 
 
 class VerifySMSOTPView(APIView):
     permission_classes = [AllowAny]
+    throttle_classes = [OTPThrottle]
     
     def post(self, request):
         email = request.data.get('email')
@@ -770,10 +808,21 @@ class VerifySMSOTPView(APIView):
         if timezone.now() > user.sms_otp_expires:
             return Response({"detail": "SMS code expired."}, status=status.HTTP_400_BAD_REQUEST)
         
+        if otp_attempts_exhausted(user.id, 'sms_login'):
+            user.clear_sms_otp()
+            user.sms_otp_expires = None
+            user.save()
+            return Response(
+                {"detail": "Too many invalid attempts. Please request a new code."},
+                status=status.HTTP_429_TOO_MANY_REQUESTS,
+            )
+        
         if not user.verify_sms_otp(otp):
+            record_otp_failure(user.id, 'sms_login')
             return Response({"detail": "Invalid SMS code."}, status=status.HTTP_400_BAD_REQUEST)
         
         # Clear OTP
+        clear_otp_failures(user.id, 'sms_login')
         user.clear_sms_otp()
         user.sms_otp_expires = None
         user.save()
@@ -803,6 +852,7 @@ class VerifySMSOTPView(APIView):
 
 class PasswordResetRequestView(APIView):
     permission_classes = [AllowAny]
+    throttle_classes = [PasswordResetThrottle]
     
     def post(self, request):
         email = request.data.get('email')
@@ -840,6 +890,7 @@ class PasswordResetRequestView(APIView):
 
 class PasswordResetConfirmView(APIView):
     permission_classes = [AllowAny]
+    throttle_classes = [OTPThrottle]
     
     def post(self, request):
         email = request.data.get('email')
@@ -857,10 +908,21 @@ class PasswordResetConfirmView(APIView):
         if timezone.now() > user.password_reset_otp_expires:
             return Response({"detail": "Code expired."}, status=status.HTTP_400_BAD_REQUEST)
         
+        if otp_attempts_exhausted(user.id, 'password_reset'):
+            user.clear_password_reset_otp_secret()
+            user.password_reset_otp_expires = None
+            user.save()
+            return Response(
+                {"detail": "Too many invalid attempts. Please request a new code."},
+                status=status.HTTP_429_TOO_MANY_REQUESTS,
+            )
+        
         if not user.verify_password_reset_otp(otp):
+            record_otp_failure(user.id, 'password_reset')
             return Response({"detail": "Invalid code."}, status=status.HTTP_400_BAD_REQUEST)
         
         # Reset password
+        clear_otp_failures(user.id, 'password_reset')
         user.set_password(new_password)
         user.clear_password_reset_otp_secret()
         user.password_reset_otp_expires = None

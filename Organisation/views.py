@@ -22,7 +22,6 @@ class OrganisationViewSet(ModelViewSet):
         return queryset
     
     def perform_create(self, serializer):
-        print(self.request.data)
         """Set created_by to the authenticated user"""
         serializer.save(created_by=self.request.user)
 
