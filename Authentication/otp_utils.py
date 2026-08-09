@@ -33,8 +33,12 @@ def generate_totp_otp(secret):
 
 
 def verify_totp_otp(secret, otp):
-    """Verify an OTP code against the secret"""
-    totp = pyotp.TOTP(secret, interval=60 * OTP_EXPIRY_MINUTES)
+    """
+    Verify a TOTP code against the secret.
+    Uses the standard 30-second interval so codes from authenticator apps
+    (Google Authenticator, Authy, etc.) verify correctly.
+    """
+    totp = pyotp.TOTP(secret)
     return totp.verify(otp, valid_window=1)
 
 
@@ -273,3 +277,58 @@ def clear_otp_failures(user_id, action):
 def otp_attempts_exhausted(user_id, action):
     """True once MAX_OTP_ATTEMPTS failed attempts have been recorded."""
     return get_otp_attempts(user_id, action) >= MAX_OTP_ATTEMPTS
+
+
+# ============================================================================
+# TOTP BACKUP CODES
+# ============================================================================
+
+#: Number of backup codes generated on TOTP setup / regeneration.
+BACKUP_CODE_COUNT = 10
+
+#: Length of each generated backup code (e.g. "ABCD-EFGH").
+BACKUP_CODE_LENGTH = 8
+
+
+def generate_backup_codes(count=BACKUP_CODE_COUNT, length=BACKUP_CODE_LENGTH):
+    """Generate a list of human-readable backup codes (returned as plaintext)."""
+    codes = []
+    while len(codes) < count:
+        raw = secrets.token_urlsafe(9).replace('-', '').replace('_', '')[:length]
+        code = f"{raw[:4]}-{raw[4:]}".upper()
+        if code not in codes:
+            codes.append(code)
+    return codes
+
+
+def hash_backup_codes(codes):
+    """Hash backup codes for storage (comma-separated 'salt$hash' strings)."""
+    return ','.join(hash_otp(c) for c in codes)
+
+
+def verify_backup_code(stored, code):
+    """
+    Check a submitted code against the stored hashed backup codes.
+    Returns True on match; the caller must persist the rotated list.
+    """
+    if not stored:
+        return False
+    hashes = [h for h in stored.split(',') if h]
+    for h in hashes:
+        if verify_otp(code, h):
+            return True
+    return False
+
+
+def remove_backup_code(stored, code):
+    """
+    Return the stored list with the matched backup code removed.
+    Returns None if the code did not match any stored hash.
+    """
+    if not stored:
+        return None
+    hashes = [h for h in stored.split(',') if h]
+    remaining = [h for h in hashes if not verify_otp(code, h)]
+    if len(remaining) == len(hashes):
+        return None
+    return ','.join(remaining)

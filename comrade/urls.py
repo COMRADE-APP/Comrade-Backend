@@ -6,6 +6,7 @@ from django.urls import path, include
 from django.conf import settings
 from django.conf.urls.static import static
 from drf_spectacular.views import SpectacularAPIView, SpectacularSwaggerView, SpectacularRedocView
+from Authentication.views import HealthView
 
 API_V1 = 'api/v1/'
 
@@ -14,6 +15,7 @@ urlpatterns = [
     path('auth/', include('Authentication.urls')),
     path('accounts/', include('allauth.urls')),
     path('users/', include('UserManagement.urls')),
+    path('health/', HealthView.as_view(), name='health'),
 
     # API v1 endpoints
     path(f'{API_V1}articles/', include('Articles.urls')),

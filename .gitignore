@@ -7,9 +7,10 @@ env_rec/
 *.env
 .env
 .env.exit
-.env.example
 .env.local
 /.env
+# Allow the template file to be committed
+!.env.example
 
 # ignore .md files
 *.md

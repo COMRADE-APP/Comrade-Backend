@@ -502,6 +502,21 @@ class HeartbeatView(APIView):
         return Response({"status": "alive"}, status=status.HTTP_200_OK)
 
 
+class HealthView(APIView):
+    """
+    Public health check used by load balancers and Docker healthchecks.
+    Never requires authentication and performs no side effects.
+    """
+    permission_classes = [AllowAny]
+    authentication_classes = []
+
+    def get(self, request):
+        return Response({
+            "status": "ok",
+            "service": "comrade-api",
+        }, status=status.HTTP_200_OK)
+
+
 class LoginView(APIView):
     permission_classes = [AllowAny]
     authentication_classes = []  # Disable authentication (prevents SessionAuth CSRF check)

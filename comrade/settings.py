@@ -26,6 +26,9 @@ SECRET_KEY = _secret
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = os.getenv('DEBUG', 'False') == 'True'
 
+# Runtime environment label ('development', 'staging', 'production').
+ENVIRONMENT = os.getenv('ENVIRONMENT', 'development' if DEBUG else 'production')
+
 # Application definition
 INSTALLED_APPS = [
     'django.contrib.admin',
@@ -167,15 +170,21 @@ CORS_ALLOWED_ORIGIN_REGEXES = [
 
 # ── Security settings ───────────────────────────────────────────────────────
 # SSL / HTTPS
+# Each flag is env-overridable so production can force HTTPS even when DEBUG is
+# accidentally enabled, and local dev can disable it when running behind HTTP.
+def _env_bool(name, default):
+    return os.getenv(name, str(default)).strip().lower() in ('1', 'true', 'yes', 'on')
+
 SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
-SECURE_SSL_REDIRECT = not DEBUG
-SESSION_COOKIE_SECURE = not DEBUG
-CSRF_COOKIE_SECURE = not DEBUG
+SECURE_SSL_REDIRECT = _env_bool('SECURE_SSL_REDIRECT', not DEBUG)
+SESSION_COOKIE_SECURE = _env_bool('SESSION_COOKIE_SECURE', not DEBUG)
+CSRF_COOKIE_SECURE = _env_bool('CSRF_COOKIE_SECURE', not DEBUG)
 
 # HSTS — instruct browsers to only connect via HTTPS
-SECURE_HSTS_SECONDS = 0 if DEBUG else 31536000  # 1 year in production
-SECURE_HSTS_INCLUDE_SUBDOMAINS = not DEBUG
-SECURE_HSTS_PRELOAD = not DEBUG
+SECURE_HSTS_SECONDS = int(os.getenv('SECURE_HSTS_SECONDS', '31536000' if not DEBUG else '0'))
+SECURE_HSTS_INCLUDE_SUBDOMAINS = _env_bool('SECURE_HSTS_INCLUDE_SUBDOMAINS', not DEBUG)
+SECURE_HSTS_PRELOAD = _env_bool('SECURE_HSTS_PRELOAD', not DEBUG)
+SECURE_REFERRER_POLICY = os.getenv('SECURE_REFERRER_POLICY', 'same-origin')
 
 # Prevent MIME-type sniffing
 SECURE_CONTENT_TYPE_NOSNIFF = True
