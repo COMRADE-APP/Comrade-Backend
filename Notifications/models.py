@@ -243,7 +243,7 @@ def create_notification(
             else:
                 # Fallback: send the raw notification message as email
                 EmailService.send_raw(
-                    subject=title or f'Qomrade Alert: {notification_type}',
+                    subject=title or f'QomSu Alert: {notification_type}',
                     body=message,
                     recipient_email=user_email
                 )
@@ -265,10 +265,10 @@ def create_notification(
             phone = getattr(user, 'phone_number', None)
             if phone:
                 sms_map = {
-                    'provider_application_approved': f"Qomrade: Your application to {extra_data.get('provider', 'provider') if extra_data else 'provider'} has been APPROVED!",
-                    'provider_application_rejected': f"Qomrade: Your application to {extra_data.get('provider', 'provider') if extra_data else 'provider'} was not approved. Log in for details.",
-                    'provider_transaction_complete': f"Qomrade: Transaction of {extra_data.get('amount', '') if extra_data else ''} completed with {extra_data.get('provider', 'provider') if extra_data else 'provider'}.",
-                    'provider_payout_received': f"Qomrade: Payout of {extra_data.get('amount', '') if extra_data else ''} received!",
+                    'provider_application_approved': f"QomSu: Your application to {extra_data.get('provider', 'provider') if extra_data else 'provider'} has been APPROVED!",
+                    'provider_application_rejected': f"QomSu: Your application to {extra_data.get('provider', 'provider') if extra_data else 'provider'} was not approved. Log in for details.",
+                    'provider_transaction_complete': f"QomSu: Transaction of {extra_data.get('amount', '') if extra_data else ''} completed with {extra_data.get('provider', 'provider') if extra_data else 'provider'}.",
+                    'provider_payout_received': f"QomSu: Payout of {extra_data.get('amount', '') if extra_data else ''} received!",
                 }
                 sms_message = sms_map.get(notification_type)
                 if sms_message:

@@ -4,7 +4,7 @@ Verification Views for all entity types including liveness detection
 from rest_framework import viewsets, status, generics
 from rest_framework.decorators import action
 from rest_framework.response import Response
-from rest_framework.permissions import IsAuthenticated, IsAdminUser, AllowAny
+from rest_framework.permissions import IsAuthenticated, IsAdminUser
 from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
@@ -33,9 +33,7 @@ class EntityVerificationViewSet(viewsets.ModelViewSet):
     parser_classes = (MultiPartParser, FormParser, JSONParser)
     
     def get_permissions(self):
-        if self.action in ['create', 'initiate_liveness', 'complete_liveness']:
-            return [AllowAny()]
-        elif self.action in ['staff_dashboard', 'bulk_action']:
+        if self.action in ['staff_dashboard', 'bulk_action']:
             return [IsAdminUser()]
         return [IsAuthenticated()]
     
@@ -266,8 +264,6 @@ class LivenessVerificationViewSet(viewsets.ModelViewSet):
     parser_classes = (MultiPartParser, FormParser, JSONParser)
     
     def get_permissions(self):
-        if self.action in ['initiate', 'get_session']:
-            return [AllowAny()]
         return [IsAuthenticated()]
     
     def get_serializer_class(self):

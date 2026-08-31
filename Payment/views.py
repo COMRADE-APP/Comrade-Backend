@@ -7,6 +7,7 @@ from rest_framework.viewsets import ModelViewSet
 from rest_framework.views import APIView
 from rest_framework.decorators import action
 from rest_framework import status, serializers, views, permissions
+from rest_framework.exceptions import ValidationError
 import os
 import csv
 import pandas as pd
@@ -88,6 +89,12 @@ class PaymentProfileViewSet(ModelViewSet):
     queryset = PaymentProfile.objects.all()
     serializer_class = PaymentProfileSerializer
     permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        """Users may only see their own wallet. Admin listing is served by
+        the IsAdminUser admin viewsets, never by this endpoint."""
+        user = self.request.user
+        return PaymentProfile.objects.filter(user__user=user).order_by('-id')
 
     @action(detail=False, methods=['get'])
     def my_profile(self, request):
@@ -808,7 +815,7 @@ class TransactionViewSet(ModelViewSet):
                     'payment_option': 'Wallet',
                     'direction': 'sent',
                     'recipient_email': None,
-                    'recipient_name': 'Qomrade Shop',
+                    'recipient_name': 'QomSu Shop',
                     'sender_email': user.email,
                     'sender_name': f"{user.first_name} {user.last_name}".strip() or user.username,
                     'initiator_name': f"{user.first_name} {user.last_name}".strip() or user.username,
@@ -821,7 +828,7 @@ class TransactionViewSet(ModelViewSet):
                     'transaction_details': {
                         'group_id': str(order.payment_group.id) if order.payment_group else None,
                         'group_name': order.payment_group.name if order.payment_group else None,
-                        'recipient_name': 'Qomrade Shop',
+                        'recipient_name': 'QomSu Shop',
                         'initiator_name': f"{user.first_name} {user.last_name}".strip() or user.username,
                     }
                 })
@@ -996,7 +1003,7 @@ class TransactionViewSet(ModelViewSet):
     @action(detail=False, methods=['post'])
     @db_transaction.atomic
     def deposit(self, request):
-        """Deposit funds to Qomrade Balance"""
+        """Deposit funds to QomSu Balance"""
         amount = request.data.get('amount')
         payment_method = request.data.get('payment_method', 'bank_transfer')
         
@@ -1051,7 +1058,7 @@ class TransactionViewSet(ModelViewSet):
     @action(detail=False, methods=['post'])
     @db_transaction.atomic
     def withdraw(self, request):
-        """Withdraw funds from Qomrade Balance"""
+        """Withdraw funds from QomSu Balance"""
         amount = request.data.get('amount')
         account_number = request.data.get('account_number', '')
         payment_method = request.data.get('payment_method', 'bank_transfer')
@@ -1776,13 +1783,31 @@ class PaymentGroupsViewSet(ModelViewSet):
             result = MpesaProvider.stk_push(
                 phone_number, amount, f'Group-{group.name}', f'Contribution to {group.name}'
             )
-            if 'error' in result:
+            if isinstance(result, dict) and 'error' in result:
                 return Response({'error': result['error']}, status=status.HTTP_400_BAD_REQUEST)
+            # Persist a pending transaction so the async M-Pesa callback has
+            # something authoritative to complete (previously the STK push
+            # was fire-and-forget: money could be collected with no record).
+            checkout_request_id = str(
+                result.get('CheckoutRequestID') or result.get('checkout_request_id') or ''
+            )
+            TransactionToken.objects.create(
+                payment_profile=payment_profile,
+                amount=amount,
+                transaction_type='contribution',
+                transaction_code=uuid.uuid4(),
+                payment_option='mpesa',
+                payment_number=phone_number,
+                description=f'Group contribution: {group.name}',
+                payment_group=group,
+                status='pending',
+                mpesa_checkout_request_id=checkout_request_id,
+            )
             # M-Pesa callback will confirm payment; return pending status
             return Response({
                 'requires_action': True,
                 'payment_method': 'mpesa',
-                'checkout_request_id': result.get('CheckoutRequestID', ''),
+                'checkout_request_id': checkout_request_id,
                 'message': 'STK push sent. Complete payment on your phone.'
             })
         else:
@@ -8021,6 +8046,14 @@ class LoanApplicationViewSet(ModelViewSet):
         return LoanApplication.objects.filter(user=profile)
     
     def perform_create(self, serializer):
+        # Loans require verified identity (KYC) — credit can only be
+        # extended to customers who completed CDD.
+        from Payment.services.compliance_service import check_transaction_allowed
+        amount = self.request.data.get('amount') or 0
+        allowed, detail, _summary = check_transaction_allowed(self.request.user, 'loan', amount)
+        if not allowed:
+            raise ValidationError({'detail': detail, 'action': 'kyc_verification'})
+
         profile = Profile.objects.get(user=self.request.user)
         credit, _ = CreditScore.objects.get_or_create(user=profile)
         loan = serializer.save(
@@ -11748,9 +11781,8 @@ class AdminBillPaymentViewSet(ModelViewSet):
         return BillPayment.objects.all().order_by('-created_at')
     
     def get_permissions(self):
-        if self.request.method in ['GET', 'POST']:
-            return [permissions.IsAdminUser()]
-        return super().get_permissions()
+        # Admin endpoints: every verb requires platform admin
+        return [permissions.IsAdminUser()]
     
     @action(detail=False, methods=['get'])
     def stats(self, request):
@@ -11793,9 +11825,8 @@ class AdminLoanApplicationViewSet(ModelViewSet):
         return LoanApplication.objects.all().order_by('-created_at')
     
     def get_permissions(self):
-        if self.request.method in ['GET', 'POST']:
-            return [IsAdminUser()]
-        return super().get_permissions()
+        # Admin endpoints: every verb requires platform admin
+        return [permissions.IsAdminUser()]
     
     @action(detail=False, methods=['get'])
     def stats(self, request):
@@ -11903,9 +11934,8 @@ class AdminInsuranceClaimViewSet(ModelViewSet):
         return InsuranceClaim.objects.all().order_by('-created_at')
     
     def get_permissions(self):
-        if self.request.method in ['GET', 'POST']:
-            return [IsAdminUser()]
-        return super().get_permissions()
+        # Admin endpoints: every verb requires platform admin
+        return [permissions.IsAdminUser()]
     
     @action(detail=False, methods=['get'])
     def stats(self, request):
@@ -12021,9 +12051,8 @@ class AdminTransactionViewSet(ModelViewSet):
         return TransactionToken.objects.all().order_by('-created_at')
     
     def get_permissions(self):
-        if self.request.method in ['GET', 'POST']:
-            return [IsAdminUser()]
-        return super().get_permissions()
+        # Admin endpoints: every verb requires platform admin
+        return [permissions.IsAdminUser()]
     
     @action(detail=False, methods=['get'])
     def stats(self, request):
@@ -12058,9 +12087,8 @@ class AdminKittyViewSet(ModelViewSet):
         ).order_by('-created_at')
     
     def get_permissions(self):
-        if self.request.method in ['GET', 'POST', 'PATCH']:
-            return [permissions.IsAdminUser()]
-        return super().get_permissions()
+        # Admin endpoints: every verb requires platform admin
+        return [permissions.IsAdminUser()]
     
     @action(detail=False, methods=['get'])
     def stats(self, request):

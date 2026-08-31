@@ -370,14 +370,14 @@ def send_group_invitation_email(email, group_name, inviter_name, invite_url, is_
     """
     Send a styled invitation email matching the OTP style.
     """
-    subject = f'Qomrade - Invitation to join {group_name}'
+    subject = f'QomSu - Invitation to join {group_name}'
     
     action_text = "Group Invitation"
     
     if is_existing_user:
         message_body = f"""
             <p>Hello,</p>
-            <p><strong>{inviter_name}</strong> has invited you to join the payment group <strong>"{group_name}"</strong> on Qomrade.</p>
+            <p><strong>{inviter_name}</strong> has invited you to join the payment group <strong>"{group_name}"</strong> on QomSu.</p>
             <p>To accept the invitation, please click the button below:</p>
             <div style="text-align: center; margin: 30px 0;">
                 <a href="{invite_url}" style="background-color: #667eea; color: white; padding: 12px 24px; text-decoration: none; border-radius: 5px; font-weight: bold;">Accept Invitation</a>
@@ -387,7 +387,7 @@ def send_group_invitation_email(email, group_name, inviter_name, invite_url, is_
     else:
         message_body = f"""
             <p>Hello,</p>
-            <p><strong>{inviter_name}</strong> has invited you to join the payment group <strong>"{group_name}"</strong> on Qomrade.</p>
+            <p><strong>{inviter_name}</strong> has invited you to join the payment group <strong>"{group_name}"</strong> on QomSu.</p>
             <p>You don't seem to have an account yet. Please register to join the group.</p>
             <div style="text-align: center; margin: 30px 0;">
                 <a href="{invite_url}" style="background-color: #667eea; color: white; padding: 12px 24px; text-decoration: none; border-radius: 5px; font-weight: bold;">Join Group</a>
@@ -410,14 +410,14 @@ def send_group_invitation_email(email, group_name, inviter_name, invite_url, is_
     <body>
         <div class="container">
             <div class="header">
-                <h1>Qomrade</h1>
+                <h1>QomSu</h1>
                 <p>{action_text}</p>
             </div>
             <div class="content">
                 {message_body}
             </div>
             <div class="footer">
-                <p>&copy; 2025 Qomrade. All rights reserved.</p>
+                <p>&copy; 2025 QomSu. All rights reserved.</p>
             </div>
         </div>
     </body>

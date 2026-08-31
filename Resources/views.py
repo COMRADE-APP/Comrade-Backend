@@ -139,7 +139,7 @@ VISIBILITY_OPTIONS_MAP = {
 class ResourceViewSet(ModelViewSet):
     queryset = Resource.objects.all().order_by('-id')
     serializer_class = ResourceSerializer
-    # permission_classes = [IsAuthenticatedOrReadOnly]
+    permission_classes = [IsAuthenticatedOrReadOnly]
     # renderer_classes = [PDFRenderer]
     ordering_fields = ['id', 'title', 'created_at']
     ordering = ['-id']

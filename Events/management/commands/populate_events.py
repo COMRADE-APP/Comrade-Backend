@@ -32,7 +32,7 @@ class Command(BaseCommand):
 
         events_data = [
             {
-                'name': 'Comrade Tech Summit 2026',
+                'name': 'QomSu Tech Summit 2026',
                 'description': 'A full-day tech conference featuring keynotes on AI, blockchain, and fintech innovation. Network with industry leaders, participate in workshops, and discover the latest trends shaping the technology landscape across Africa.',
                 'cover_file': 'tech_conf.png',
                 'capacity': 500,
@@ -108,7 +108,7 @@ class Command(BaseCommand):
                 'complexity_level': 'sophisticated',
             },
             {
-                'name': 'Comrade Charity Gala Evening',
+                'name': 'QomSu Charity Gala Evening',
                 'description': 'An elegant evening of fine dining, live performances, and silent auctions. All proceeds support education initiatives for underprivileged youth. Black-tie dress code. Includes a 4-course dinner.',
                 'cover_file': 'charity_gala.png',
                 'capacity': 200,

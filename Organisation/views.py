@@ -209,7 +209,7 @@ class OrganisationViewSet(ModelViewSet):
         invite_url = f"http://localhost:8000/organizations/{organisation.id}?invite={invitation.token}"
         try:
             send_mail(
-                f'You are invited to join {organisation.name} on Comrade',
+                f'You are invited to join {organisation.name} on QomSu',
                 f'Hi,\n\n{request.user.get_full_name() or request.user.email} has invited you to join '
                 f'"{organisation.name}" as a {role}.\n\n'
                 f'Click here to accept: {invite_url}\n\n'

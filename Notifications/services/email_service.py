@@ -20,88 +20,88 @@ class EmailService:
 
     TEMPLATES = {
         'kyc_approved': {
-            'subject': '✅ Your Identity Has Been Verified — Qomrade',
+            'subject': '✅ Your Identity Has Been Verified — QomSu',
             'body': (
                 "Hi {name},\n\n"
                 "Great news! Your identity verification (KYC) has been approved.\n"
-                "You now have full access to escrow, loans, and premium financial services on Qomrade.\n\n"
-                "— The Qomrade Team"
+                "You now have full access to escrow, loans, and premium financial services on QomSu.\n\n"
+                "— The QomSu Team"
             ),
         },
         'kyc_rejected': {
-            'subject': '⚠️ Identity Verification Update — Qomrade',
+            'subject': '⚠️ Identity Verification Update — QomSu',
             'body': (
                 "Hi {name},\n\n"
                 "Unfortunately, your identity verification was not approved.\n"
                 "Reason: {reason}\n\n"
                 "Please re-submit your documents from your account settings.\n\n"
-                "— The Qomrade Team"
+                "— The QomSu Team"
             ),
         },
         'payout_processed': {
-            'subject': '💰 Payout Processed — Qomrade',
+            'subject': '💰 Payout Processed — QomSu',
             'body': (
                 "Hi {name},\n\n"
                 "A payout of {amount} has been successfully processed to your {method} account.\n"
                 "Transaction Reference: {reference}\n\n"
-                "— The Qomrade Team"
+                "— The QomSu Team"
             ),
         },
         'refund_issued': {
-            'subject': '🔄 Refund Issued — Qomrade',
+            'subject': '🔄 Refund Issued — QomSu',
             'body': (
                 "Hi {name},\n\n"
                 "A refund of {amount} has been issued for transaction {reference}.\n"
                 "Reason: {reason}\n\n"
                 "The funds will be returned to your original payment method within 5-10 business days.\n\n"
-                "— The Qomrade Team"
+                "— The QomSu Team"
             ),
         },
         'loan_approved': {
-            'subject': '✅ Loan Application Approved — Qomrade',
+            'subject': '✅ Loan Application Approved — QomSu',
             'body': (
                 "Hi {name},\n\n"
                 "Your loan application for {amount} has been approved!\n"
-                "The funds have been credited to your Qomrade wallet.\n\n"
+                "The funds have been credited to your QomSu wallet.\n\n"
                 "Repayment begins on {due_date}.\n\n"
-                "— The Qomrade Team"
+                "— The QomSu Team"
             ),
         },
         'loan_overdue': {
-            'subject': '⚠️ Loan Repayment Overdue — Qomrade',
+            'subject': '⚠️ Loan Repayment Overdue — QomSu',
             'body': (
                 "Hi {name},\n\n"
                 "Your loan repayment of {amount} was due on {due_date} and is now overdue.\n"
                 "Please make a payment as soon as possible to avoid penalties.\n\n"
-                "— The Qomrade Team"
+                "— The QomSu Team"
             ),
         },
         'escrow_released': {
-            'subject': '✅ Escrow Funds Released — Qomrade',
+            'subject': '✅ Escrow Funds Released — QomSu',
             'body': (
                 "Hi {name},\n\n"
                 "The escrow for \"{title}\" ({amount}) has been released.\n"
                 "The funds are now available in your wallet.\n\n"
-                "— The Qomrade Team"
+                "— The QomSu Team"
             ),
         },
         'dispute_resolved': {
-            'subject': '📋 Escrow Dispute Resolved — Qomrade',
+            'subject': '📋 Escrow Dispute Resolved — QomSu',
             'body': (
                 "Hi {name},\n\n"
                 "The dispute for escrow \"{title}\" has been resolved.\n"
                 "Resolution: {resolution}\n\n"
                 "Log in to your account for full details.\n\n"
-                "— The Qomrade Team"
+                "— The QomSu Team"
             ),
         },
         'standing_order_failed': {
-            'subject': '❌ Standing Order Failed — Qomrade',
+            'subject': '❌ Standing Order Failed — QomSu',
             'body': (
                 "Hi {name},\n\n"
                 "Your standing order to {provider} for {amount} could not be processed due to insufficient balance.\n"
                 "Please top up your wallet and retry.\n\n"
-                "— The Qomrade Team"
+                "— The QomSu Team"
             ),
         },
         # Provider notification templates
@@ -113,7 +113,7 @@ class EmailService:
                 "Service: {service_name}\n"
                 "Application ID: {application_id}\n\n"
                 "You'll be notified once the provider reviews your application.\n\n"
-                "— The Qomrade Team"
+                "— The QomSu Team"
             ),
         },
         'provider_app_approved': {
@@ -124,7 +124,7 @@ class EmailService:
                 "Service: {service_name}\n"
                 "Application ID: {application_id}\n\n"
                 "You can now access and use this service. Log in to your dashboard to get started.\n\n"
-                "— The Qomrade Team"
+                "— The QomSu Team"
             ),
         },
         'provider_app_rejected': {
@@ -135,7 +135,7 @@ class EmailService:
                 "Service: {service_name}\n"
                 "Reason: {reason}\n\n"
                 "You may submit a new application or contact the provider for more information.\n\n"
-                "— The Qomrade Team"
+                "— The QomSu Team"
             ),
         },
         'provider_app_changes': {
@@ -146,7 +146,7 @@ class EmailService:
                 "Service: {service_name}\n"
                 "Notes: {reason}\n\n"
                 "Please log in to update your application and resubmit.\n\n"
-                "— The Qomrade Team"
+                "— The QomSu Team"
             ),
         },
         'provider_query_response': {
@@ -157,7 +157,7 @@ class EmailService:
                 "Subject: {query_subject}\n"
                 "Response: {response}\n\n"
                 "Log in to view the full response and continue the conversation.\n\n"
-                "— The Qomrade Team"
+                "— The QomSu Team"
             ),
         },
         'provider_transaction': {
@@ -168,20 +168,20 @@ class EmailService:
                 "Amount: {amount}\n"
                 "Reference: {reference}\n"
                 "Status: Completed\n\n"
-                "Thank you for using {provider} on Qomrade!\n\n"
-                "— The Qomrade Team"
+                "Thank you for using {provider} on QomSu!\n\n"
+                "— The QomSu Team"
             ),
         },
         'welcome': {
-            'subject': '🎉 Welcome to Qomrade!',
+            'subject': '🎉 Welcome to QomSu!',
             'body': (
                 "Hi {name},\n\n"
-                "Welcome to Qomrade — your all-in-one platform for collaborative finance, research, and community.\n\n"
+                "Welcome to QomSu — your all-in-one platform for collaborative finance, research, and community.\n\n"
                 "Get started by:\n"
                 "1. Completing your profile\n"
                 "2. Verifying your identity\n"
                 "3. Exploring Payment Groups and the Marketplace\n\n"
-                "— The Qomrade Team"
+                "— The QomSu Team"
             ),
         },
     }

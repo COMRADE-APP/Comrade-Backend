@@ -5,6 +5,8 @@ Django settings for comrade project.
 from pathlib import Path
 from datetime import timedelta
 import os
+
+from django.core.exceptions import ImproperlyConfigured
 from dotenv import load_dotenv
 import dj_database_url
 
@@ -262,6 +264,9 @@ AUTH_PASSWORD_VALIDATORS = [
 
 # REST Framework Configuration
 REST_FRAMEWORK = {
+    'DEFAULT_PERMISSION_CLASSES': [
+        'rest_framework.permissions.IsAuthenticated',
+    ],
     'DEFAULT_AUTHENTICATION_CLASSES': [
         'rest_framework_simplejwt.authentication.JWTAuthentication',
         'rest_framework.authentication.SessionAuthentication',
@@ -291,7 +296,7 @@ REST_FRAMEWORK = {
 }
 
 SPECTACULAR_SETTINGS = {
-    'TITLE': 'Comrade (Qomrade) API',
+    'TITLE': 'QomSu API',
     'DESCRIPTION': 'Comprehensive platform API for academic collaboration, payments, social features, and more.',
     'VERSION': '1.0.0',
     'SERVE_INCLUDE_SCHEMA': False,
@@ -418,6 +423,17 @@ CURRENCY_API_KEY = os.getenv('CURRENCY_API_KEY', '')
 CURRENCY_CACHE_TIMEOUT = 60 * 60  # Cache rates for 1 hour (in seconds)
 DEFAULT_CURRENCY = os.getenv('DEFAULT_CURRENCY', 'USD')
 PLATFORM_CURRENCY = os.getenv('PLATFORM_CURRENCY', 'USD')  # The common currency for all transactions
+
+# ============================================================================
+# COMPLIANCE / KYC-AML GATING (Phase 1 integrity layer)
+# ============================================================================
+# Master switch. Set KYC_ENFORCEMENT=false only for sandboxes/tests.
+KYC_ENFORCEMENT = os.getenv('KYC_ENFORCEMENT', 'true').lower() in ('1', 'true', 'yes')
+# Deposits above this amount require cleared KYC (platform currency units).
+DEPOSIT_UNVERIFIED_LIMIT = float(os.getenv('DEPOSIT_UNVERIFIED_LIMIT', '30000'))
+# Transactions above this threshold from non-cleared/high-risk/PEP customers
+# raise an internal SuspiciousTransactionReport (never blocks by itself).
+HIGH_RISK_TX_THRESHOLD = float(os.getenv('HIGH_RISK_TX_THRESHOLD', '150000'))
 SUPPORTED_CURRENCIES = ['USD', 'EUR', 'GBP', 'KES', 'ZAR', 'NGN', 'GHS', 'TZS', 'UGX', 'BRL', 'INR', 'CNY', 'JPY', 'AUD', 'CAD', 'CHF']
 
 # Default payment destination (where platform earnings are routed)
@@ -475,7 +491,7 @@ ACCOUNT_LOGIN_METHODS = {'email'}  # New v0.50+ syntax
 ACCOUNT_SIGNUP_FIELDS = ['email*', 'password1*', 'password2*']  # New v0.50+ syntax
 ACCOUNT_EMAIL_VERIFICATION = 'optional' if DEBUG else 'mandatory'
 ACCOUNT_UNIQUE_EMAIL = True
-ACCOUNT_EMAIL_SUBJECT_PREFIX = '[Qomrade] '
+ACCOUNT_EMAIL_SUBJECT_PREFIX = '[QomSu] '
 
 # Social account settings
 SOCIALACCOUNT_AUTO_SIGNUP = True
@@ -624,6 +640,16 @@ elif redis_url:
         }
     }
 else:
+    # LocMem fallback silently weakens rate limiting, OTP lockout, webhook
+    # idempotency and channel layers to per-process scope. That is never
+    # acceptable in production: fail fast unless explicitly overridden.
+    if not DEBUG and os.getenv('ALLOW_INSECURE_CACHE', '').lower() not in ('1', 'true', 'yes'):
+        raise ImproperlyConfigured(
+            "REDIS_URL/REDIS_HOST is not configured but DEBUG=False. "
+            "Production requires Redis for throttling, idempotency and "
+            "webhook de-duplication. Set REDIS_URL, or (sandbox only) "
+            "ALLOW_INSECURE_CACHE=true to accept the per-process fallback."
+        )
     CACHES = {
         "default": {
             "BACKEND": "django.core.cache.backends.locmem.LocMemCache",

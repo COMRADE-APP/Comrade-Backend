@@ -276,7 +276,7 @@ class Command(BaseCommand):
 
         insurance_products_data = [
             {
-                'name': 'Qomrade Health Basic', 'provider': 'Jubilee Insurance', 'category': 'health',
+                'name': 'QomSu Health Basic', 'provider': 'Jubilee Insurance', 'category': 'health',
                 'description': 'Basic outpatient and inpatient cover for individuals.',
                 'premium_amount': Decimal('1500'), 'premium_frequency': 'monthly',
                 'coverage_amount': Decimal('500000'), 'deductible': Decimal('2500'),

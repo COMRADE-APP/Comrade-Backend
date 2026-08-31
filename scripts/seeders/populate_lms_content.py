@@ -1,5 +1,8 @@
 import os
 import django
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 import random
 import uuid
 
@@ -32,11 +35,11 @@ def populate_lms():
                 title=f"{prefix} - Lesson {i+1}: {c_type.title()} Content",
                 description=f"Detailed overview of {prefix} specifically focusing on {c_type}",
                 content_type=c_type,
-                content_text=f"<h3>Welcome to {prefix} - Lesson {i+1}</h3><p>Enjoy this high-quality learning content designed exclusively for Comrade platform users.</p>",
+                content_text=f"<h3>Welcome to {prefix} - Lesson {i+1}</h3><p>Enjoy this high-quality learning content designed exclusively for QomSu platform users.</p>",
                 video_url="https://www.youtube.com/watch?v=dQw4w9WgXcQ" if c_type == 'video' else "",
                 audio_url="https://example.com/audio.mp3" if c_type == 'audio' else "",
                 image_url=f"https://source.unsplash.com/800x600/?{prefix.replace(' ', ',')},learning",
-                code_snippet="def hello_world():\n    print('Hello, Comrade!')\n\nhello_world()" if c_type == 'code' else "",
+                code_snippet="def hello_world():\n    print('Hello, QomSu!')\n\nhello_world()" if c_type == 'code' else "",
                 code_language="python",
                 order=i+1,
                 duration_minutes=random.randint(5, 30),
@@ -107,7 +110,7 @@ def populate_lms():
     for spec in specs:
         # Create a certificate template if it doesn't exist
         cert, _ = Certificate.objects.get_or_create(
-            issuer_name="Comrade Academy",
+            issuer_name="QomSu Academy",
             certificate_type='completion',
             auto_generate=True,
             created_by=admin_profile

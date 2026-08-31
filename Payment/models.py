@@ -123,6 +123,11 @@ class TransactionToken(models.Model):
     piggy_bank = models.ForeignKey('GroupTarget', on_delete=models.SET_NULL, null=True, blank=True, related_name='transactions')
     status = models.CharField(max_length=200, choices=TRANSACTION_STATUS, default='completed')
     balance_after = models.DecimalField(decimal_places=2, max_digits=12, null=True, blank=True)
+    # Correlates an M-Pesa STK push to its callback (exact match, no fragile
+    # description substring searches). Indexed because callbacks hit it first.
+    mpesa_checkout_request_id = models.CharField(
+        max_length=64, blank=True, default='', db_index=True
+    )
     reversed_at = models.DateTimeField(null=True, blank=True)
     reversal_reason = models.TextField(blank=True, null=True)
     

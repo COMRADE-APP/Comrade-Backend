@@ -10,6 +10,8 @@ from rest_framework.decorators import action
 from rest_framework import status
 from django.core.exceptions import PermissionDenied
 from django.conf import settings
+from django.db import transaction as db_transaction
+from decimal import Decimal
 import stripe
 import json
 import re
@@ -1106,23 +1108,100 @@ class MpesaCallbackView(APIView):
                 
             # Payment successful
             try:
-                transaction = TransactionToken.objects.get(
-                    description__contains=checkout_request_id
-                )
-                TransactionHistory.objects.create(
-                    payment_profile=transaction.payment_profile,
-                    transaction_token=transaction,
-                    status='completed',
-                    balance_after=transaction.payment_profile.comrade_balance
-                )
-                # Credit wallet for deposits
-                if transaction.transaction_type == 'deposit':
+                # Lock the wallet row while crediting to prevent lost updates.
+                # Match on the persisted checkout id (exact), falling back to
+                # legacy description-suffix matches for in-flight transactions
+                # created before the dedicated column existed.
+                with db_transaction.atomic():
+                    try:
+                        transaction = (
+                            TransactionToken.objects
+                            .select_for_update()
+                            .get(
+                                mpesa_checkout_request_id=checkout_request_id,
+                                status='pending',
+                            )
+                        )
+                    except TransactionToken.DoesNotExist:
+                        transaction = (
+                            TransactionToken.objects
+                            .select_for_update()
+                            .get(
+                                description__endswith=checkout_request_id,
+                                transaction_type='deposit',
+                                status='pending',
+                            )
+                        )
+                    TransactionHistory.objects.create(
+                        payment_profile=transaction.payment_profile,
+                        transaction_token=transaction,
+                        status='completed',
+                        balance_after=transaction.payment_profile.comrade_balance + transaction.amount
+                    )
+                    # Credit wallet for deposits
                     pp = transaction.payment_profile
-                    pp.comrade_balance += float(transaction.amount)
-                    pp.save()
+                    pp.comrade_balance = (pp.comrade_balance or Decimal('0')) + transaction.amount
+                    pp.save(update_fields=['comrade_balance'])
+                    transaction.status = 'completed'
+                    transaction.save(update_fields=['status'])
                 logger.info(f'M-Pesa payment completed: {checkout_request_id}')
+
+                # Complete a pending group contribution triggered via STK push
+                if transaction.transaction_type == 'contribution' and transaction.payment_group_id:
+                    self._complete_pending_contribution(transaction)
             except TransactionToken.DoesNotExist:
                 logger.warning(f'M-Pesa callback for unknown checkout: {checkout_request_id}')
+
+    @staticmethod
+    def _complete_pending_contribution(token):
+        """Finalize a group contribution whose STK push succeeded."""
+        from Payment.models import Contribution, PaymentGroupMember, PaymentGroups, TransactionHistory
+
+        try:
+            from Payment.models import Contribution, PaymentGroupMember, PaymentGroups
+
+            with db_transaction.atomic():
+                token = (
+                    TransactionToken.objects
+                    .select_for_update()
+                    .get(pk=token.pk)
+                )
+                if token.status != 'completed':
+                    return  # raced or reversed; nothing to do
+                group = PaymentGroups.objects.select_for_update().get(
+                    pk=token.payment_group_id
+                )
+                member = PaymentGroupMember.objects.select_for_update().get(
+                    payment_group=group, payment_profile=token.payment_profile
+                )
+                amount = token.amount
+
+                group.current_amount += amount
+                group.save(update_fields=['current_amount'])
+
+                member.total_contributed += amount
+                member.save(update_fields=['total_contributed'])
+
+                Contribution.objects.create(
+                    payment_group=group,
+                    member=member,
+                    amount=amount,
+                    notes='M-Pesa STK push',
+                )
+
+                TransactionHistory.objects.create(
+                    payment_profile=token.payment_profile,
+                    transaction_token=token,
+                    amount=amount,
+                    transaction_category='contribution',
+                    status='completed',
+                    balance_after=token.payment_profile.comrade_balance,
+                )
+        except Exception:
+            logger.exception(
+                f'Failed to complete M-Pesa contribution for checkout '
+                f'{token.mpesa_checkout_request_id}'
+            )
         
         return Response({
             'ResultCode': 0,

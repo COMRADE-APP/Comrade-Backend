@@ -689,7 +689,7 @@ class EventSlotBookingSerializer(ModelSerializer):
             return f"{obj.event.created_by.first_name} {obj.event.created_by.last_name}".strip() or obj.event.created_by.email
         if obj.event and obj.event.organisation:
             return obj.event.organisation.name
-        return 'Qomrade'
+        return 'QomSu'
 
 
 class OrganizerFollowSerializer(ModelSerializer):

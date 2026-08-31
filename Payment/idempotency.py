@@ -25,3 +25,24 @@ def is_webhook_idempotent(event_id, prefix="webhook_idemp", timeout_hours=48):
         logger.info(f"Ignored duplicate webhook event: {event_id}")
         
     return is_new
+
+
+def check_request_idempotency(request, scope="money"):
+    """
+    Idempotency guard for client-initiated money mutations (deposits,
+    withdrawals, transfers). Clients send an `Idempotency-Key` header;
+    retries with the same key within 24h are rejected instead of
+    double-charging.
+
+    Returns True when the request may proceed; False when it's a replay.
+    Requests without a key are allowed (legacy clients) — mobile/web will be
+    updated to always send one.
+    """
+    key = request.headers.get("Idempotency-Key", "").strip()
+    if not key:
+        return True
+
+    user_id = getattr(getattr(request, "user", None), "id", "anon")
+    cache_key = f"idem:{scope}:{user_id}:{key}"
+    # cache.add is atomic: only the first caller wins
+    return bool(cache.add(cache_key, "claimed", timeout=24 * 3600))

@@ -37,7 +37,7 @@ PRODUCTS = [
         'image_url': '/media/products/study_desk_lamp.png',
     },
     {
-        'name': 'Qomrade Pro Learning Subscription',
+        'name': 'QomSu Pro Learning Subscription',
         'description': 'Unlimited access to premium courses, live workshops, exclusive mentorship sessions, and certification programs. Learn at your own pace.',
         'price': 19.99,
         'product_type': 'subscription',

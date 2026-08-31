@@ -4,7 +4,7 @@ Automation & Utility Endpoints for Payment System
 from rest_framework import viewsets, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
-from rest_framework.permissions import AllowAny, IsAuthenticated
+from rest_framework.permissions import AllowAny, IsAuthenticated, IsAdminUser
 from django.utils import timezone
 from datetime import timedelta
 from django.db.models import Sum, Count
@@ -35,54 +35,47 @@ class NotificationServiceView(viewsets.ViewSet):
 
 
 class WebhookHandlerView(viewsets.ViewSet):
-    permission_classes = [AllowAny]
-    
-    @action(detail=False, methods=['post'])
+    """DISABLED STUB: previously returned fake success for provider webhooks
+    without any signature verification. Real, signature-verified webhook views
+    live in Payment.views_payment (StripeWebhookView, MpesaCallbackView,
+    PayPalWebhookView, PaystackWebhookView). Do not re-enable until this
+    endpoint performs full provider-specific verification."""
+
+    @action(detail=False, methods=['post'], url_path='stripe')
     def stripe(self, request):
-        return Response({'status': 'received'})
-    
-    @action(detail=False, methods=['post'])
+        return Response({'detail': 'Deprecated stub endpoint.'}, status=status.HTTP_501_NOT_IMPLEMENTED)
+
+    @action(detail=False, methods=['post'], url_path='mpesa')
     def mpesa(self, request):
-        return Response({'status': 'processed'})
-    
-    @action(detail=False, methods=['post'])
+        return Response({'detail': 'Deprecated stub endpoint.'}, status=status.HTTP_501_NOT_IMPLEMENTED)
+
+    @action(detail=False, methods=['post'], url_path='paypal')
     def paypal(self, request):
-        return Response({'status': 'received'})
+        return Response({'detail': 'Deprecated stub endpoint.'}, status=status.HTTP_501_NOT_IMPLEMENTED)
 
 
 class ScheduledTasksView(viewsets.ViewSet):
+    """Manual triggers for scheduled money jobs. Admin-only: these mutate
+    balances. Logic lives in Payment.tasks — do not duplicate here."""
+    permission_classes = [IsAdminUser]
+
     @action(detail=False, methods=['post'])
     def process_standing_orders(self, request):
-        from Payment.models import BillStandingOrder, BillPayment, PaymentProfile, Profile
-        today = timezone.now().date()
-        due_orders = BillStandingOrder.objects.filter(is_active=True, next_run_date__lte=today)
-        processed = 0
-        for order in due_orders:
-            try:
-                pp = PaymentProfile.objects.get(user=order.user)
-                if pp.comrade_balance >= order.amount:
-                    BillPayment.objects.create(user=order.user, provider=order.provider, account_number=order.account_number, amount=order.amount, status='completed')
-                    pp.comrade_balance -= order.amount
-                    pp.save()
-                    order.next_run_date += timedelta(days=1)
-                    order.save()
-                    processed += 1
-            except: pass
-        return Response({'processed': processed})
-    
+        from Payment.tasks import process_standing_orders
+        result = process_standing_orders.apply(args=(), kwargs={}).get()
+        return Response({'result': result})
+
     @action(detail=False, methods=['post'])
     def check_loan_overdue(self, request):
-        from Payment.models import LoanRepayment
-        today = timezone.now().date()
-        count = LoanRepayment.objects.filter(status__in=['upcoming', 'due'], due_date__lt=today).update(status='overdue')
-        return Response({'marked_overdue': count})
-    
+        from Payment.tasks import check_loan_overdue
+        result = check_loan_overdue.apply(args=(), kwargs={}).get()
+        return Response({'result': result})
+
     @action(detail=False, methods=['post'])
     def check_insurance_expiry(self, request):
-        from Payment.models import InsurancePolicy
-        today = timezone.now().date()
-        expiring = InsurancePolicy.objects.filter(status='active', end_date__lte=today + timedelta(days=30))
-        return Response({'expiring_count': expiring.count()})
+        from Payment.tasks import check_insurance_expiry
+        result = check_insurance_expiry.apply(args=(), kwargs={}).get()
+        return Response({'result': result})
 
 
 class AnalyticsView(viewsets.ViewSet):

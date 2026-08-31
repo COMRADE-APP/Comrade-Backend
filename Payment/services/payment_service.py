@@ -215,7 +215,7 @@ class StripeProvider:
                 'price_data': {
                     'currency': currency.lower(),
                     'unit_amount': int(float(amount) * 100),
-                    'product_data': {'name': 'Qomrade Purchase'},
+                    'product_data': {'name': 'QomSu Purchase'},
                 },
                 'quantity': 1,
             }]
@@ -287,7 +287,7 @@ class PaystackProvider:
 
     @staticmethod
     def initiate_payment(amount, currency='KES', email='', phone='',
-                         redirect_url='', reference=None, description='Qomrade Payment',
+                         redirect_url='', reference=None, description='QomSu Payment',
                          channels=None):
         """Initialize a Paystack transaction (for redirect or inline use).
         
@@ -419,7 +419,7 @@ class FlutterwaveProvider:
     
     @staticmethod
     def initiate_payment(amount, currency='KES', email='', phone='', 
-                         redirect_url='', tx_ref=None, description='Qomrade Payment',
+                         redirect_url='', tx_ref=None, description='QomSu Payment',
                          payment_options='card,mpesa,banktransfer'):
         """Create a Flutterwave Standard payment (hosted checkout page).
         
@@ -444,7 +444,7 @@ class FlutterwaveProvider:
                 'phonenumber': phone or '',
             },
             'customizations': {
-                'title': 'Qomrade Payment',
+                'title': 'QomSu Payment',
                 'description': description,
                 'logo': f'{frontend_url}logo.png',
             },
@@ -493,7 +493,7 @@ class FlutterwaveProvider:
     
     @staticmethod
     def initiate_transfer(account_number, bank_code, amount, currency='KES',
-                          narration='Qomrade Payout', reference=None):
+                          narration='QomSu Payout', reference=None):
         """Initiate a bank transfer payout via Flutterwave."""
         headers = FlutterwaveProvider._get_headers()
         if not headers:
@@ -603,7 +603,7 @@ class PesapalProvider:
             return {"error": f"Pesapal IPN registration failed: {str(e)}"}
     
     @staticmethod
-    def submit_order(amount, currency='KES', description='Qomrade Payment',
+    def submit_order(amount, currency='KES', description='QomSu Payment',
                      callback_url='', phone='', email='', first_name='', last_name='',
                      order_id=None):
         """Submit a payment order to Pesapal.
@@ -810,8 +810,8 @@ class PayPalProvider:
         payload = {
             "sender_batch_header": {
                 "sender_batch_id": str(uuid.uuid4()),
-                "email_subject": "Qomrade Payment",
-                "email_message": note or "You have received a payment from Qomrade.",
+                "email_subject": "QomSu Payment",
+                "email_message": note or "You have received a payment from QomSu.",
             },
             "items": [{
                 "recipient_type": "EMAIL",
@@ -889,7 +889,7 @@ class EquityBankProvider:
         payload = {
             "source": {
                 "countryCode": "KE",
-                "name": "Qomrade Platform",
+                "name": "QomSu Platform",
                 "accountNumber": merchant_code,
             },
             "destination": {
@@ -904,7 +904,7 @@ class EquityBankProvider:
                 "amount": f"{float(amount):.2f}",
                 "currencyCode": "KES",
                 "reference": reference or f"COMRADE-{datetime.now().strftime('%Y%m%d%H%M%S')}",
-                "description": narration or "Payment from Qomrade",
+                "description": narration or "Payment from QomSu",
             },
         }
         
@@ -960,7 +960,7 @@ class PaymentRouter:
             phone = details.get('phone_number', '')
             if not phone:
                 return {"error": "Phone number required for M-Pesa routing"}
-            return MpesaProvider.stk_push(phone, amount, "Qomrade Payout", "Platform payout")
+            return MpesaProvider.stk_push(phone, amount, "QomSu Payout", "Platform payout")
         
         elif dest == 'flutterwave':
             account = details.get('account_number', '')
@@ -1114,7 +1114,7 @@ class PaymentService:
             phone = details.get('phone_number')
             if not phone:
                 return {"error": "Phone number required for M-Pesa withdrawal"}
-            return MpesaProvider.stk_push(phone, amount, "Qomrade Withdrawal", "Withdrawal")
+            return MpesaProvider.stk_push(phone, amount, "QomSu Withdrawal", "Withdrawal")
         elif method == 'paypal':
             email = details.get('email')
             if not email:

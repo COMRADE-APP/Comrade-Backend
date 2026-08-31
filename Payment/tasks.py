@@ -89,7 +89,7 @@ def process_standing_orders():
     Creates BillPayment records and deducts from user wallets.
     Runs daily at 06:00.
     """
-    from Payment.models import BillStandingOrder, BillPayment, TransactionToken, PaymentProfile
+    from Payment.models import BillStandingOrder, BillPayment, TransactionToken, PaymentProfile, BillProvider
 
     logger.info("Running process_standing_orders task")
     now = timezone.now().date()
@@ -114,18 +114,17 @@ def process_standing_orders():
 
             try:
                 with db_transaction.atomic():
-                    user_profile = order.user
-                    payment_profile = user_profile.payment_profile.first()
-                    if not payment_profile:
-                        logger.warning(f"No payment profile for user {user_profile.id}")
-                        failed += 1
-                        break
+                    # Lock the wallet row to avoid races with concurrent spends
+                    payment_profile = (
+                        PaymentProfile.objects.select_for_update()
+                        .get(user=order.user)
+                    )
 
                     # Check sufficient balance
-                    if payment_profile.wallet_balance < order.amount:
+                    if payment_profile.comrade_balance < order.amount:
                         logger.warning(
                             f"Insufficient balance for standing order {order.id}: "
-                            f"balance={payment_profile.wallet_balance}, required={order.amount}"
+                            f"balance={payment_profile.comrade_balance}, required={order.amount}"
                         )
                         order.consecutive_failures += 1
                         order.save()
@@ -149,23 +148,24 @@ def process_standing_orders():
                                 pass
                         else:
                             _notify_insufficient_funds(user_profile, order)
-                        
+
                         failed += 1
                         break  # Stop trying for this order today
 
-                    # Deduct from wallet
-                    payment_profile.wallet_balance -= order.amount
+                    # Deduct from wallet (row is locked above)
+                    payment_profile.comrade_balance -= order.amount
                     payment_profile.save()
 
                     # Create transaction record
                     txn = TransactionToken.objects.create(
-                        sender_profile=payment_profile,
+                        payment_profile=payment_profile,
                         amount=order.amount,
                         transaction_type='bill_payment',
                         status='completed',
                         description=f"Standing order: {order.provider.name}",
+                        balance_after=payment_profile.comrade_balance,
                     )
-                    
+
                     from Payment.models import TransactionHistory
                     TransactionHistory.objects.create(
                         payment_profile=payment_profile,
@@ -173,17 +173,30 @@ def process_standing_orders():
                         amount=order.amount,
                         transaction_category='bill_payment',
                         status='completed',
-                        balance_after=payment_profile.wallet_balance
+                        balance_after=payment_profile.comrade_balance
+                    )
+
+                    # Resolve a catalog BillProvider for this saved provider so
+                    # BillPayment.provider (FK to BillProvider) stays valid.
+                    bill_provider, _created = BillProvider.objects.get_or_create(
+                        name=order.provider.name[:200],
+                        defaults={
+                            'category': getattr(order.provider, 'category', None) or 'other',
+                            'is_active': True,
+                        },
                     )
 
                     # Create bill payment record
                     BillPayment.objects.create(
                         user=user_profile,
-                        provider=order.provider.category if hasattr(order.provider, 'category') else 'other',
+                        provider=bill_provider,
                         account_number=order.provider.account_number,
                         amount=order.amount,
+                        total_amount=order.amount,
                         status='completed',
+                        reference=f"SO-{order.pk}-{timezone.now().strftime('%Y%m%d%H%M%S%f')}",
                         transaction=txn,
+                        completed_at=timezone.now(),
                     )
 
                     # Success: Reset failures and advance date
@@ -299,7 +312,7 @@ def check_loan_overdue():
                         phone_number = getattr(applicant.user.user.profile, 'phone_number', None)
                     
                     if phone_number:
-                        sms_msg = f"Qomrade: Your loan repayment of KES {repayment.amount_due} is OVERDUE. Please pay to avoid penalties."
+                        sms_msg = f"QomSu: Your loan repayment of KES {repayment.amount_due} is OVERDUE. Please pay to avoid penalties."
                         send_sms(str(phone_number), sms_msg)
                 except Exception as sms_e:
                     logger.error(f"Failed to send SMS for overdue loan: {sms_e}")
@@ -497,7 +510,7 @@ def check_dispute_timeouts():
                                     phone_number = getattr(profile.user.user.profile, 'phone_number', None)
                                 
                                 if phone_number:
-                                    sms_msg = f"Qomrade: Escrow {escrow.id} auto-resolved. Log in for details."
+                                    sms_msg = f"QomSu: Escrow {escrow.id} auto-resolved. Log in for details."
                                     send_sms(str(phone_number), sms_msg)
                             except Exception as sms_e:
                                 logger.error(f"Failed to send SMS for escrow timeout: {sms_e}")
@@ -1094,11 +1107,11 @@ def send_daily_notification_digest():
         )
         
         # Build email content
-        subject = f"Qomrade Daily Digest - {notification_count} new notifications"
+        subject = f"QomSu Daily Digest - {notification_count} new notifications"
         
         html_content = f"""
         <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
-            <h2 style="color: #1a1a2e;">Your Daily Qomrade Digest</h2>
+            <h2 style="color: #1a1a2e;">Your Daily QomSu Digest</h2>
             <p style="color: #666;">You have {notification_count} new notifications from the past 24 hours.</p>
         """
         
@@ -1149,7 +1162,7 @@ def send_daily_notification_digest():
         try:
             send_mail(
                 subject=subject,
-                message=f"You have {notification_count} new notifications on Qomrade",
+                message=f"You have {notification_count} new notifications on QomSu",
                 from_email=settings.DEFAULT_FROM_EMAIL,
                 recipient_list=[user.email],
                 html_message=html_content,
@@ -1243,3 +1256,28 @@ def monitor_credit_score_health():
         logger.warning(f"Empty risk-level bins: {empty}")
 
     logger.info("Credit score health check complete")
+
+
+# ============================================================================
+# LEDGER RECONCILIATION (Phase 1 integrity layer)
+# ============================================================================
+
+@shared_task
+def reconcile_ledger_nightly():
+    """
+    Nightly wallet-ledger reconciliation. Detects negative balances, stuck
+    pending transactions, completed transactions missing history rows, and
+    balance divergence. Report-only — stores the summary in cache for
+    dashboards and logs a warning when anomalies exist.
+    Runs daily at 02:00.
+    """
+    from Payment.reconcile import run_reconciliation
+
+    logger.info("Running nightly ledger reconciliation")
+    summary = run_reconciliation()
+    status_word = "healthy" if summary["healthy"] else "ANOMALIES"
+    return (
+        f"Reconciliation {status_word}: negative={len(summary['negative_balances']['items'])} "
+        f"stuck={summary['stuck_pending_transactions']['count']} "
+        f"no_history={summary['completed_without_history']['count']}"
+    )

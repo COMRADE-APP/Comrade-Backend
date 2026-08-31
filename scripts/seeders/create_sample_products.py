@@ -5,6 +5,9 @@ Run this script to populate the database with sample products for the shop
 
 import os
 import django
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'comrade.settings')
 django.setup()
@@ -14,8 +17,8 @@ from Payment.models import Product
 SAMPLE_PRODUCTS = [
     # Physical Products
     {
-        'name': 'Qomrade Branded Notebook',
-        'description': 'Premium quality notebook with the Qomrade logo. Perfect for taking notes during lectures.',
+        'name': 'QomSu Branded Notebook',
+        'description': 'Premium quality notebook with the QomSu logo. Perfect for taking notes during lectures.',
         'price': 12.99,
         'product_type': 'physical',
         'is_sharable': True,
@@ -28,8 +31,8 @@ SAMPLE_PRODUCTS = [
         'is_sharable': True,
     },
     {
-        'name': 'Qomrade T-Shirt',
-        'description': 'Comfortable cotton t-shirt with Qomrade branding. Available in multiple sizes.',
+        'name': 'QomSu T-Shirt',
+        'description': 'Comfortable cotton t-shirt with QomSu branding. Available in multiple sizes.',
         'price': 24.99,
         'product_type': 'physical',
         'is_sharable': False,

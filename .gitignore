@@ -67,4 +67,18 @@ token.txt
 
 # ignore .txt files except requirements.txt
 *.txt
-!requirements.txtML/data/raw_scraped/*.parquet
+!requirements.txt
+
+# Large ML training data
+ML/data/raw_scraped/*.parquet
+
+# Office lock/temp files
+~$*
+
+# Saved debug/error pages
+err.html
+
+# Orphaned media dirs that previously lived at repo root (uploads go to media/)
+/avatars/
+/covers/
+/event_photos/

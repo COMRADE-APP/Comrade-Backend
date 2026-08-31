@@ -21,8 +21,8 @@ class Command(BaseCommand):
         
         try:
             sent = send_mail(
-                subject='Qomrade Platform - Email Health Check',
-                message='If you are reading this, the Qomrade Platform email configuration is working correctly.',
+                subject='QomSu Platform - Email Health Check',
+                message='If you are reading this, the QomSu Platform email configuration is working correctly.',
                 from_email=settings.DEFAULT_FROM_EMAIL,
                 recipient_list=[target_email],
                 fail_silently=False,

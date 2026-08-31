@@ -7,6 +7,11 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework import status
 from rest_framework.permissions import IsAuthenticated, IsAdminUser, IsAuthenticatedOrReadOnly
+from .permissions import (
+    EventResourceWritePermission,
+    OwnedResourceWritePermission,
+    IsReadOnlyOrAdmin,
+)
 from rest_framework.viewsets import ModelViewSet
 from Events.serializers import EventSerializer
 from Events.models import Event, EventCategory, EventAttendance, EventBudget, EventCategoryAssignment, EventCollaboration, EventFeedback, EventFeedbackResponse, EventFile, EventFollowUp, EventLogistics, EventMediaCoverage, EventPartnership, EventPhoto, EventPromotion, EventRegistration, EventReminder, EventSchedule, EventSession, EventSpeaker, EventSponsor, EventSponsorAgreement, EventSponsorBenefit, EventSponsorLogo, EventSponsorPackage, EventSponsorPayment, EventSponsorshipAgreementDocument, EventSponsorshipApplication, EventSponsorshipApproval, EventSponsorshipCertificate, EventSponsorshipContract, EventSponsorshipDowngrade, EventSponsorshipEvaluation, EventSponsorshipExtension, EventSponsorshipFeedback, EventSponsorshipHistory, EventSponsorshipInvoice, EventSponsorshipLetter, EventSponsorshipLevel, EventSponsorshipRecognition, EventSponsorshipRejection, EventSponsorshipRenewal, EventSponsorshipReport, EventSponsorshipTermination, EventSponsorshipTransfer, EventSponsorshipUpgrade, EventSurvey, EventSurveyQuestion, EventSurveyResponse, EventSurveyTemplate, EventTag, EventTagAssignment, EventTicket, EventVideo, EventReport, EventInvitation, EventLike, EventVisibility, VisibilityLog, EventSlotBooking, TicketTier, EventInteractionAnalytics, EventMaterial, OrganizerProfile, SponsorProfile, OrganizerFollow, SponsorFollow, PartnershipInvitation, CoOrganizer, SponsorApplication, SponsorshipNegotiation
@@ -585,7 +590,7 @@ class EventViewSet(ModelViewSet):
 class EventVisibilityViewSet(ModelViewSet):
     serializer_class = EventVisibilitySerializer
     queryset = EventVisibility.objects.all()
-    permission_classes = [IsAuthenticatedOrReadOnly]
+    permission_classes = [IsAuthenticatedOrReadOnly, EventResourceWritePermission]
 
     # @action(detail=True, methods=['post'])
     # def create_visibility(self, request):
@@ -931,33 +936,33 @@ class EventVisibilityViewSet(ModelViewSet):
 class VisibilityLogViewSet(ModelViewSet):
     serializer_class = VisibilityLogSerializer
     queryset = VisibilityLog.objects.all()
-    permission_classes = [IsAuthenticatedOrReadOnly]
+    permission_classes = [IsAuthenticatedOrReadOnly, EventResourceWritePermission]
 
 
 class EventCategoryViewSet(ModelViewSet):
     serializer_class = EventCategorySerializer
     queryset = EventCategory.objects.all()
-    permission_classes = [IsAuthenticatedOrReadOnly]
+    permission_classes = [IsReadOnlyOrAdmin]
 
 class EventAttendanceViewSet(ModelViewSet):
     serializer_class = EventAttendanceSerializer
     queryset = EventAttendance.objects.all()
-    permission_classes = [IsAuthenticatedOrReadOnly]
+    permission_classes = [IsAuthenticatedOrReadOnly, EventResourceWritePermission]
 
 class EventBudgetViewSet(ModelViewSet):
     serializer_class = EventBudgetSerializer
     queryset = EventBudget.objects.all()
-    permission_classes = [IsAuthenticatedOrReadOnly]
+    permission_classes = [IsAuthenticatedOrReadOnly, EventResourceWritePermission]
 
 class EventCategoryAssignmentViewSet(ModelViewSet):
     serializer_class = EventCategoryAssignmentSerializer
     queryset = EventCategoryAssignment.objects.all()
-    permission_classes = [IsAuthenticatedOrReadOnly]
+    permission_classes = [IsAuthenticatedOrReadOnly, EventResourceWritePermission]
 
 class EventFeedbackViewSet(ModelViewSet):
     serializer_class = EventFeedbackSerializer
     queryset = EventFeedback.objects.all()
-    permission_classes = [IsAuthenticatedOrReadOnly]
+    permission_classes = [IsAuthenticatedOrReadOnly, EventResourceWritePermission]
 
     @action(detail=True, methods=['get'], permission_classes=[IsAuthenticated])
     def rating(self, request, name=None):
@@ -1027,53 +1032,53 @@ class EventFeedbackResponseViewSet(ModelViewSet):
 class EventCollaborationViewSet(ModelViewSet):
     serializer_class = EventCollaborationSerializer
     queryset = EventCollaboration.objects.all()
-    permission_classes = [IsAuthenticatedOrReadOnly]
+    permission_classes = [IsAuthenticatedOrReadOnly, EventResourceWritePermission]
 
 class EventFileViewSet(ModelViewSet):
     serializer_class = EventFileSerializer
     queryset = EventFile.objects.all()
-    permission_classes = [IsAuthenticatedOrReadOnly]
+    permission_classes = [IsAuthenticatedOrReadOnly, EventResourceWritePermission]
 
 
 class EventInvitationViewSet(ModelViewSet):
     serializer_class = EventInvitationSerializer
     queryset = EventInvitation.objects.all()
-    permission_classes = [IsAuthenticatedOrReadOnly]
+    permission_classes = [IsAuthenticatedOrReadOnly, EventResourceWritePermission]
 
 class EventMediaCoverageViewSet(ModelViewSet):
     serializer_class = EventMediaCoverageSerializer
     queryset = EventMediaCoverage.objects.all()
-    permission_classes = [IsAuthenticatedOrReadOnly]
+    permission_classes = [IsAuthenticatedOrReadOnly, EventResourceWritePermission]
 
 class EventFollowUpViewSet(ModelViewSet):
     serializer_class = EventFollowUpSerializer
     queryset = EventFollowUp.objects.all()
-    permission_classes = [IsAuthenticatedOrReadOnly]
+    permission_classes = [IsAuthenticatedOrReadOnly, EventResourceWritePermission]
 
 class EventLogisticsViewSet(ModelViewSet):
     serializer_class = EventLogisticsSerializer
     queryset = EventLogistics.objects.all()
-    permission_classes = [IsAuthenticatedOrReadOnly]
+    permission_classes = [IsAuthenticatedOrReadOnly, EventResourceWritePermission]
 
 class EventPartnershipViewSet(ModelViewSet):
     serializer_class = EventPartnershipSerializer
     queryset = EventPartnership.objects.all()
-    permission_classes = [IsAuthenticatedOrReadOnly]
+    permission_classes = [IsAuthenticatedOrReadOnly, EventResourceWritePermission]
 
 class EventPhotoViewSet(ModelViewSet):
     serializer_class = EventPhotoSerializer
     queryset = EventPhoto.objects.all()
-    permission_classes = [IsAuthenticatedOrReadOnly]
+    permission_classes = [IsAuthenticatedOrReadOnly, EventResourceWritePermission]
 
 class EventPromotionViewSet(ModelViewSet):
     serializer_class = EventPromotionSerializer
     queryset = EventPromotion.objects.all()
-    permission_classes = [IsAuthenticatedOrReadOnly]
+    permission_classes = [IsAuthenticatedOrReadOnly, EventResourceWritePermission]
 
 class EventRegistrationViewSet(ModelViewSet):
     serializer_class = EventRegistrationSerializer
     queryset = EventRegistration.objects.all()
-    permission_classes = [IsAuthenticatedOrReadOnly]
+    permission_classes = [IsAuthenticatedOrReadOnly, EventResourceWritePermission]
 
 
     @action(detail=True, methods=['post'])
@@ -1090,27 +1095,27 @@ class EventRegistrationViewSet(ModelViewSet):
 class EventReminderViewSet(ModelViewSet):
     serializer_class = EventReminderSerializer
     queryset = EventReminder.objects.all()
-    permission_classes = [IsAuthenticatedOrReadOnly]
+    permission_classes = [IsAuthenticatedOrReadOnly, EventResourceWritePermission]
 
 class EventReportViewSet(ModelViewSet):
     serializer_class = EventReportSerializer
     queryset = EventReport.objects.all()
-    permission_classes = [IsAuthenticatedOrReadOnly]
+    permission_classes = [IsAuthenticatedOrReadOnly, EventResourceWritePermission]
 
 class EventSpeakerViewSet(ModelViewSet):
     serializer_class = EventSpeakerSerializer
     queryset = EventSpeaker.objects.all()
-    permission_classes = [IsAuthenticatedOrReadOnly]
+    permission_classes = [IsAuthenticatedOrReadOnly, EventResourceWritePermission]
 
 class EventScheduleViewSet(ModelViewSet):
     serializer_class = EventScheduleSerializer
     queryset = EventSchedule.objects.all()
-    permission_classes = [IsAuthenticatedOrReadOnly]
+    permission_classes = [IsAuthenticatedOrReadOnly, EventResourceWritePermission]
 
 class EventSessionViewSet(ModelViewSet):
     serializer_class = EventSessionSerializer
     queryset = EventSession.objects.all()
-    permission_classes = [IsAuthenticatedOrReadOnly]
+    permission_classes = [IsAuthenticatedOrReadOnly, EventResourceWritePermission]
 
 class OrganizerDashboardViewSet(ModelViewSet):
     queryset = OrganizerProfile.objects.none()
@@ -1403,7 +1408,7 @@ class OrganizerDashboardViewSet(ModelViewSet):
 class OrganizerProfileViewSet(ModelViewSet):
     serializer_class = OrganizerProfileSerializer
     queryset = OrganizerProfile.objects.all()
-    permission_classes = [IsAuthenticatedOrReadOnly]
+    permission_classes = [IsAuthenticatedOrReadOnly, OwnedResourceWritePermission]
 
     def perform_create(self, serializer):
         serializer.save(user=self.request.user)
@@ -1501,7 +1506,7 @@ class OrganizerProfileViewSet(ModelViewSet):
 class SponsorProfileViewSet(ModelViewSet):
     serializer_class = SponsorProfileSerializer
     queryset = SponsorProfile.objects.all()
-    permission_classes = [IsAuthenticatedOrReadOnly]
+    permission_classes = [IsAuthenticatedOrReadOnly, OwnedResourceWritePermission]
 
     def perform_create(self, serializer):
         serializer.save(user=self.request.user)
@@ -1590,27 +1595,27 @@ class EventSponsorViewSet(ModelViewSet):
 class EventSponsorAgreementViewSet(ModelViewSet):
     serializer_class = EventSponsorAgreementSerializer
     queryset = EventSponsorAgreement.objects.all()
-    permission_classes = [IsAuthenticatedOrReadOnly]
+    permission_classes = [IsAuthenticatedOrReadOnly, EventResourceWritePermission]
 
 class EventSponsorBenefitViewSet(ModelViewSet):
     serializer_class = EventSponsorBenefitSerializer
     queryset = EventSponsorBenefit.objects.all()
-    permission_classes = [IsAuthenticatedOrReadOnly]
+    permission_classes = [IsAuthenticatedOrReadOnly, EventResourceWritePermission]
 
 class EventSponsorPaymentViewSet(ModelViewSet):
     serializer_class = EventSponsorPaymentSerializer
     queryset = EventSponsorPayment.objects.all()
-    permission_classes = [IsAuthenticatedOrReadOnly]
+    permission_classes = [IsAuthenticatedOrReadOnly, EventResourceWritePermission]
 
 class EventSponsorLogoViewSet(ModelViewSet):
     serializer_class = EventSponsorLogoSerializer
     queryset = EventSponsorLogo.objects.all()
-    permission_classes = [IsAuthenticatedOrReadOnly]
+    permission_classes = [IsAuthenticatedOrReadOnly, EventResourceWritePermission]
 
 class EventSponsorPackageViewSet(ModelViewSet):
     serializer_class = EventSponsorPackageSerializer
     queryset = EventSponsorPackage.objects.all()
-    permission_classes = [IsAuthenticatedOrReadOnly]
+    permission_classes = [IsAuthenticatedOrReadOnly, EventResourceWritePermission]
 
 class EventSponsorshipAgreementDocumentViewSet(ModelViewSet):
     serializer_class = EventSponsorshipAgreementDocumentSerializer
@@ -1620,12 +1625,12 @@ class EventSponsorshipAgreementDocumentViewSet(ModelViewSet):
 class EventSponsorshipApprovalViewSet(ModelViewSet):
     serializer_class = EventSponsorshipApprovalSerializer
     queryset = EventSponsorshipApproval.objects.all()
-    permission_classes = [IsAuthenticatedOrReadOnly]
+    permission_classes = [IsAuthenticatedOrReadOnly, EventResourceWritePermission]
 
 class EventSponsorshipApplicationViewSet(ModelViewSet):
     serializer_class = EventSponsorshipApplicationSerializer
     queryset = EventSponsorshipApplication.objects.all()
-    permission_classes = [IsAuthenticatedOrReadOnly]
+    permission_classes = [IsAuthenticatedOrReadOnly, EventResourceWritePermission]
 
     def get_queryset(self):
         qs = super().get_queryset()
@@ -1769,47 +1774,47 @@ class EventSponsorshipApplicationViewSet(ModelViewSet):
 class EventSponsorshipCertificateViewSet(ModelViewSet):
     serializer_class = EventSponsorshipCertificateSerializer
     queryset = EventSponsorshipCertificate.objects.all()
-    permission_classes = [IsAuthenticatedOrReadOnly]
+    permission_classes = [IsAuthenticatedOrReadOnly, EventResourceWritePermission]
 
 class EventSponsorshipContractViewSet(ModelViewSet):
     serializer_class = EventSponsorshipContractSerializer
     queryset = EventSponsorshipContract.objects.all()
-    permission_classes = [IsAuthenticatedOrReadOnly]
+    permission_classes = [IsAuthenticatedOrReadOnly, EventResourceWritePermission]
 
 class EventSponsorshipDowngradeViewSet(ModelViewSet):
     serializer_class = EventSponsorshipDowngradeSerializer
     queryset = EventSponsorshipDowngrade.objects.all()
-    permission_classes = [IsAuthenticatedOrReadOnly]
+    permission_classes = [IsAuthenticatedOrReadOnly, EventResourceWritePermission]
 
 class EventSponsorshipEvaluationViewSet(ModelViewSet):
     serializer_class = EventSponsorshipEvaluationSerializer
     queryset = EventSponsorshipEvaluation.objects.all()
-    permission_classes = [IsAuthenticatedOrReadOnly]
+    permission_classes = [IsAuthenticatedOrReadOnly, EventResourceWritePermission]
 
 class EventSponsorshipExtensionViewSet(ModelViewSet):
     serializer_class = EventSponsorshipExtensionSerializer
     queryset = EventSponsorshipExtension.objects.all()
-    permission_classes = [IsAuthenticatedOrReadOnly]
+    permission_classes = [IsAuthenticatedOrReadOnly, EventResourceWritePermission]
 
 class EventSponsorshipFeedbackViewSet(ModelViewSet):
     serializer_class = EventSponsorshipFeedbackSerializer
     queryset = EventSponsorshipFeedback.objects.all()
-    permission_classes = [IsAuthenticatedOrReadOnly]
+    permission_classes = [IsAuthenticatedOrReadOnly, EventResourceWritePermission]
 
 class EventSponsorshipHistoryViewSet(ModelViewSet):
     serializer_class = EventSponsorshipHistorySerializer
     queryset = EventSponsorshipHistory.objects.all()
-    permission_classes = [IsAuthenticatedOrReadOnly]
+    permission_classes = [IsAuthenticatedOrReadOnly, EventResourceWritePermission]
 
 class EventSponsorshipInvoiceViewSet(ModelViewSet):
     serializer_class = EventSponsorshipInvoiceSerializer
     queryset = EventSponsorshipInvoice.objects.all()
-    permission_classes = [IsAuthenticatedOrReadOnly]
+    permission_classes = [IsAuthenticatedOrReadOnly, EventResourceWritePermission]
 
 class EventSponsorshipLetterViewSet(ModelViewSet):
     serializer_class = EventSponsorshipLetterSerializer
     queryset = EventSponsorshipLetter.objects.all()
-    permission_classes = [IsAuthenticatedOrReadOnly]
+    permission_classes = [IsAuthenticatedOrReadOnly, EventResourceWritePermission]
 
 class EventSponsorshipLevelViewSet(ModelViewSet):
     serializer_class = EventSponsorshipLevelSerializer
@@ -1826,42 +1831,42 @@ class EventSponsorshipLevelViewSet(ModelViewSet):
 class EventSponsorshipRecognitionViewSet(ModelViewSet):
     serializer_class = EventSponsorshipRecognitionSerializer
     queryset = EventSponsorshipRecognition.objects.all()
-    permission_classes = [IsAuthenticatedOrReadOnly]
+    permission_classes = [IsAuthenticatedOrReadOnly, EventResourceWritePermission]
 
 class EventSponsorshipRejectionViewSet(ModelViewSet):
     serializer_class = EventSponsorshipRejectionSerializer
     queryset = EventSponsorshipRejection.objects.all()
-    permission_classes = [IsAuthenticatedOrReadOnly]
+    permission_classes = [IsAuthenticatedOrReadOnly, EventResourceWritePermission]
 
 class EventSponsorshipRenewalViewSet(ModelViewSet):
     serializer_class = EventSponsorshipRenewalSerializer
     queryset = EventSponsorshipRenewal.objects.all()
-    permission_classes = [IsAuthenticatedOrReadOnly]
+    permission_classes = [IsAuthenticatedOrReadOnly, EventResourceWritePermission]
 
 class EventSponsorshipReportViewSet(ModelViewSet):
     serializer_class = EventSponsorshipReportSerializer
     queryset = EventSponsorshipReport.objects.all()
-    permission_classes = [IsAuthenticatedOrReadOnly]
+    permission_classes = [IsAuthenticatedOrReadOnly, EventResourceWritePermission]
 
 class EventSponsorshipTerminationViewSet(ModelViewSet):
     serializer_class = EventSponsorshipTerminationSerializer
     queryset = EventSponsorshipTermination.objects.all()
-    permission_classes = [IsAuthenticatedOrReadOnly]
+    permission_classes = [IsAuthenticatedOrReadOnly, EventResourceWritePermission]
 
 class EventSponsorshipTransferViewSet(ModelViewSet):
     serializer_class = EventSponsorshipTransferSerializer
     queryset = EventSponsorshipTransfer.objects.all()
-    permission_classes = [IsAuthenticatedOrReadOnly]
+    permission_classes = [IsAuthenticatedOrReadOnly, EventResourceWritePermission]
 
 class EventSponsorshipUpgradeViewSet(ModelViewSet):
     serializer_class = EventSponsorshipUpgradeSerializer
     queryset = EventSponsorshipUpgrade.objects.all()
-    permission_classes = [IsAuthenticatedOrReadOnly]
+    permission_classes = [IsAuthenticatedOrReadOnly, EventResourceWritePermission]
 
 class EventSurveyViewSet(ModelViewSet):
     serializer_class = EventSurveySerializer
     queryset = EventSurvey.objects.all()
-    permission_classes = [IsAuthenticatedOrReadOnly]
+    permission_classes = [IsAuthenticatedOrReadOnly, EventResourceWritePermission]
 
     def get_queryset(self):
         qs = EventSurvey.objects.all()
@@ -1873,7 +1878,7 @@ class EventSurveyViewSet(ModelViewSet):
 class EventSurveyQuestionViewSet(ModelViewSet):
     serializer_class = EventSurveyQuestionSerializer
     queryset = EventSurveyQuestion.objects.all()
-    permission_classes = [IsAuthenticatedOrReadOnly]
+    permission_classes = [IsAuthenticatedOrReadOnly, EventResourceWritePermission]
 
     def get_queryset(self):
         qs = EventSurveyQuestion.objects.all()
@@ -1885,7 +1890,7 @@ class EventSurveyQuestionViewSet(ModelViewSet):
 class EventSurveyResponseViewSet(ModelViewSet):
     serializer_class = EventSurveyResponseSerializer
     queryset = EventSurveyResponse.objects.all()
-    permission_classes = [IsAuthenticatedOrReadOnly]
+    permission_classes = [IsAuthenticatedOrReadOnly, EventResourceWritePermission]
 
     def get_queryset(self):
         qs = EventSurveyResponse.objects.all()
@@ -1900,7 +1905,7 @@ class EventSurveyResponseViewSet(ModelViewSet):
 class EventSurveyTemplateViewSet(ModelViewSet):
     serializer_class = EventSurveyTemplateSerializer
     queryset = EventSurveyTemplate.objects.all()
-    permission_classes = [IsAuthenticatedOrReadOnly]
+    permission_classes = [IsAuthenticatedOrReadOnly, EventResourceWritePermission]
 
     def get_queryset(self):
         qs = EventSurveyTemplate.objects.all()
@@ -1916,29 +1921,29 @@ class EventSurveyTemplateViewSet(ModelViewSet):
 class EventTagViewSet(ModelViewSet):
     serializer_class = EventTagSerializer
     queryset = EventTag.objects.all()
-    permission_classes = [IsAuthenticatedOrReadOnly]
+    permission_classes = [IsReadOnlyOrAdmin]
 
 class EventTagAssignmentViewSet(ModelViewSet):
     serializer_class = EventTagAssignmentSerializer
     queryset = EventTagAssignment.objects.all()
-    permission_classes = [IsAuthenticatedOrReadOnly]
+    permission_classes = [IsAuthenticatedOrReadOnly, EventResourceWritePermission]
 
 class EventTicketViewSet(ModelViewSet):
     serializer_class = EventTicketSerializer
     queryset = EventTicket.objects.all()
-    permission_classes = [IsAuthenticatedOrReadOnly]
+    permission_classes = [IsAuthenticatedOrReadOnly, EventResourceWritePermission]
 
 class EventVideoViewSet(ModelViewSet):
     serializer_class = EventVideoSerializer
     queryset = EventVideo.objects.all()
-    permission_classes = [IsAuthenticatedOrReadOnly]
+    permission_classes = [IsAuthenticatedOrReadOnly, EventResourceWritePermission]
 
 
 class EventSlotBookingViewSet(ModelViewSet):
     """ViewSet for slot bookings with booking, availability and cancellation"""
     serializer_class = EventSlotBookingSerializer
     queryset = EventSlotBooking.objects.all()
-    permission_classes = [IsAuthenticatedOrReadOnly]
+    permission_classes = [IsAuthenticatedOrReadOnly, EventResourceWritePermission]
     lookup_field = 'uuid'
     filterset_fields = ['event', 'user', 'booking_status']
 
@@ -2225,7 +2230,7 @@ class EventSlotBookingViewSet(ModelViewSet):
 class SponsorApplicationViewSet(ModelViewSet):
     serializer_class = SponsorApplicationSerializer
     queryset = SponsorApplication.objects.all()
-    permission_classes = [IsAuthenticatedOrReadOnly]
+    permission_classes = [IsAuthenticatedOrReadOnly, EventResourceWritePermission]
 
     def get_queryset(self):
         qs = super().get_queryset()
@@ -2321,7 +2326,7 @@ class SponsorApplicationViewSet(ModelViewSet):
 class SponsorshipNegotiationViewSet(ModelViewSet):
     serializer_class = SponsorshipNegotiationSerializer
     queryset = SponsorshipNegotiation.objects.all()
-    permission_classes = [IsAuthenticatedOrReadOnly]
+    permission_classes = [IsAuthenticatedOrReadOnly, EventResourceWritePermission]
 
     @action(detail=True, methods=['post'])
     def negotiate(self, request, pk=None):
@@ -2478,7 +2483,7 @@ class EventInteractionAnalyticsViewSet(ModelViewSet):
 
 class OrganizerFollowViewSet(ModelViewSet):
     serializer_class = OrganizerFollowSerializer
-    permission_classes = [IsAuthenticatedOrReadOnly]
+    permission_classes = [IsAuthenticatedOrReadOnly, OwnedResourceWritePermission]
 
     def get_queryset(self):
         return OrganizerFollow.objects.filter(follower=self.request.user)
@@ -2513,7 +2518,7 @@ class OrganizerFollowViewSet(ModelViewSet):
 
 class SponsorFollowViewSet(ModelViewSet):
     serializer_class = SponsorFollowSerializer
-    permission_classes = [IsAuthenticatedOrReadOnly]
+    permission_classes = [IsAuthenticatedOrReadOnly, OwnedResourceWritePermission]
 
     def get_queryset(self):
         return SponsorFollow.objects.filter(follower=self.request.user)

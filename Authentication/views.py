@@ -5,7 +5,7 @@ Complete authentication system with OTP verification, 2FA, SMS fallback, passwor
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework import status
-from rest_framework.permissions import AllowAny, IsAuthenticated, IsAdminUser
+from rest_framework.permissions import AllowAny, IsAuthenticated, IsAdminUser, SAFE_METHODS, BasePermission
 from rest_framework.viewsets import ModelViewSet
 from rest_framework.decorators import action
 from comrade.throttles import (
@@ -513,7 +513,7 @@ class HealthView(APIView):
     def get(self, request):
         return Response({
             "status": "ok",
-            "service": "comrade-api",
+            "service": "qomsu-api",
         }, status=status.HTTP_200_OK)
 
 
@@ -722,7 +722,30 @@ class ResendOTPView(APIView):
             user = CustomUser.objects.get(email=email)
         except CustomUser.DoesNotExist:
              return Response({'message': 'Code sent if account exists.'}, status=status.HTTP_200_OK)
-             
+
+        # Registration resends target users who are inactive until their OTP verifies.
+        if action_type == 'registration':
+            if user.is_active:
+                return Response(
+                    {'detail': 'Account already verified. Please log in.'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            can_send, _ = check_otp_rate_limit(user.id, 'registration')
+            if not can_send:
+                return Response({'detail': 'Limit reached.'}, status=status.HTTP_429_TOO_MANY_REQUESTS)
+
+            otp_code = str(secrets.SystemRandom().randint(100000, 999999))
+            user.set_registration_otp(otp_code)
+            user.registration_otp_expires = timezone.now() + timezone.timedelta(minutes=OTP_EXPIRY_MINUTES)
+            user.save()
+
+            if send_email_otp(user.email, otp_code, action='registration'):
+                increment_otp_count(user.id, 'registration')
+                return Response({'message': 'Email sent.'}, status=status.HTTP_200_OK)
+
+            return Response({'detail': 'Failed to send.'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
         if not user.is_active:
              return Response({'detail': 'Account inactive.'}, status=status.HTTP_400_BAD_REQUEST)
 
@@ -1052,43 +1075,79 @@ class CustomUserViewSet(ModelViewSet):
     permission_classes = [IsAdminUser]
 
 
+class IsAdminForWrites(BasePermission):
+    """Read allowed for authenticated users (self-scoped via get_queryset);
+    create/update/delete reserved for platform admins. Role profile models
+    self-promote the linked user on save(), so uncontrolled writes would be a
+    privilege-escalation primitive."""
+    message = 'Only platform administrators may modify role assignments.'
+
+    def has_permission(self, request, view):
+        if request.method in SAFE_METHODS:
+            return True
+        return bool(request.user and request.user.is_authenticated and
+                    (request.user.is_staff or request.user.is_superuser))
+
+
 class LecturerViewSet(ModelViewSet):
     queryset = Lecturer.objects.all()
     serializer_class = LecturerSerializer
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, IsAdminForWrites]
+
+    def get_queryset(self):
+        return Lecturer.objects.filter(user=self.request.user)
 
 
 class OrgStaffViewSet(ModelViewSet):
     queryset = OrgStaff.objects.all()
     serializer_class = OrgStaffSerializer
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, IsAdminForWrites]
+
+    def get_queryset(self):
+        return OrgStaff.objects.filter(user=self.request.user)
 
 
 class StudentAdminViewSet(ModelViewSet):
     queryset = StudentAdmin.objects.all()
     serializer_class = StudentAdminSerializer
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, IsAdminForWrites]
+
+    def get_queryset(self):
+        return StudentAdmin.objects.filter(student__user=self.request.user)
 
 
 class OrgAdminViewSet(ModelViewSet):
     queryset = OrgAdmin.objects.all()
     serializer_class = OrgAdminSerializer
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, IsAdminForWrites]
+
+    def get_queryset(self):
+        return OrgAdmin.objects.filter(staff__user=self.request.user)
 
 
 class InstAdminViewSet(ModelViewSet):
     queryset = InstAdmin.objects.all()
     serializer_class = InstAdminSerializer
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, IsAdminForWrites]
+
+    def get_queryset(self):
+        return InstAdmin.objects.filter(staff__user=self.request.user)
 
 
 class InstStaffViewSet(ModelViewSet):
     queryset = InstStaff.objects.all()
     serializer_class = InstStaffSerializer
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, IsAdminForWrites]
+
+    def get_queryset(self):
+        return InstStaff.objects.filter(user=self.request.user)
 
 
 class ProfileViewSet(ModelViewSet):
     queryset = Profile.objects.all()
     serializer_class = ProfileSerializer
     permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        """Users may only read/update their own profile row."""
+        return Profile.objects.filter(user=self.request.user)

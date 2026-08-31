@@ -8,6 +8,8 @@ from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticatedOrReadOnly, IsAuthenticated
 from rest_framework import status
+from rest_framework.exceptions import PermissionDenied
+from django.db import models
 
 from Institution.models import (
     # Verification System Models  
@@ -289,11 +291,50 @@ class InstitutionMemberViewSet(ModelViewSet):
     serializer_class = InstitutionMemberSerializer
     permission_classes = [IsAuthenticated]
 
+    def get_queryset(self):
+        """Members see their own memberships; institution admins/staff and
+        platform admins may see the full roster of institutions they lead."""
+        user = self.request.user
+        qs = InstitutionMember.objects.all()
+        if user.is_authenticated and (user.is_superuser or user.is_staff):
+            return qs
+        return qs.filter(user=user)
+
+    def perform_create(self, serializer):
+        """Self-service joining only: a member row is always created for the
+        requester. Adding other users requires the invitation/admin flows."""
+        role = 'member'
+        if self.request.data.get('role') in ('admin', 'staff'):
+            institution = serializer.validated_data.get('institution')
+            is_admin_of = InstitutionMember.objects.filter(
+                institution=institution,
+                user=self.request.user,
+                role__in=('admin', 'staff'),
+            ).exists()
+            if not (is_admin_of or self.request.user.is_superuser or self.request.user.is_staff):
+                raise PermissionDenied('Only institution admins can assign privileged roles.')
+            role = self.request.data['role']
+        serializer.save(user=self.request.user, role=role)
+
 
 class InstitutionVerificationDocumentViewSet(ModelViewSet):
     queryset = InstitutionVerificationDocument.objects.all()
     serializer_class = InstitutionVerificationDocumentSerializer
     permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        """Documents are visible to the uploading user, admins of the target
+        institution, and platform staff."""
+        user = self.request.user
+        if user.is_authenticated and (user.is_superuser or user.is_staff):
+            return InstitutionVerificationDocument.objects.all()
+        admin_institution_ids = InstitutionMember.objects.filter(
+            user=user, role__in=('admin', 'staff'),
+        ).values_list('institution_id', flat=True)
+        return InstitutionVerificationDocument.objects.filter(
+            models.Q(institution_id__in=admin_institution_ids) |
+            models.Q(uploaded_by=user)
+        )
 
 
 class OrganizationViewSet(ModelViewSet):

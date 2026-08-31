@@ -287,9 +287,9 @@ class InvestmentOpportunityViewSet(viewsets.ModelViewSet):
         if not recommendations.exists():
             from decimal import Decimal
             InvestmentOpportunity.objects.create(
-                title="Qomrade High-Yield MMF",
+                title="QomSu High-Yield MMF",
                 description="Our flagship Money Market Fund tailored for consistent low-risk returns.",
-                provider="Comrade Asset Management",
+                provider="QomSu Asset Management",
                 type="mmf",
                 min_investment=Decimal("10.00"),
                 min_individual_entry=Decimal("10.00"),
@@ -317,7 +317,7 @@ class InvestmentOpportunityViewSet(viewsets.ModelViewSet):
             InvestmentOpportunity.objects.create(
                 title="Pan-African Tech Stack Index",
                 description="High growth potential in African digital payments and SaaS startups. Recommended for growth-oriented portfolios.",
-                provider="Comrade Ventures",
+                provider="QomSu Ventures",
                 type="stock",
                 min_investment=Decimal("100.00"),
                 min_individual_entry=Decimal("100.00"),

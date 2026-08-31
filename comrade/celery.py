@@ -54,6 +54,10 @@ app.conf.beat_schedule = {
         'task': 'Payment.tasks.check_dispute_timeouts',
         'schedule': crontab(hour=10, minute=0),    # Daily 10:00
     },
+    'reconcile-ledger-nightly': {
+        'task': 'Payment.tasks.reconcile_ledger_nightly',
+        'schedule': crontab(hour=2, minute=0),     # Daily 02:00
+    },
 
     # ── Weekly Tasks ─────────────────────────────────────────────────────
     'recompute-credit-scores': {

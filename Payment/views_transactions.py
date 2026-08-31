@@ -1,6 +1,7 @@
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status, permissions
+from django.conf import settings
 from django.shortcuts import get_object_or_404
 from django.db import transaction
 from .models import PaymentProfile, TransactionToken, TransactionHistory, PaymentLog
@@ -43,9 +44,17 @@ class DepositView(APIView):
     @transaction.atomic
     def post(self, request):
         """
-        Initiate a deposit from an external source to Qomrade Balance.
+        Initiate a deposit from an external source to QomSu Balance.
         Accepts per-method fields and optionally saves payment details.
         """
+
+        # Reject replays of the same client request (idempotency)
+        from Payment.idempotency import check_request_idempotency
+        if not check_request_idempotency(request):
+            return Response(
+                {"detail": "Duplicate request: this Idempotency-Key was already used."},
+                status=status.HTTP_409_CONFLICT,
+            )
         amount = request.data.get('amount')
         payment_method = request.data.get('payment_method', 'mpesa')
         save_details = request.data.get('save_details', False)
@@ -64,6 +73,13 @@ class DepositView(APIView):
         
         if not amount or float(amount) <= 0:
              return Response({"detail": "Invalid amount."}, status=status.HTTP_400_BAD_REQUEST)
+
+        # KYC/AML gating: large deposits require verified identity; risky
+        # patterns raise an internal STR for compliance review.
+        from Payment.services.compliance_service import check_transaction_allowed, maybe_flag_transaction
+        allowed, compliance_detail, _summary = check_transaction_allowed(request.user, 'deposit', amount)
+        if not allowed:
+            return Response({"detail": compliance_detail, "action": "kyc_verification"}, status=status.HTTP_403_FORBIDDEN)
 
         # Validate per-method required fields
         if payment_method == 'mpesa' and not phone_number and not saved_method_id:
@@ -151,7 +167,13 @@ class DepositView(APIView):
             transaction_type='deposit',
             payment_option=payment_method,
             payment_number=payment_number or '',
-            description=f"Deposit via {payment_method}"
+            description=f"Deposit via {payment_method}",
+        )
+
+        # AML monitoring: file an STR for high-risk deposits
+        maybe_flag_transaction(
+            request.user, 'deposit', amount,
+            reference=f"deposit:{token.transaction_code}",
         )
 
         # Call Payment Service
@@ -165,6 +187,8 @@ class DepositView(APIView):
         response = PaymentService.initiate_deposit(profile, amount, payment_method, details)
         
         if "error" in response:
+             token.status = 'failed'
+             token.save(update_fields=['status'])
              return Response({"detail": response["error"]}, status=status.HTTP_400_BAD_REQUEST)
 
         return Response({
@@ -182,9 +206,17 @@ class WithdrawView(APIView):
     @transaction.atomic
     def post(self, request):
         """
-        Withdraw from Qomrade Balance to external account.
+        Withdraw from QomSu Balance to external account.
         Accepts per-method fields and optionally saves payment details.
         """
+
+        # Reject replays of the same client request (idempotency)
+        from Payment.idempotency import check_request_idempotency
+        if not check_request_idempotency(request):
+            return Response(
+                {"detail": "Duplicate request: this Idempotency-Key was already used."},
+                status=status.HTTP_409_CONFLICT,
+            )
         amount = request.data.get('amount')
         payment_method = request.data.get('payment_method', 'mpesa')
         save_details = request.data.get('save_details', False)
@@ -198,7 +230,7 @@ class WithdrawView(APIView):
         if not otp:
             return Response({"detail": "2FA OTP is required for withdrawals."}, status=status.HTTP_400_BAD_REQUEST)
             
-        from Authentication.totp import verify_totp_otp
+        from Authentication.otp_utils import verify_totp_otp
         if not verify_totp_otp(user.totp_secret, otp):
             return Response({"detail": "Invalid 2FA OTP."}, status=status.HTTP_400_BAD_REQUEST)
 
@@ -298,9 +330,22 @@ class WithdrawView(APIView):
             'transaction_code': str(token.transaction_code),
         }
         response = PaymentService.initiate_withdrawal(profile, amount, payment_method, details)
-        
+
         if "error" in response:
+            token.status = 'failed'
+            token.save(update_fields=['status'])
             return Response({"detail": response["error"]}, status=status.HTTP_400_BAD_REQUEST)
+
+        # Persist provider correlation id (e.g. M-Pesa CheckoutRequestID) so
+        # async callbacks can match this transaction exactly.
+        checkout_id = (
+            response.get('checkout_request_id')
+            or response.get('CheckoutRequestID')
+            or ''
+        )
+        if checkout_id:
+            token.mpesa_checkout_request_id = str(checkout_id)
+            token.save(update_fields=['mpesa_checkout_request_id'])
 
         # Deduct Balance
         profile.comrade_balance -= float(amount)
@@ -335,6 +380,14 @@ class TransferView(APIView):
         All amounts are stored in platform currency (USD by default).
         Auto-detects user's currency from profile/headers.
         """
+
+        # Reject replays of the same client request (idempotency)
+        from Payment.idempotency import check_request_idempotency
+        if not check_request_idempotency(request):
+            return Response(
+                {"detail": "Duplicate request: this Idempotency-Key was already used."},
+                status=status.HTTP_409_CONFLICT,
+            )
         recipient_email = request.data.get('recipient_email')
         amount = request.data.get('amount')
         from_currency = request.data.get('from_currency')

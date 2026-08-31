@@ -56,6 +56,8 @@ class RoomDetailView(generics.RetrieveUpdateDestroyAPIView):
         return response
 
 class JoinRoomView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
     def post(self, request):
         invitation_code = request.data.get("invitation_code")
         user = request.user
@@ -889,7 +891,7 @@ class TypingView(APIView):
 
 class DefaultRoomViewSet(ModelViewSet):
     queryset = DefaultRoom.objects.all()
-    # permission_classes = [permissions.IsAuthenticated]
+    permission_classes = [permissions.IsAuthenticated]
     serializer_class = DefaultRoomSerializer
 
     @action(detail=True, methods=['get', 'post'])
