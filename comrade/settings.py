@@ -121,6 +121,7 @@ _cors = os.getenv("CORS_ALLOWED_ORIGINS", "")
 CORS_ALLOWED_ORIGINS = [o.strip() for o in _cors.split(",") if o.strip()] or [
     "http://localhost:3000", "http://localhost:5173",
     "https://comrade-frontend-ochre.vercel.app",
+    "https://qomrade.vercel.app",
 ]
 
 # CRITICAL: This must be True for cookies/session auth
@@ -131,6 +132,7 @@ CORS_ALLOWED_ORIGINS = [o.strip() for o in _cors.split(",") if o.strip()] or [
 _csrf = os.getenv("CSRF_TRUSTED_ORIGINS", "")
 CSRF_TRUSTED_ORIGINS = [o.strip() for o in _csrf.split(",") if o.strip()] or [
     "https://comrade-frontend-ochre.vercel.app",
+    "https://qomrade.vercel.app",
     "https://qomrade.onrender.com",
 ]
 
@@ -165,6 +167,7 @@ CORS_ALLOWED_ORIGIN_REGEXES = [
     r"^https?://localhost:5173$",
     r"^https?://localhost:3000$",
     r"^https://comrade-frontend-ochre\.vercel\.app$",
+    r"^https://qomrade\.vercel\.app$",
     r"^https://qomrade\.onrender\.com$",
 ]
 
