@@ -81,8 +81,6 @@ INSTALLED_APPS = [
     'allauth.account',
     'allauth.socialaccount',
     'allauth.socialaccount.providers.google',
-    'allauth.socialaccount.providers.twitter_oauth2',
-    'allauth.socialaccount.providers.apple',
 
 ]
 
@@ -453,31 +451,6 @@ SOCIALACCOUNT_PROVIDERS = {
         },
         'SCOPE': ['profile', 'email'],
         'AUTH_PARAMS': {'access_type': 'online', 'prompt': 'consent'},
-    },
-    "twitter_oauth2": {
-        'APP': {
-            'client_id': os.getenv('TWITTER_CLIENT_ID', ''),
-            'secret': os.getenv('TWITTER_CLIENT_SECRET', ''),
-            'key': ''
-        },
-        "SCOPE": [
-            "tweet.read",
-            "users.read",
-            "offline.access",
-        ],
-        "AUTH_PARAMS": {
-            "access_type": "offline",
-        },
-        "OAUTH_PKCE_ENABLED": True,
-    },
-    'apple': {
-        'APP': {
-            'client_id': os.getenv('APPLE_CLIENT_ID', ''),
-            'secret': os.getenv('APPLE_CLIENT_SECRET', ''),
-            'key': ''
-        },
-        'SCOPE': ['email', 'name'],
-        'AUTH_PARAMS': {'response_mode': 'form_post'},
     },
 }
 
