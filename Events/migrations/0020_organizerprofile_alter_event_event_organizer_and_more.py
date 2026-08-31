@@ -5,6 +5,48 @@ from django.conf import settings
 from django.db import migrations, models
 
 
+def rebuild_event_organizer_column(apps, schema_editor):
+    """
+    Repoint Events_event.event_organizer_id from Funding.business (uuid PK)
+    to Events_organizerprofile (bigint PK). Postgres cannot CAST uuid to
+    bigint, and old uuid values reference businesses, not organizer
+    profiles, so the column is dropped and recreated as an empty bigint
+    FK column.
+    """
+    if schema_editor.connection.vendor == 'postgresql':
+        schema_editor.execute(
+            """
+            DO $$
+            DECLARE r RECORD;
+            BEGIN
+                FOR r IN
+                    SELECT conname FROM pg_constraint
+                    WHERE conrelid = '"Events_event"'::regclass
+                      AND contype = 'f'
+                      AND conname LIKE '%%event_organizer_id%%'
+                LOOP
+                    EXECUTE format('ALTER TABLE "Events_event" DROP CONSTRAINT %%I', r.conname);
+                END LOOP;
+            END $$;
+            """
+        )
+        schema_editor.execute('ALTER TABLE "Events_event" DROP COLUMN "event_organizer_id"')
+        schema_editor.execute('ALTER TABLE "Events_event" ADD COLUMN "event_organizer_id" bigint NULL')
+        schema_editor.execute(
+            'ALTER TABLE "Events_event" ADD CONSTRAINT "Events_event_event_organizer_id_fk" '
+            'FOREIGN KEY ("event_organizer_id") '
+            'REFERENCES "Events_organizerprofile" ("id") '
+            'DEFERRABLE INITIALLY DEFERRED'
+        )
+        schema_editor.execute(
+            'CREATE INDEX "Events_event_event_organizer_id_idx" '
+            'ON "Events_event" ("event_organizer_id")'
+        )
+    else:
+        schema_editor.execute('ALTER TABLE "Events_event" DROP COLUMN "event_organizer_id"')
+        schema_editor.execute('ALTER TABLE "Events_event" ADD COLUMN "event_organizer_id" bigint NULL')
+
+
 class Migration(migrations.Migration):
 
     dependencies = [
@@ -56,16 +98,26 @@ class Migration(migrations.Migration):
                 "verbose_name_plural": "Organizer Profiles",
             },
         ),
-        migrations.AlterField(
-            model_name="event",
-            name="event_organizer",
-            field=models.ForeignKey(
-                blank=True,
-                null=True,
-                on_delete=django.db.models.deletion.SET_NULL,
-                related_name="organized_events",
-                to="Events.organizerprofile",
-            ),
+        migrations.SeparateDatabaseAndState(
+            state_operations=[
+                migrations.AlterField(
+                    model_name="event",
+                    name="event_organizer",
+                    field=models.ForeignKey(
+                        blank=True,
+                        null=True,
+                        on_delete=django.db.models.deletion.SET_NULL,
+                        related_name="organized_events",
+                        to="Events.organizerprofile",
+                    ),
+                ),
+            ],
+            database_operations=[
+                migrations.RunPython(
+                    rebuild_event_organizer_column,
+                    reverse_code=migrations.RunPython.noop,
+                )
+            ],
         ),
         migrations.CreateModel(
             name="SponsorProfile",
